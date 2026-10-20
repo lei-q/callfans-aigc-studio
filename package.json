@@ -1,0 +1,41 @@
+{
+  "name": "callfans-aigc-studio",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AIGC 创作台：按次付费、说一句就能出片的个人创作工具（桌面端 + Web 端）",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"pnpm --filter @aigc/server dev\" \"pnpm --filter @aigc/web dev\"",
+    "build": "pnpm -r --filter \"./packages/*\" build",
+    "typecheck": "tsc -b packages/shared packages/server packages/web packages/desktop",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "start:web": "node packages/server/dist/server.cjs --open",
+    "desktop": "pnpm --filter @aigc/desktop start",
+    "dist": "pnpm build && pnpm --filter @aigc/desktop dist"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.1",
+    "concurrently": "10.0.5",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  }
+}

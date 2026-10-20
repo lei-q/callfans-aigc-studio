@@ -1,0 +1,24 @@
+{
+  "name": "@aigc/server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/server.cjs",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/cli.ts --port 5780 --data ../../.data",
+    "build": "node build.mjs",
+    "start": "node dist/server.cjs"
+  },
+  "dependencies": {
+    "@aigc/shared": "workspace:*",
+    "@fastify/multipart": "10.1.2",
+    "@fastify/static": "10.1.5",
+    "fastify": "5.12.5",
+    "sql.js": "1.14.2",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/sql.js": "1.4.11",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15"
+  }
+}
