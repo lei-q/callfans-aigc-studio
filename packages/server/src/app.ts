@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import type { ServerResponse } from 'node:http';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -47,7 +48,7 @@ button{margin-top:12px;width:100%;border:0;border-radius:9px;padding:10px;backgr
 <input name="token" type="password" placeholder="访问口令" autofocus/><button>进入</button>${msg ? `<div class="err">${msg}</div>` : ''}</form></body></html>`;
 
 export async function buildApp(core: Core, opts: AppOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 80 * 1024 * 1024, trustProxy: false });
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 80 * 1024 * 1024, trustProxy: false, forceCloseConnections: true });
   await app.register(multipart, { limits: { fileSize: 1024 * 1024 * 1024, files: 20 } });
 
   /* ---------------- 访问控制 ---------------- */
@@ -149,6 +150,13 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.get('/api/health', async () => ({ ok: true, version: core.opts.version }));
   app.get('/api/bootstrap', async () => core.bootstrap());
 
+  /* 关闭服务时主动结束长连接，否则 close() 会一直等着 */
+  const sse = new Set<ServerResponse>();
+  app.addHook('onClose', async () => {
+    for (const r of sse) r.end();
+    sse.clear();
+  });
+
   app.get('/api/events', (req, reply) => {
     reply.hijack();
     const res = reply.raw;
@@ -162,9 +170,14 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     const send = (e: ServerEvent) => res.write(`data: ${JSON.stringify(e)}\n\n`);
     const off = core.events.on(send);
     const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
-    req.raw.on('close', () => {
+    const end = () => {
       off();
       clearInterval(ping);
+    };
+    sse.add(res);
+    req.raw.on('close', () => {
+      end();
+      sse.delete(res);
     });
   });
 

@@ -5,6 +5,9 @@ import { DEFAULT_PORT } from '@aigc/shared';
 import { startServer } from './index';
 import { defaultDataDir } from './paths';
 
+/* 桌面主进程直接 require 这个包，复用同一个服务实现 */
+export { startServer, defaultDataDir };
+
 /* ============================================================================
    Web 模式的独立入口：
      node server.cjs [--port 5780] [--host 127.0.0.1|0.0.0.0] [--data <dir>] [--open] [--no-seed]
@@ -66,6 +69,7 @@ async function main() {
     port,
     seed: !flag('no-seed'),
     logger: flag('verbose'),
+    mockTickMs: process.env.AIGC_MOCK_TICK ? Number(process.env.AIGC_MOCK_TICK) : undefined,
   });
 
   const lines = [

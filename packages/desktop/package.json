@@ -1,0 +1,21 @@
+{
+  "name": "@aigc/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AIGC 创作台：按次付费、说一句就能出片",
+  "author": "lei-q",
+  "homepage": "https://github.com/lei-q/callfans-aigc-studio",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node build.mjs && electron .",
+    "start:web": "node build.mjs && electron . --mode=web",
+    "dist": "node build.mjs && electron-builder --publish never",
+    "pkg:mac": "node scripts/mac-pkg.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.6.0",
+    "electron-builder": "26.17.0",
+    "esbuild": "0.28.2"
+  }
+}

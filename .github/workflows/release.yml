@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '发布到 GitHub Release（否则只上传构建产物）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build · ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (arm64 + x64)
+            os: macos-14
+            target: --mac --arm64 --x64
+            pkg: true
+          - name: Windows (x64)
+            os: windows-2022
+            target: --win --x64
+          - name: Linux (x64)
+            os: ubuntu-22.04
+            target: --linux --x64
+    runs-on: ${{ matrix.os }}
+    env:
+      # 没有配置证书时跳过签名；配置了 CSC_LINK 等 secrets 后自动启用
+      CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' && 'true' || 'false' }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.1.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node -e "const f='package.json',p=require('./'+f);p.version='$VERSION';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+      - name: Test
+        run: pnpm test
+      - name: Build web + server + desktop
+        run: |
+          pnpm --filter @aigc/web build
+          pnpm --filter @aigc/server build
+          pnpm --filter @aigc/desktop build
+      - name: Package (electron-builder)
+        working-directory: packages/desktop
+        run: pnpm exec electron-builder ${{ matrix.target }} --publish never
+      - name: macOS .pkg（安装时选择运行方式）
+        if: matrix.pkg
+        working-directory: packages/desktop
+        run: node scripts/mac-pkg.mjs
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          cd packages/desktop/release
+          for f in *.dmg *.pkg *.zip *.exe *.AppImage *.deb; do
+            [ -f "$f" ] && cp "$f" ../../../out/ || true
+          done
+          ls -la ../../../out
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: aigc-studio-${{ runner.os }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v0.0.0-build.{0}', github.run_number) }}
+          name: AIGC 创作台 ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('build {0}', github.run_number) }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          generate_release_notes: true
+          files: dist/*
+          body: |
+            ## 下载哪个？
+
+            | 系统 | 文件 | 安装时选择运行方式 |
+            | --- | --- | --- |
+            | Windows 10/11 x64 | `AIGC-Studio-*-win-x64.exe` | 安装向导里有「桌面应用 / Web 服务」选择页 |
+            | macOS Apple 芯片 | `*-mac-arm64.pkg`（推荐）或 `.dmg` | `.pkg` 的「自定义安装」里勾选；`.dmg` 首次启动时选择 |
+            | macOS Intel 芯片 | `*-mac-x64.pkg`（推荐）或 `.dmg` | 同上 |
+            | Linux x64 | `.AppImage` 或 `.deb` | 首次启动时选择；`.deb` 另带 `aigc-studio-web` 无界面服务命令 |
+
+            安装包未做代码签名：macOS 首次打开请右键 →「打开」（或在「系统设置 · 隐私与安全性」里允许）；Windows 出现 SmartScreen 时点「更多信息 → 仍要运行」。

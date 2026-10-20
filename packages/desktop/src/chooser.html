@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:" />
+<title>选择运行方式 · AIGC 创作台</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; flex-direction: column; padding: 30px 32px 24px;
+    font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    color: #171A23; background: #F6F7F9; -webkit-user-select: none; user-select: none;
+  }
+  h1 { font-size: 19px; margin: 0 0 6px; display: flex; align-items: center; gap: 10px; }
+  .mark { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, #4F46E5, #7C5CFC); display: grid; place-items: center; color: #fff; font-size: 16px; }
+  p.sub { color: #5B6172; margin: 0 0 22px; }
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex: 1; }
+  button.opt {
+    text-align: left; border: 1.5px solid #E7E9EF; background: #fff; border-radius: 14px; padding: 18px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 8px; font: inherit; color: inherit; transition: border-color .15s, box-shadow .15s, transform .15s;
+  }
+  button.opt:hover { border-color: #C9CDF9; transform: translateY(-1px); }
+  button.opt:focus-visible, button.opt.on { border-color: #4F46E5; box-shadow: 0 0 0 4px #EEF0FE; outline: none; }
+  .ic { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-size: 18px; }
+  .ic.d { background: #EAF1FD; color: #2E6BE6; }
+  .ic.w { background: #F4F1FF; color: #7C5CFC; }
+  b { font-size: 15px; }
+  ul { margin: 0; padding-left: 18px; color: #5B6172; line-height: 1.75; font-size: 12.5px; }
+  .foot { margin-top: 18px; display: flex; align-items: center; gap: 10px; color: #8A90A2; font-size: 12px; }
+  .foot .grow { flex: 1; }
+  .go { border: 0; background: #4F46E5; color: #fff; border-radius: 9px; padding: 9px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  .go:hover { background: #4338CA; }
+</style>
+</head>
+<body>
+  <h1><span class="mark">✦</span>欢迎使用 AIGC 创作台</h1>
+  <p class="sub">选一种运行方式。之后随时可以在「设置 · 运行模式」里切换。</p>
+  <div class="opts">
+    <button class="opt on" data-mode="desktop">
+      <span class="ic d">▣</span>
+      <b>桌面应用</b>
+      <ul>
+        <li>独立窗口，像普通软件一样使用</li>
+        <li>只在本机访问，数据保存在本机</li>
+        <li>适合自己一个人用</li>
+      </ul>
+    </button>
+    <button class="opt" data-mode="web">
+      <span class="ic w">◎</span>
+      <b>Web 服务（浏览器访问）</b>
+      <ul>
+        <li>在后台运行，用系统浏览器打开</li>
+        <li>可开放给局域网里的其他设备</li>
+        <li>托盘图标里可以复制地址、退出</li>
+      </ul>
+    </button>
+  </div>
+  <div class="foot">
+    <span>两种方式共用同一份数据。</span>
+    <span class="grow"></span>
+    <button class="go" id="go">开始使用</button>
+  </div>
+<script>
+  let mode = 'desktop';
+  const opts = document.querySelectorAll('.opt');
+  opts.forEach((b) => {
+    b.addEventListener('click', () => { mode = b.dataset.mode; opts.forEach((x) => x.classList.toggle('on', x === b)); });
+    b.addEventListener('dblclick', () => window.aigcDesktop.chooseMode(b.dataset.mode));
+  });
+  document.getElementById('go').addEventListener('click', () => window.aigcDesktop.chooseMode(mode));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.aigcDesktop.chooseMode(mode); });
+</script>
+</body>
+</html>

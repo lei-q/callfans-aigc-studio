@@ -30,6 +30,12 @@ export default tseslint.config(
     },
   },
   {
+    /* CommonJS 脚本与 Electron 主进程按路径动态加载服务包，需要 require */
+    files: ['**/*.cjs', 'packages/desktop/src/main.ts'],
+    languageOptions: { sourceType: 'commonjs' },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
     files: ['packages/web/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { 'react-hooks': reactHooks },

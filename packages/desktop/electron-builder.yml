@@ -1,0 +1,79 @@
+appId: com.callfans.aigcstudio
+productName: AIGC Studio
+copyright: Copyright © 2026 callfans
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+  - "!dist/types/**"
+extraResources:
+  - from: ../server/dist
+    to: server
+    filter: ["server.cjs", "sql-wasm.wasm"]
+  - from: ../web/dist
+    to: web
+  - from: ../../resources/samples
+    to: samples
+  - from: build/bin
+    to: bin
+asar: true
+afterPack: scripts/after-pack.cjs
+artifactName: "AIGC-Studio-${version}-${os}-${arch}.${ext}"
+
+mac:
+  category: public.app-category.graphics-design
+  icon: build/icon.png
+  identity: null
+  hardenedRuntime: false
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  extendInfo:
+    NSHumanReadableCopyright: Copyright © 2026 callfans
+dmg:
+  title: "AIGC Studio ${version}"
+  writeUpdateInfo: false
+
+win:
+  icon: build/icon.png
+  executableName: AIGC Studio
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: AIGC 创作台
+  include: build/installer.nsh
+  installerLanguages: [zh_CN, en_US]
+  language: "2052"
+  unicode: true
+  deleteAppDataOnUninstall: false
+
+linux:
+  icon: build/icon.png
+  executableName: aigc-studio
+  category: Graphics
+  synopsis: AIGC 创作台：按次付费、说一句就能出片
+  maintainer: callfans <noreply@callfans.dev>
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  desktop:
+    entry:
+      Name: AIGC 创作台
+      Comment: 按次付费、说一句就能出片的 AIGC 创作工具
+deb:
+  afterInstall: build/linux/after-install.sh
+  afterRemove: build/linux/after-remove.sh
+
+publish: null

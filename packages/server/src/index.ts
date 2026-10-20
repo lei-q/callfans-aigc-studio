@@ -23,6 +23,8 @@ export interface StartOptions {
   seed?: boolean;
   logger?: boolean;
   version?: string;
+  /** 测试用：演示渠道的进度节拍（毫秒） */
+  mockTickMs?: number;
 }
 
 export interface RunningServer {
@@ -47,6 +49,7 @@ export async function startServer(o: StartOptions): Promise<RunningServer> {
     desktop: o.desktop,
     version,
     seed: o.seed,
+    mockTickMs: o.mockTickMs,
   });
   const host = o.host || '127.0.0.1';
   const lan = !isLoopback(host);
