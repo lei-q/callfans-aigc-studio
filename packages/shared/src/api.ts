@@ -48,6 +48,8 @@ export interface OptimizeReply {
   neg: string;
   note: string;
   llm: boolean;
+  /** 没有可用模型路由时的说明（此时为规则推断） */
+  reason?: string;
 }
 
 export interface AgentEnhanceBody {
@@ -72,12 +74,10 @@ export interface LinkPreview {
 }
 
 export interface SettingsPatch {
-  provider?: {
-    active?: 'mock' | 'treecloud';
-    concurrency?: number;
-    treecloud?: { baseUrl?: string; apiKey?: string; clearKey?: boolean };
-  };
-  chat?: { enabled?: boolean; model?: string };
+  cloud?: { baseUrl?: string };
+  runner?: { concurrency?: number };
+  direct?: { enabled?: boolean; baseUrl?: string; apiKey?: string; clearKey?: boolean };
+  chat?: { model?: string };
   prices?: Record<string, number | null>;
   runtime?: { mode?: RunMode; host?: string; port?: number; lan?: boolean; token?: string; clearToken?: boolean };
 }

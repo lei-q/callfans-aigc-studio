@@ -1,17 +1,5 @@
 import type { CreateJobBody, Job, ModelInfo, Result } from '@aigc/shared';
-import {
-  affordable,
-  applyFix,
-  chargeJob,
-  durationText,
-  ensureDaily,
-  refundJob,
-  resultTags,
-  TYPES,
-  uid,
-  unitPrice,
-  validateJob,
-} from '@aigc/shared';
+import { applyFix, durationText, resultTags, TYPES, uid, unitPrice, validateJob } from '@aigc/shared';
 import type { Core } from './core';
 import type { ProviderOutput, RunContext } from './providers/types';
 import { ProviderError } from './providers/types';
@@ -27,8 +15,9 @@ export class HttpError extends Error {
 }
 
 /* ============================================================================
-   任务调度：创建即扣费、按渠道限并发排队、失败与取消一律退回。
-   演示渠道一次只跑一个（和原型节奏一致），TreeCloud 按设置的并发数。
+   任务调度：按渠道限并发排队执行。
+   点数扣费在云端网关完成（创建时冻结、失败 / 取消退回），本地不做任何加扣款；
+   直连渠道不涉及平台点数。
    ========================================================================== */
 
 export class JobRunner {
@@ -60,21 +49,6 @@ export class JobRunner {
     this.core.events.emit({ type: 'job', job });
   }
 
-  private saveWallet() {
-    const w = this.store.wallet;
-    this.core.events.emit({ type: 'wallet', wallet: w });
-  }
-
-  private project(ws: string) {
-    return this.store.projects.get(ws);
-  }
-
-  private persistProject(p: ReturnType<JobRunner['project']>) {
-    if (!p) return;
-    this.store.projects.put(p);
-    this.core.events.emit({ type: 'project', project: p });
-  }
-
   /* ---------------- 创建 ---------------- */
 
   private siblings(model: ModelInfo) {
@@ -82,12 +56,16 @@ export class JobRunner {
   }
 
   private buildJob(body: CreateJobBody, source: Job['source'], keyId?: string): { job: Job; model: ModelInfo } {
-    if (!this.project(body.ws)) throw new HttpError(400, '项目不存在');
+    if (!this.store.projects.get(body.ws)) throw new HttpError(400, '项目不存在');
     const model = this.core.modelById(body.model);
-    if (!model) throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');
+    if (!model) {
+      if (body.model.startsWith('cloud:') && !this.core.session.loggedIn) {
+        throw new HttpError(403, '还没有登录账号', '登录后才能用平台点数生成；也可以在「设置」里启用直连模式');
+      }
+      throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');
+    }
     if (model.type !== body.type) throw new HttpError(400, `${model.name} 不是${TYPES[body.type].name}模型`);
     if (model.status !== 'on') throw new HttpError(400, `${model.name} 当前不可用`);
-    if (!this.core.providerOf(model).channel().ready) throw new HttpError(400, '该渠道还没有配置好', '到「设置」里填入 TreeCloud API Key');
     const prompt = (body.prompt || '').trim();
     if (!prompt) throw new HttpError(400, '提示词为空', '至少描述主体与用途');
     const { type, ws, negative, refs, name, divergeAxis, platform, fromCvsId, model: _m, prompt: _p, ...params } = body;
@@ -106,7 +84,6 @@ export class JobRunner {
       queueNote: '即将开始',
       createdAt: Date.now(),
       results: [],
-      charged: false,
       divergeAxis,
       platform,
       fromCvsId,
@@ -120,33 +97,22 @@ export class JobRunner {
   createMany(bodies: CreateJobBody[], source: Job['source'] = 'web', keyId?: string): Job[] {
     if (!bodies.length) throw new HttpError(400, '没有要创建的任务');
     const built = bodies.map((b) => this.buildJob(b, source, keyId));
-    const w = ensureDaily(this.store.wallet);
-    const valid = built.filter(({ job, model }) => {
-      job.fail = validateJob(job.type, job, model, this.siblings(model)) || undefined;
-      return !job.fail;
-    });
-    const total = valid.reduce((n, x) => n + x.job.cost, 0);
-    if (valid.length && !affordable(w, total)) {
-      throw new HttpError(402, '点数不足', `需要 ${Math.round(total * 10) / 10} 点，当前余额 ${w.balance} 点`);
-    }
     const out: Job[] = [];
-    for (const { job } of built) {
+    for (const { job, model } of built) {
+      const routeErr = this.core.routeError(model);
+      if (routeErr) throw new HttpError(403, routeErr);
+      job.fail = validateJob(job.type, job, model, this.siblings(model)) || undefined;
       if (job.fail) {
-        /* 参数校验不通过：直接记一条失败任务，不扣费，方便「修复 → 重试」 */
+        /* 参数校验不通过：直接记一条失败任务，不提交云端，方便「修复 → 重试」 */
         job.status = 'failed';
         delete job.queueNote;
         this.save(job);
         this.core.events.notice('warn', '任务未通过参数校验', `${job.fail.code} · ${job.fail.reason}`);
       } else {
-        const p = this.project(job.ws);
-        chargeJob(w, job, p);
-        this.persistProject(p);
         this.save(job);
       }
       out.push(job);
     }
-    this.store.wallet = w;
-    this.saveWallet();
     this.refreshNotes();
     this.pump();
     return out;
@@ -172,15 +138,9 @@ export class JobRunner {
       const model = this.core.modelById(job.model);
       if (model) void this.core.providerOf(model).cancel?.(job);
     }
-    const w = this.store.wallet;
-    const p = this.project(job.ws);
-    const refunded = refundJob(w, job, p);
-    this.store.wallet = w;
-    this.persistProject(p);
     this.save(job);
-    this.saveWallet();
     this.refreshNotes();
-    return { job, refunded };
+    return { job, refunded: job.cost > 0 };
   }
 
   private requeue(job: Job, note: string) {
@@ -188,8 +148,6 @@ export class JobRunner {
     if (!model) throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');
     const fail = validateJob(job.type, job, model, this.siblings(model));
     if (fail) throw new HttpError(400, fail.reason, fail.fix);
-    const w = ensureDaily(this.store.wallet);
-    if (!job.charged && !affordable(w, job.cost)) throw new HttpError(402, '点数不足', `需要 ${job.cost} 点，当前余额 ${w.balance} 点`);
     job.status = 'queued';
     job.progress = 0;
     job.queueNote = note;
@@ -199,12 +157,7 @@ export class JobRunner {
     delete job.startedAt;
     delete job.finishedAt;
     delete job.durText;
-    const p = this.project(job.ws);
-    chargeJob(w, job, p);
-    this.store.wallet = w;
-    this.persistProject(p);
     this.save(job);
-    this.saveWallet();
     this.refreshNotes();
     this.pump();
     return job;
@@ -337,14 +290,8 @@ export class JobRunner {
     delete job.eta;
     delete job.queueNote;
     job.finishedAt = Date.now();
-    const w = this.store.wallet;
-    const p = this.project(job.ws);
-    const refunded = refundJob(w, job, p);
-    this.store.wallet = w;
-    this.persistProject(p);
     this.save(job);
-    this.saveWallet();
-    this.core.events.notice('warn', '生成失败', `${job.name} · ${fail.reason}${refunded ? `，已退回 ${job.cost} 点` : ''}`);
+    this.core.events.notice('warn', '生成失败', `${job.name} · ${fail.reason}${fail.code === 'E-BAL-02' ? '' : '（云端已退回本次点数）'}`);
   }
 
   /** 新一批来了：上一批还在收件箱、没被拖进画布的，自动沉入草稿箱 */
@@ -402,15 +349,6 @@ export class JobRunner {
     job.durText = durationText(now - (job.startedAt || now));
     job.results = results.map((r) => r.id);
     this.save(job);
-    if (job.source === 'api') {
-      const usage = { id: uid('u'), at: now, model: job.model, n: results.length, pts: job.cost, keyId: job.keyId || '' };
-      this.store.apiUsage.put(usage);
-      this.core.events.emit({
-        type: 'api',
-        apiKeys: this.store.apiKeys.all().map(({ hash: _h, ...k }) => k),
-        apiUsage: this.store.apiUsage.all().sort((a, b) => b.at - a.at).slice(0, 200),
-      });
-    }
     this.core.events.notice(
       'success',
       '生成完成',
@@ -428,16 +366,11 @@ export class JobRunner {
         this.failJob(job, new ProviderError('E-MOD-04', '模型不存在或已下架', '到「设置」里刷新模型列表后换一个模型重试'));
         continue;
       }
-      if (model.channel === 'mock') {
-        /* 演示渠道：重新排队，已扣的费用保留，不会重复扣 */
-        job.status = 'queued';
-        job.progress = 0;
-        job.queueNote = '应用重启后重新排队';
-        this.save(job);
-      } else if (job.type === 'video' && job.upstreamTaskId) {
+      if (job.type === 'video' && job.upstreamTaskId) {
+        /* 上游任务还在：接着查，不重复提交 */
         void this.exec(job, model, true);
       } else {
-        this.failJob(job, new ProviderError('E-NET-03', '应用退出时请求还没完成，结果未知', '为避免重复计费不会自动重试；可到 TreeCloud 控制台核对后手动重试'));
+        this.failJob(job, new ProviderError('E-NET-03', '应用退出时请求还没完成，结果未知', '为避免重复扣费不会自动重试；可在任务记录里重跑'));
       }
     }
   }

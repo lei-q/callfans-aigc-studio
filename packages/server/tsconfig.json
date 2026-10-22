@@ -1,12 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": ".",
+    "rootDir": "..",
     "outDir": "dist/types",
     "lib": ["ES2023"],
     "types": ["node"],
     "emitDeclarationOnly": true
   },
-  "include": ["src", "test"],
+  "include": ["src", "test", "../cloud-mock/src"],
   "references": [{ "path": "../shared" }]
 }

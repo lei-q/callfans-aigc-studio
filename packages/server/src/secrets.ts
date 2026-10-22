@@ -35,6 +35,21 @@ export class Secrets {
       return null;
     }
   }
+
+  encryptCloudTokens(t: { accessToken: string; refreshToken: string; expiresAt: number }) {
+    return this.encrypt(JSON.stringify(t));
+  }
+
+  decryptCloudTokens(blob: string | null): { accessToken: string; refreshToken: string; expiresAt: number } | null {
+    const raw = this.decrypt(blob);
+    if (!raw) return null;
+    try {
+      const t = JSON.parse(raw) as { accessToken?: string; refreshToken?: string; expiresAt?: number };
+      return t.accessToken && t.refreshToken ? { accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt || 0 } : null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 export const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');

@@ -1,31 +1,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AppInfo, Bootstrap, Channel, ModelInfo, RunMode, Settings } from '@aigc/shared';
-import { DEFAULT_PORT, ensureDaily, uid } from '@aigc/shared';
+import type { AppInfo, Bootstrap, Channel, ModelInfo, RunMode, SessionInfo, Settings } from '@aigc/shared';
+import { DEFAULT_PORT, uid } from '@aigc/shared';
+import { CloudSession } from './cloud/session';
 import { Db } from './db';
 import { EventHub } from './events';
-import { MockProvider } from './providers/mock';
+import { CloudProvider, gatewayModelToModelInfo } from './providers/cloud';
 import { TreeCloudProvider } from './providers/treecloud';
 import type { Provider } from './providers/types';
 import { JobRunner } from './runner';
 import { Secrets } from './secrets';
-import { seedDemo, seedEmpty } from './seed';
+import { seedClean } from './seed';
 import { Store } from './store';
 
 export interface CoreOptions {
   dataDir: string;
-  samplesDir: string;
   webDir?: string;
   mode: RunMode;
   desktop: boolean;
   version: string;
-  /** 首次启动写入示例数据 */
-  seed?: boolean;
-  /** 测试用：演示渠道的节拍 */
-  mockTickMs?: number;
   /** 测试用：不落盘 */
   memory?: boolean;
-  treecloudPollMs?: number;
+  cloudPollMs?: number;
+  directPollMs?: number;
 }
 
 /** 运行模式：桌面 / Web、端口、是否允许局域网访问。Electron 启动前就要读，所以单独存成文件 */
@@ -62,8 +59,9 @@ export class Core {
   readonly store: Store;
   readonly secrets: Secrets;
   readonly events = new EventHub();
-  readonly mock: MockProvider;
-  readonly treecloud: TreeCloudProvider;
+  readonly session: CloudSession;
+  readonly cloud: CloudProvider;
+  readonly direct: TreeCloudProvider;
   readonly runner: JobRunner;
   readonly mediaDir: string;
   readonly uploadsDir: string;
@@ -78,19 +76,26 @@ export class Core {
     this.uploadsDir = path.join(opts.dataDir, 'uploads');
     fs.mkdirSync(this.mediaDir, { recursive: true });
     fs.mkdirSync(this.uploadsDir, { recursive: true });
-    this.mock = new MockProvider(() => this.store.settings.prices, opts.mockTickMs ?? 700);
-    this.treecloud = new TreeCloudProvider(
+
+    this.session = new CloudSession(this.store, this.secrets, this.events, () => this.store.settings.cloud.baseUrl);
+    this.cloud = new CloudProvider(
+      () => this.session,
+      () => this.store.settings.prices,
+      () => this.store.settings.runner.concurrency,
+      opts.cloudPollMs,
+    );
+    this.direct = new TreeCloudProvider(
       () => {
         const s = this.store.settings;
         return {
-          baseUrl: s.provider.treecloud.baseUrl,
-          apiKey: this.secrets.decrypt(s.provider.treecloud.keyEnc),
-          concurrency: s.provider.concurrency,
+          baseUrl: s.direct.baseUrl,
+          apiKey: this.secrets.decrypt(s.direct.keyEnc),
+          concurrency: s.runner.concurrency,
           prices: s.prices,
-          pollMs: opts.treecloudPollMs,
+          pollMs: opts.directPollMs,
         };
       },
-      () => this.store.treecloudModels,
+      () => this.store.directModels,
     );
     this.runner = new JobRunner(this);
   }
@@ -100,14 +105,11 @@ export class Core {
     const db = await Db.open(opts.memory ? null : path.join(opts.dataDir, 'db.sqlite'));
     const core = new Core(db, opts);
     if (db.isNew) {
-      if (opts.seed !== false) seedDemo(core.store);
-      else seedEmpty(core.store);
+      seedClean(core.store);
       db.metaSet('seeded', '1');
       db.metaSet('installed_at', String(Date.now()));
     }
-    const w = core.store.wallet;
-    ensureDaily(w);
-    core.store.wallet = w;
+    await core.session.restore();
     return core;
   }
 
@@ -134,11 +136,13 @@ export class Core {
   /* ---------------- 模型与渠道 ---------------- */
 
   providers(): Provider[] {
-    return [this.mock, this.treecloud];
+    return [this.cloud, this.direct];
   }
 
   models(): ModelInfo[] {
-    return [...this.mock.models(), ...this.treecloud.models()];
+    const prices = this.store.settings.prices;
+    const cloudCached = this.session.loggedIn ? this.session.models : this.store.cloudModelsCache;
+    return [...cloudCached.map((g) => gatewayModelToModelInfo(g, prices[`cloud:${g.id}`])), ...this.direct.models()];
   }
 
   modelById(id: string) {
@@ -146,7 +150,19 @@ export class Core {
   }
 
   providerOf(model: ModelInfo): Provider {
-    return model.channel === 'treecloud' ? this.treecloud : this.mock;
+    return model.channel === 'direct' ? this.direct : this.cloud;
+  }
+
+  /** 模型所属渠道当前是否可用：云端要登录，直连要启用且配了 Key */
+  routeError(model: ModelInfo): string | null {
+    if (model.channel === 'direct') {
+      const d = this.store.settings.direct;
+      if (!d.enabled) return '直连模式没有启用：到「设置 · 直连 TreeCloud」里启用，或改用云端模型';
+      if (!d.keyEnc) return '直连模式还没有配置 Key：到「设置 · 直连 TreeCloud」里填入你自己的 Key';
+      return null;
+    }
+    if (!this.session.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「设置」里启用直连模式';
+    return null;
   }
 
   channels(): Channel[] {
@@ -163,17 +179,16 @@ export class Core {
     const s = this.store.settings;
     const launch = this.readLaunch();
     return {
-      provider: {
-        active: s.provider.active,
-        concurrency: s.provider.concurrency,
-        treecloud: {
-          baseUrl: s.provider.treecloud.baseUrl,
-          hasKey: !!s.provider.treecloud.keyEnc,
-          keyHint: s.provider.treecloud.keyHint,
-          lastCheck: s.provider.treecloud.lastCheck,
-        },
+      cloud: { baseUrl: s.cloud.baseUrl },
+      runner: { concurrency: s.runner.concurrency },
+      direct: {
+        enabled: s.direct.enabled,
+        baseUrl: s.direct.baseUrl,
+        hasKey: !!s.direct.keyEnc,
+        keyHint: s.direct.keyHint,
+        lastCheck: s.direct.lastCheck,
       },
-      chat: { enabled: s.chat.enabled, model: s.chat.model, available: this.store.treecloudModels.chat },
+      chat: { model: s.chat.model, available: this.store.directModels.chat },
       prices: s.prices,
       runtime: {
         mode: launch.mode || this.opts.mode,
@@ -182,6 +197,15 @@ export class Core {
         lan: !!launch.lan,
         hasToken: !!s.runtime.tokenHash,
       },
+    };
+  }
+
+  sessionInfo(): SessionInfo {
+    return {
+      loggedIn: this.session.loggedIn,
+      profile: this.session.profile || undefined,
+      cloudReachable: this.session.client.configured,
+      cloudMessage: this.session.client.configured ? undefined : '还没有配置云端地址',
     };
   }
 
@@ -197,8 +221,6 @@ export class Core {
 
   bootstrap(): Bootstrap {
     const s = this.store;
-    const w = s.wallet;
-    ensureDaily(w);
     const boards: Bootstrap['boards'] = {};
     for (const p of s.projects.all()) boards[p.id] = s.board(p.id);
     return {
@@ -206,7 +228,8 @@ export class Core {
       projects: s.projects.all().sort((a, b) => a.createdAt - b.createdAt),
       jobs: s.jobs.all().sort((a, b) => b.createdAt - a.createdAt),
       results: s.results.all().sort((a, b) => b.createdAt - a.createdAt),
-      wallet: w,
+      wallet: this.session.wallet,
+      session: this.sessionInfo(),
       boards,
       aesthetic: s.aesthetic.all().sort((a, b) => b.createdAt - a.createdAt),
       posts: s.posts.all().sort((a, b) => b.updatedAt - a.updatedAt),
@@ -214,7 +237,6 @@ export class Core {
       channels: this.channels(),
       settings: this.publicSettings(),
       apiKeys: s.apiKeys.all().map(({ hash: _h, ...k }) => k),
-      apiUsage: s.apiUsage.all().sort((a, b) => b.at - a.at).slice(0, 200),
       ui: s.ui,
     };
   }
@@ -228,14 +250,13 @@ export class Core {
     return { src: `/files/${dir}/${name}`, mime: clean };
   }
 
-  /** 本机 URL 路径 → 磁盘路径（只认三个目录，防目录穿越） */
+  /** 本机 URL 路径 → 磁盘路径（只认两个目录，防目录穿越） */
   localPathOf(src: string): string | null {
     const clean = decodeURIComponent(src.split('?')[0].split('#')[0]);
-    const m = /^\/(files\/media|files\/uploads|samples)\/(.+)$/.exec(clean);
+    const m = /^\/files\/(media|uploads)\/(.+)$/.exec(clean);
     if (!m) return null;
     const rel = path.normalize(m[2]).replace(/^(\.\.[/\\])+/, '');
-    const root = m[1] === 'files/media' ? this.mediaDir : m[1] === 'files/uploads' ? this.uploadsDir : this.opts.samplesDir;
-    const base = path.resolve(root);
+    const base = path.resolve(m[1] === 'media' ? this.mediaDir : this.uploadsDir);
     const full = path.resolve(base, rel);
     if (!full.startsWith(base + path.sep)) return null;
     return full;
@@ -246,7 +267,7 @@ export class Core {
       const mime = /^data:([^;,]+)/.exec(src)?.[1] || 'application/octet-stream';
       return { dataUrl: src, mime };
     }
-    if (/^https:\/\//i.test(src)) {
+    if (/^https?:\/\//i.test(src)) {
       const ext = /\.([a-z0-9]+)(?:[?#]|$)/i.exec(src)?.[1] || 'png';
       return { dataUrl: src, mime: mimeOfExt(ext) };
     }
@@ -269,6 +290,7 @@ export class Core {
 
   close() {
     this.runner.stop();
+    this.session.stop();
     this.store.flush();
     this.db.close();
   }

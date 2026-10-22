@@ -12,3 +12,8 @@ playwright-report/
 .env
 .env.*
 .claude/settings.local.json
+
+# 本机 Claude Code 配置（含个人凭据）
+.claude/
+packages/cloud-mock/src/*.d.ts
+packages/cloud-mock/src/*.d.ts.map

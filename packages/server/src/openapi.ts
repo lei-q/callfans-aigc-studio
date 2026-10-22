@@ -80,13 +80,11 @@ export function registerOpenApi(app: FastifyInstance, core: Core) {
 
   app.get('/openapi/v1/models', async (req) => {
     const key = auth(req);
-    return {
-      object: 'list',
-      data: core
-        .models()
-        .filter((m) => m.channel === key.channel && m.status === 'on')
-        .map((m) => ({ id: m.id, name: m.name, type: m.type, price: m.price, basis: m.basis })),
-    };
+    const models = core.models().filter((m) => m.channel === key.channel && m.status === 'on');
+    if (!models.length) {
+      throw new HttpError(400, key.channel === 'cloud' ? '还没有登录云端账号，没有可用模型' : '直连模式没有启用或没有可用模型');
+    }
+    return { object: 'list', data: models.map((m) => ({ id: m.id, name: m.name, type: m.type, price: m.price, basis: m.basis })) };
   });
 
   /** OpenAI 风格的同步出图：等任务完成再返回（最多 10 分钟） */

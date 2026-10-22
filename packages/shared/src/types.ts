@@ -1,6 +1,7 @@
 /* ============================================================================
    领域类型：服务端与前端共用的一份数据合同
    ========================================================================== */
+import type { OrderDto, UserProfile, WalletDto } from './cloud';
 
 export type MediaType = 'image' | 'video' | 'audio';
 export type ResKey = '1080p' | '2k' | '4k';
@@ -22,11 +23,11 @@ export interface Project {
 
 /** 模型渠道：模型经过渠道层统一接入、路由与计费。每个 Provider 实例就是一个渠道 */
 export interface Channel {
-  id: string;
+  id: 'cloud' | 'direct';
   name: string;
   note: string;
-  kind: 'mock' | 'gateway';
-  /** 当前是否可用（TreeCloud 没配 Key 时不可用） */
+  kind: 'cloud' | 'direct';
+  /** 云端渠道=已登录；直连渠道=已配 Key */
   ready: boolean;
 }
 
@@ -39,7 +40,8 @@ export interface ModelInfo {
   price: number;
   basis: string;
   status: 'on' | 'off';
-  channel: string;
+  /** 'cloud' = 云端网关；'direct' = 用户自填 Key 直连 */
+  channel: 'cloud' | 'direct';
   /** 上游公开模型 ID */
   upstream?: string;
   /** 图像：分辨率上限；未知时不做本地校验 */
@@ -118,9 +120,6 @@ export interface Job extends JobParams {
   finishedAt?: number;
   durText?: string;
   results: string[];
-  /** 是否已扣费：保证「取消 → 重跑」的净支出正好是一次费用 */
-  charged: boolean;
-  usedFree?: number;
   fail?: JobFail;
   fixed?: boolean;
   fixLog?: string[];
@@ -152,8 +151,6 @@ export interface Result {
   /** 缩略图 / 封面；没有时前端按类型画占位 */
   thumb?: string;
   mime?: string;
-  /** 演示素材：视频与音频只有封面，播放是模拟的 */
-  simulated?: boolean;
   ratio: string;
   model: string;
   seed: number;
@@ -168,15 +165,6 @@ export interface Result {
   edit?: ResultEdit;
 }
 
-export interface Wallet {
-  balance: number;
-  spent: Record<MediaType, number>;
-  dailyFree: number;
-  dailyUsed: number;
-  /** 当日免费额度对应的日期（YYYY-MM-DD），跨天自动重置 */
-  dailyDate: string;
-  firstTopupDone: boolean;
-}
 
 /* ---------------- 画布 ---------------- */
 
@@ -290,7 +278,8 @@ export interface Post {
 export interface ApiKey {
   id: string;
   name: string;
-  channel: string;
+  /** 'cloud' = 云端网关；'direct' = 用户自填 Key 直连 */
+  channel: 'cloud' | 'direct';
   /** 掩码后的 Key，完整值只在创建时返回一次 */
   masked: string;
   createdAt: number;
@@ -298,38 +287,34 @@ export interface ApiKey {
   on: boolean;
 }
 
-export interface ApiUsage {
-  id: string;
-  at: number;
-  model: string;
-  n: number;
-  pts: number;
-  keyId: string;
-}
-
 /* ---------------- 设置 ---------------- */
 
-export type ProviderId = 'mock' | 'treecloud';
 export type RunMode = 'desktop' | 'web';
 
+export interface CheckInfo {
+  ok: boolean;
+  at: number;
+  message: string;
+}
+
 export interface Settings {
-  provider: {
-    active: ProviderId;
-    concurrency: number;
-    treecloud: {
-      baseUrl: string;
-      hasKey: boolean;
-      keyHint?: string;
-      lastCheck?: { ok: boolean; at: number; message: string };
-    };
+  /** 云端地址（账号 / 积分 / 支付 / 网关） */
+  cloud: { baseUrl: string };
+  runner: { concurrency: number };
+  /** 高级选项：用户自填 TreeCloud Key 直连，不扣平台点数 */
+  direct: {
+    enabled: boolean;
+    baseUrl: string;
+    hasKey: boolean;
+    keyHint?: string;
+    lastCheck?: CheckInfo;
   };
   chat: {
-    enabled: boolean;
+    /** 直连模式下用哪个对话模型；云端模式由云端选择 */
     model: string;
-    /** 当前 Key 可用的对话模型 */
     available: string[];
   };
-  /** 按模型覆盖单价（点） */
+  /** 按模型覆盖预估单价（点），仅用于展示预估 */
   prices: Record<string, number>;
   runtime: {
     mode: RunMode;
@@ -349,12 +334,22 @@ export interface AppInfo {
   desktop: boolean;
 }
 
+export interface SessionInfo {
+  loggedIn: boolean;
+  profile?: UserProfile;
+  /** 登录页 / 云端不可达时的说明 */
+  cloudReachable: boolean;
+  cloudMessage?: string;
+}
+
 export interface Bootstrap {
   app: AppInfo;
   projects: Project[];
   jobs: Job[];
   results: Result[];
-  wallet: Wallet;
+  /** 云端钱包缓存；未登录为 null */
+  wallet: WalletDto | null;
+  session: SessionInfo;
   boards: Record<string, Board>;
   aesthetic: AestheticItem[];
   posts: Post[];
@@ -362,7 +357,6 @@ export interface Bootstrap {
   channels: Channel[];
   settings: Settings;
   apiKeys: ApiKey[];
-  apiUsage: ApiUsage[];
   ui: Record<string, unknown>;
 }
 
@@ -371,10 +365,12 @@ export type ServerEvent =
   | { type: 'job'; job: Job }
   | { type: 'result'; result: Result }
   | { type: 'result.deleted'; id: string }
-  | { type: 'wallet'; wallet: Wallet }
+  | { type: 'wallet'; wallet: WalletDto | null }
+  | { type: 'session'; session: SessionInfo }
+  | { type: 'order'; order: OrderDto }
   | { type: 'project'; project: Project }
   | { type: 'project.deleted'; id: string }
   | { type: 'models'; models: ModelInfo[]; channels: Channel[] }
   | { type: 'settings'; settings: Settings }
-  | { type: 'api'; apiKeys: ApiKey[]; apiUsage: ApiUsage[] }
+  | { type: 'api'; apiKeys: ApiKey[] }
   | { type: 'notice'; level: 'info' | 'success' | 'warn' | 'ai'; title: string; desc?: string };

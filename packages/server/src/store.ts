@@ -1,21 +1,20 @@
 import type {
   AestheticItem,
   ApiKey,
-  ApiUsage,
   Board,
+  GatewayModel,
   Job,
   ModelInfo,
   Post,
   Project,
-  ProviderId,
   Result,
-  Wallet,
 } from '@aigc/shared';
-import { DEFAULT_DAILY_FREE, dayKey, TREECLOUD_BASE_URL } from '@aigc/shared';
+import { TREECLOUD_BASE_URL } from '@aigc/shared';
 import type { Db } from './db';
 
 /* ============================================================================
    仓储：单进程、单用户，所以内存里放一份全量，写入时同步落库。
+   点数钱包的权威在云端，本地只存会话 token（加密）与展示缓存。
    ========================================================================== */
 
 export class Collection<T extends { id: string }> {
@@ -57,17 +56,16 @@ export interface StoredBoard extends Board {
 }
 
 export interface SettingsInternal {
-  provider: {
-    active: ProviderId;
-    concurrency: number;
-    treecloud: {
-      baseUrl: string;
-      keyEnc?: string;
-      keyHint?: string;
-      lastCheck?: { ok: boolean; at: number; message: string };
-    };
+  cloud: { baseUrl: string };
+  runner: { concurrency: number };
+  direct: {
+    enabled: boolean;
+    baseUrl: string;
+    keyEnc?: string;
+    keyHint?: string;
+    lastCheck?: { ok: boolean; at: number; message: string };
   };
-  chat: { enabled: boolean; model: string };
+  chat: { model: string };
   prices: Record<string, number>;
   runtime: { tokenHash?: string };
 }
@@ -77,20 +75,13 @@ export interface StoredApiKey extends ApiKey {
 }
 
 export const DEFAULT_SETTINGS: SettingsInternal = {
-  provider: { active: 'mock', concurrency: 2, treecloud: { baseUrl: TREECLOUD_BASE_URL } },
-  chat: { enabled: false, model: '' },
+  cloud: { baseUrl: process.env.AIGC_CLOUD_URL || '' },
+  runner: { concurrency: 2 },
+  direct: { enabled: false, baseUrl: TREECLOUD_BASE_URL },
+  chat: { model: '' },
   prices: {},
   runtime: {},
 };
-
-export const defaultWallet = (): Wallet => ({
-  balance: 10,
-  spent: { image: 0, video: 0, audio: 0 },
-  dailyFree: DEFAULT_DAILY_FREE,
-  dailyUsed: 0,
-  dailyDate: dayKey(Date.now()),
-  firstTopupDone: false,
-});
 
 export class Store {
   readonly projects: Collection<Project>;
@@ -100,7 +91,6 @@ export class Store {
   readonly aesthetic: Collection<AestheticItem>;
   readonly posts: Collection<Post>;
   readonly apiKeys: Collection<StoredApiKey>;
-  readonly apiUsage: Collection<ApiUsage>;
 
   constructor(readonly db: Db) {
     this.projects = new Collection(db, 'projects');
@@ -110,14 +100,6 @@ export class Store {
     this.aesthetic = new Collection(db, 'aesthetic');
     this.posts = new Collection(db, 'posts');
     this.apiKeys = new Collection(db, 'api_keys');
-    this.apiUsage = new Collection(db, 'api_usage');
-  }
-
-  get wallet(): Wallet {
-    return this.db.kvGet<Wallet>('wallet') || defaultWallet();
-  }
-  set wallet(w: Wallet) {
-    this.db.kvSet('wallet', w);
   }
 
   get settings(): SettingsInternal {
@@ -125,11 +107,9 @@ export class Store {
     return {
       ...DEFAULT_SETTINGS,
       ...s,
-      provider: {
-        ...DEFAULT_SETTINGS.provider,
-        ...s?.provider,
-        treecloud: { ...DEFAULT_SETTINGS.provider.treecloud, ...s?.provider?.treecloud },
-      },
+      cloud: { ...DEFAULT_SETTINGS.cloud, ...s?.cloud },
+      runner: { ...DEFAULT_SETTINGS.runner, ...s?.runner },
+      direct: { ...DEFAULT_SETTINGS.direct, ...s?.direct },
       chat: { ...DEFAULT_SETTINGS.chat, ...s?.chat },
       prices: { ...s?.prices },
       runtime: { ...s?.runtime },
@@ -139,6 +119,15 @@ export class Store {
     this.db.kvSet('settings', s);
   }
 
+  /** 云端会话的 refresh token（加密串）；null = 未登录 */
+  get cloudSession(): string | null {
+    return this.db.kvGet<string>('cloud_session');
+  }
+  set cloudSession(v: string | null) {
+    if (v == null) this.db.del('kv', 'cloud_session');
+    else this.db.kvSet('cloud_session', v);
+  }
+
   get ui(): Record<string, unknown> {
     return this.db.kvGet<Record<string, unknown>>('ui') || {};
   }
@@ -146,11 +135,20 @@ export class Store {
     this.db.kvSet('ui', u);
   }
 
-  get treecloudModels(): { models: ModelInfo[]; chat: string[]; at: number } {
-    return this.db.kvGet('tc_models') || { models: [], chat: [], at: 0 };
+  /** 直连渠道的模型目录缓存 */
+  get directModels(): { models: ModelInfo[]; chat: string[]; at: number } {
+    return this.db.kvGet('direct_models') || { models: [], chat: [], at: 0 };
   }
-  set treecloudModels(v: { models: ModelInfo[]; chat: string[]; at: number }) {
-    this.db.kvSet('tc_models', v);
+  set directModels(v: { models: ModelInfo[]; chat: string[]; at: number }) {
+    this.db.kvSet('direct_models', v);
+  }
+
+  /** 云端模型目录缓存（会话内存里也有一份，这里用于重启后展示） */
+  get cloudModelsCache(): GatewayModel[] {
+    return this.db.kvGet<GatewayModel[]>('cloud_models') || [];
+  }
+  set cloudModelsCache(v: GatewayModel[]) {
+    this.db.kvSet('cloud_models', v);
   }
 
   board(ws: string): Board {

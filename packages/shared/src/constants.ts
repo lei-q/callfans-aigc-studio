@@ -190,21 +190,14 @@ export const HELP_TOPICS = [
   { t: '想先摆一摆参考图', d: '右侧画布可以拖入任意图片，拖空白框选、空格拖平移', act: 'studio' },
   { t: '处理失败任务', d: '顶栏「失败」只看失败任务，点「修复」按建议重试', act: 'fail' },
   { t: '复用已有产出', d: '素材库里卡片「变体」可回填参考图继续生成', act: 'studio' },
-  { t: '充值点数', d: '顶栏余额芯片点一下，10 元起充，首充翻倍', act: 'quota' },
+  { t: '充值点数', d: '顶栏账号芯片点一下，微信 / 支付宝扫码在线充值', act: 'quota' },
   { t: '接到自己的工具里', d: '侧栏「API 接入」创建 Key，与网页共用余额', act: 'api' },
   { t: '查看历史任务', d: '任务记录里按状态筛选，点行展开看产出', act: 'jobs' },
-  { t: '接入真实模型', d: '侧栏「设置」填入 TreeCloud API Key，即可调用真实生成', act: 'settings' },
-];
-
-export const TOPUP_PACKS = [
-  { p: 10, tag: '入门', note: '先试几张图' },
-  { p: 30, tag: '常用', note: '够做一组主视觉' },
-  { p: 100, tag: '划算', note: '批量出素材更省心' },
+  { t: '登录账号', d: '登录后用平台点数生成；也可以在设置里填自己的 TreeCloud Key 直连', act: 'account' },
 ];
 
 export const PEN_COLORS = ['#4F46E5', '#E11D48', '#F59E0B', '#059669', '#171A23'];
 
-export const DEFAULT_DAILY_FREE = 0.5;
 export const MAX_REFS = 4;
 export const DEFAULT_PORT = 5780;
 export const TREECLOUD_BASE_URL = 'https://api.jtreecloud.com';

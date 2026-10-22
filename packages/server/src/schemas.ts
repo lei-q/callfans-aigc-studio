@@ -101,23 +101,20 @@ export const postSchema = z.object({
   platform: z.string().max(20),
 });
 
-export const topupSchema = z.object({ amount: z.union([z.literal(10), z.literal(30), z.literal(100)]) });
+export const orderSchema = z.object({ packId: z.string().min(1).max(64), channel: z.enum(['wechat', 'alipay']) });
 
 export const settingsSchema = z.object({
-  provider: z
+  cloud: z.object({ baseUrl: z.union([z.string().url().max(200), z.literal('')]) }).optional(),
+  runner: z.object({ concurrency: z.number().int().min(1).max(8) }).optional(),
+  direct: z
     .object({
-      active: z.enum(['mock', 'treecloud']).optional(),
-      concurrency: z.number().int().min(1).max(8).optional(),
-      treecloud: z
-        .object({
-          baseUrl: z.string().url().max(200).optional(),
-          apiKey: z.string().min(8).max(300).optional(),
-          clearKey: z.boolean().optional(),
-        })
-        .optional(),
+      enabled: z.boolean().optional(),
+      baseUrl: z.string().url().max(200).optional(),
+      apiKey: z.string().min(8).max(300).optional(),
+      clearKey: z.boolean().optional(),
     })
     .optional(),
-  chat: z.object({ enabled: z.boolean().optional(), model: z.string().max(200).optional() }).optional(),
+  chat: z.object({ model: z.string().max(200).optional() }).optional(),
   prices: z.record(z.string(), z.number().min(0).max(1000).nullable()).optional(),
   runtime: z
     .object({
@@ -141,5 +138,5 @@ export const agentSchema = z.object({
   draft: z.string().max(2000),
 });
 
-export const keySchema = z.object({ name: z.string().min(1).max(40).optional(), channel: z.enum(['mock', 'treecloud']).optional() });
+export const keySchema = z.object({ name: z.string().min(1).max(40).optional(), channel: z.enum(['cloud', 'direct']).optional() });
 export const keyPatchSchema = z.object({ on: z.boolean().optional(), name: z.string().min(1).max(40).optional() });

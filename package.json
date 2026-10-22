@@ -10,7 +10,9 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"pnpm --filter @aigc/server dev\" \"pnpm --filter @aigc/web dev\"",
+    "dev": "concurrently -n cloud,server,web -c yellow,blue,magenta \"pnpm dev:cloud\" \"pnpm dev:server\" \"pnpm --filter @aigc/web dev\"",
+    "dev:cloud": "pnpm --filter @aigc/cloud-mock dev",
+    "dev:server": "AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm --filter @aigc/server dev",
     "build": "pnpm -r --filter \"./packages/*\" build",
     "typecheck": "tsc -b packages/shared packages/server packages/web packages/desktop",
     "lint": "eslint .",

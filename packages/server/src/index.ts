@@ -12,7 +12,6 @@ declare const __APP_VERSION__: string | undefined;
 
 export interface StartOptions {
   dataDir: string;
-  samplesDir: string;
   webDir?: string;
   mode: RunMode;
   desktop: boolean;
@@ -20,11 +19,10 @@ export interface StartOptions {
   port?: number;
   /** 桌面模式：每次启动的会话口令，由 Electron 写进 cookie */
   accessToken?: string;
-  seed?: boolean;
   logger?: boolean;
   version?: string;
-  /** 测试用：演示渠道的进度节拍（毫秒） */
-  mockTickMs?: number;
+  /** 测试用：云端 / 直连轮询节拍（毫秒） */
+  pollMs?: number;
 }
 
 export interface RunningServer {
@@ -43,13 +41,12 @@ export async function startServer(o: StartOptions): Promise<RunningServer> {
   const version = o.version || (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0-dev');
   const core = await Core.create({
     dataDir: o.dataDir,
-    samplesDir: o.samplesDir,
     webDir: o.webDir,
     mode: o.mode,
     desktop: o.desktop,
     version,
-    seed: o.seed,
-    mockTickMs: o.mockTickMs,
+    cloudPollMs: o.pollMs,
+    directPollMs: o.pollMs,
   });
   const host = o.host || '127.0.0.1';
   const lan = !isLoopback(host);

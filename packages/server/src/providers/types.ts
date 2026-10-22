@@ -28,7 +28,7 @@ export interface ChatMessage {
 }
 
 export interface Provider {
-  readonly id: 'mock' | 'treecloud';
+  readonly id: 'cloud' | 'direct';
   channel(): Channel;
   models(): ModelInfo[];
   /** 并发上限 */

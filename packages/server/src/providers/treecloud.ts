@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { AudioUse, Channel, Job, MediaType, ModelInfo } from '@aigc/shared';
 import { estSeconds, maxResFromSizes, pickImageSize, resoOf, VOICES } from '@aigc/shared';
-import { abortError, sleep } from './mock';
+import { abortError, sleep } from './sleep';
 import { ProviderError, type ChatMessage, type Provider, type ProviderOutput, type RunContext } from './types';
 
 /* ============================================================================
@@ -89,7 +89,7 @@ export function toModelInfo(raw: RawModel, type: MediaType, prices: Record<strin
     price: prices[id] ?? def.price,
     basis: def.basis,
     status,
-    channel: 'treecloud',
+    channel: 'direct',
     upstream: raw.id,
     note: `TreeCloud 模型 · ${raw.id}`,
     caps: featureNames.length ? featureNames.slice(0, 4) : ['TreeCloud'],
@@ -146,7 +146,7 @@ export function sniffImageMime(buf: Buffer) {
 }
 
 export class TreeCloudProvider implements Provider {
-  readonly id = 'treecloud' as const;
+  readonly id = 'direct' as const;
 
   constructor(
     private readonly cfg: () => TreeCloudConfig,
@@ -160,10 +160,10 @@ export class TreeCloudProvider implements Provider {
   channel(): Channel {
     const ready = !!this.cfg().apiKey;
     return {
-      id: 'treecloud',
-      name: '聚合网关',
-      note: ready ? '统一入口，多供应商自动路由与故障切换' : '在「设置」里填入 API Key 后可用',
-      kind: 'gateway',
+      id: 'direct',
+      name: '直连 TreeCloud',
+      note: ready ? '高级选项：用你自己的 Key 直连上游，费用在 TreeCloud 结算，不扣平台点数' : '在「设置 · 直连」里填入自己的 API Key 后可用',
+      kind: 'direct',
       ready,
     };
   }
@@ -234,7 +234,7 @@ export class TreeCloudProvider implements Provider {
     if (job.type === 'image') return this.runImage(job, model, ctx);
     if (job.type === 'video') return this.runVideo(job, model, ctx);
     if (job.use && job.use !== 'tts') {
-      throw new ProviderError('E-CAP-01', `TreeCloud 暂不支持${job.use === 'music' ? '音乐' : '音效'}生成`, '切到演示渠道，或改用「配音」');
+      throw new ProviderError('E-CAP-01', `TreeCloud 暂不支持${job.use === 'music' ? '音乐' : '音效'}生成`, '改用「配音」，音乐与音效等 TreeCloud 提供后再支持');
     }
     return this.runSpeech(job, model, ctx);
   }

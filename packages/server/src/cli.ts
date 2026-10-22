@@ -10,7 +10,7 @@ export { startServer, defaultDataDir };
 
 /* ============================================================================
    Web 模式的独立入口：
-     node server.cjs [--port 5780] [--host 127.0.0.1|0.0.0.0] [--data <dir>] [--open] [--no-seed]
+     node server.cjs [--port 5780] [--host 127.0.0.1|0.0.0.0] [--data <dir>] [--open]
    打包后由桌面程序以 ELECTRON_RUN_AS_NODE=1 启动，没有显示器的 Linux 服务器也能跑。
    ========================================================================== */
 
@@ -50,26 +50,15 @@ async function main() {
     arg('web') ||
     process.env.AIGC_WEB_DIR ||
     firstExisting([path.join(__dirname, 'web'), path.join(__dirname, '..', 'web'), path.join(__dirname, '..', '..', 'web', 'dist')], 'index.html');
-  const samplesDir =
-    arg('samples') ||
-    process.env.AIGC_SAMPLES_DIR ||
-    firstExisting(
-      [path.join(__dirname, 'samples'), path.join(__dirname, '..', 'samples'), path.join(__dirname, '..', '..', '..', 'resources', 'samples')],
-      'thumbs',
-    ) ||
-    path.join(__dirname, 'samples');
-
   const srv = await startServer({
     dataDir,
-    samplesDir,
     webDir,
     mode: 'web',
     desktop: false,
     host,
     port,
-    seed: !flag('no-seed'),
     logger: flag('verbose'),
-    mockTickMs: process.env.AIGC_MOCK_TICK ? Number(process.env.AIGC_MOCK_TICK) : undefined,
+    pollMs: process.env.AIGC_POLL_MS ? Number(process.env.AIGC_POLL_MS) : undefined,
   });
 
   const lines = [

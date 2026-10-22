@@ -1,14 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { ServerResponse } from 'node:http';
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { ZodError } from 'zod';
-import type { AestheticItem, Board, Post, Project, Result, ServerEvent } from '@aigc/shared';
-import { PROJECT_DOTS, topup, uid, ensureDaily } from '@aigc/shared';
+import type { AestheticItem, Board, OrderDto, PackDto, Post, Project, Result, ServerEvent, UsageRequest, UsageSummary } from '@aigc/shared';
+import { PROJECT_DOTS, uid } from '@aigc/shared';
 import { enhanceAgent, optimizePrompt } from './assist';
+import { CloudError } from './cloud/client';
 import type { Core } from './core';
 import { mimeOfExt } from './core';
 import { linkPreview } from './linkPreview';
@@ -47,6 +47,11 @@ button{margin-top:12px;width:100%;border:0;border-radius:9px;padding:10px;backgr
 <form method="get" action="/login"><h1>AIGC 创作台</h1><p>这台服务开放了局域网访问，需要访问口令。口令在服务端的「设置 · 运行模式」里设置。</p>
 <input name="token" type="password" placeholder="访问口令" autofocus/><button>进入</button>${msg ? `<div class="err">${msg}</div>` : ''}</form></body></html>`;
 
+const cloudErr = (e: unknown) => {
+  if (e instanceof CloudError) return new HttpError(e.status >= 400 && e.status < 600 ? e.status : 502, e.message, e.requestId ? `请求 ID ${e.requestId}` : undefined);
+  return e as HttpError;
+};
+
 export async function buildApp(core: Core, opts: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 80 * 1024 * 1024, trustProxy: false, forceCloseConnections: true });
   await app.register(multipart, { limits: { fileSize: 1024 * 1024 * 1024, files: 20 } });
@@ -76,7 +81,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
       if (url.startsWith('/api/')) return reply.code(401).send({ error: '需要访问口令' });
       return reply.code(401).type('text/html; charset=utf-8').send(LOGIN_HTML());
     }
-    /* 防 CSRF：写操作必须带自定义头（跨站页面带不上，除非预检通过，而我们不开 CORS） */
+    /* 防 CSRF：写操作必须带自定义头（跨站页面带不上，而我们不开 CORS） */
     if (url.startsWith('/api/') && req.method !== 'GET' && req.method !== 'HEAD' && req.headers['x-aigc-client'] !== '1') {
       return reply.code(403).send({ error: '缺少客户端标识' });
     }
@@ -103,23 +108,8 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
 
   /* ---------------- 静态资源 ---------------- */
 
-  await app.register(fastifyStatic, {
-    root: core.mediaDir,
-    prefix: '/files/media/',
-    decorateReply: false,
-    maxAge: '30d',
-    immutable: true,
-  });
-  await app.register(fastifyStatic, {
-    root: core.uploadsDir,
-    prefix: '/files/uploads/',
-    decorateReply: false,
-    maxAge: '30d',
-    immutable: true,
-  });
-  if (fs.existsSync(core.opts.samplesDir)) {
-    await app.register(fastifyStatic, { root: path.resolve(core.opts.samplesDir), prefix: '/samples/', decorateReply: false, maxAge: '1d' });
-  }
+  await app.register(fastifyStatic, { root: core.mediaDir, prefix: '/files/media/', decorateReply: false, maxAge: '30d', immutable: true });
+  await app.register(fastifyStatic, { root: core.uploadsDir, prefix: '/files/uploads/', decorateReply: false, maxAge: '30d', immutable: true });
   const webDir = core.opts.webDir && fs.existsSync(path.join(core.opts.webDir, 'index.html')) ? path.resolve(core.opts.webDir) : null;
   if (webDir) {
     await app.register(fastifyStatic, {
@@ -127,8 +117,8 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
       prefix: '/',
       wildcard: false,
       decorateReply: false,
-      setHeaders(res, file) {
-        if (file.endsWith('index.html')) res.header('Cache-Control', 'no-cache');
+      setHeaders(reply, file: string) {
+        if (file.endsWith('index.html')) reply.header('Cache-Control', 'no-cache');
       },
     });
     const indexHtml = () => fs.readFileSync(path.join(webDir, 'index.html'), 'utf8');
@@ -151,7 +141,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.get('/api/bootstrap', async () => core.bootstrap());
 
   /* 关闭服务时主动结束长连接，否则 close() 会一直等着 */
-  const sse = new Set<ServerResponse>();
+  const sse = new Set<import('node:http').ServerResponse>();
   app.addHook('onClose', async () => {
     for (const r of sse) r.end();
     sse.clear();
@@ -178,6 +168,77 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     req.raw.on('close', () => {
       end();
       sse.delete(res);
+    });
+  });
+
+  /* ---------------- 账号（云端） ---------------- */
+
+  app.get('/api/auth/session', async () => ({ session: core.sessionInfo(), wallet: core.session.wallet }));
+  app.post('/api/auth/login', async (req) => {
+    const body = (req.body || {}) as { deviceName?: string };
+    return core.session.loginStart(core.opts.desktop ? 'desktop' : 'web', body.deviceName).catch((e) => {
+      throw cloudErr(e);
+    });
+  });
+  app.post('/api/auth/poll', async () => {
+    const r = await core.session.loginPoll().catch((e) => {
+      throw cloudErr(e);
+    });
+    if (r.status === 'approved') {
+      core.store.cloudModelsCache = core.session.models;
+      core.emitModels();
+    }
+    return r;
+  });
+  app.post('/api/auth/cancel', async () => {
+    core.session.loginCancel();
+    return { ok: true };
+  });
+  app.post('/api/auth/logout', async () => {
+    await core.session.logout();
+    core.emitModels();
+    return { ok: true };
+  });
+
+  /* ---------------- 计费（云端） ---------------- */
+
+  app.get('/api/billing/packs', async () => ({
+    packs: await core.session.client.request<PackDto[]>('/billing/packs').catch((e) => {
+      throw cloudErr(e);
+    }),
+  }));
+  app.post('/api/billing/orders', async (req) => {
+    const body = S.orderSchema.parse(req.body);
+    const order = await core.session.client.request<OrderDto>('/billing/orders', { json: body }).catch((e) => {
+      throw cloudErr(e);
+    });
+    core.events.emit({ type: 'order', order });
+    return { order };
+  });
+  app.get('/api/billing/orders/:id', async (req) => ({
+    order: await core.session.client.request<OrderDto>(`/billing/orders/${encodeURIComponent((req.params as { id: string }).id)}`).catch((e) => {
+      throw cloudErr(e);
+    }),
+  }));
+  app.get('/api/billing/orders', async () => ({
+    orders: await core.session.client.request<OrderDto[]>('/billing/orders').catch((e) => {
+      throw cloudErr(e);
+    }),
+  }));
+  app.post('/api/billing/wallet/refresh', async () => ({ wallet: await core.session.refreshWallet() }));
+  app.get('/api/usage/summary', async (req) => {
+    const q = req.query as { from?: string; to?: string };
+    const qs = new URLSearchParams();
+    if (q.from) qs.set('from', q.from);
+    if (q.to) qs.set('to', q.to);
+    return core.session.client.request<UsageSummary>(`/usage/summary?${qs}`).catch((e) => {
+      throw cloudErr(e);
+    });
+  });
+  app.get('/api/usage/requests', async (req) => {
+    const q = req.query as { cursor?: string };
+    return core.session.client.request<{ items: UsageRequest[]; next?: string }>(`/usage/requests${q.cursor ? `?cursor=${encodeURIComponent(q.cursor)}` : ''}`).catch((e) => {
+      throw cloudErr(e);
     });
   });
 
@@ -324,7 +385,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return { ok: true };
   });
 
-  /* ---------------- 审美库 ---------------- */
+  /* ---------------- 审美库 / 帖子 ---------------- */
 
   app.post('/api/aesthetic', async (req, reply) => {
     const body = S.aestheticSchema.parse(req.body);
@@ -339,8 +400,6 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return { ok: true };
   });
 
-  /* ---------------- 帖子 ---------------- */
-
   app.put('/api/posts/:id', async (req) => {
     const body = S.postSchema.parse(req.body);
     const p: Post = { ...body, id: (req.params as { id: string }).id, updatedAt: Date.now() };
@@ -352,29 +411,18 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return { ok: true };
   });
 
-  /* ---------------- 钱包 ---------------- */
-
-  app.post('/api/wallet/topup', async (req) => {
-    const { amount } = S.topupSchema.parse(req.body);
-    const w = ensureDaily(core.store.wallet);
-    const r = topup(w, amount);
-    core.store.wallet = w;
-    core.events.emit({ type: 'wallet', wallet: w });
-    return { wallet: w, ...r };
-  });
-
   /* ---------------- 设置 ---------------- */
 
-  const refreshTreecloud = async () => {
+  const refreshDirect = async () => {
     const s = core.store.settings;
     try {
-      const cat = await core.treecloud.fetchCatalog();
-      core.store.treecloudModels = cat;
-      s.provider.treecloud.lastCheck = { ok: true, at: Date.now(), message: `连接正常 · ${cat.models.length} 个生成模型 · ${cat.chat.length} 个对话模型` };
-      if (s.chat.enabled && s.chat.model && !cat.chat.includes(s.chat.model)) s.chat.model = cat.chat[0] || '';
+      const cat = await core.direct.fetchCatalog();
+      core.store.directModels = cat;
+      s.direct.lastCheck = { ok: true, at: Date.now(), message: `连接正常 · ${cat.models.length} 个生成模型 · ${cat.chat.length} 个对话模型` };
+      if (s.chat.model && !cat.chat.includes(s.chat.model)) s.chat.model = cat.chat[0] || '';
     } catch (e) {
       const err = e as { reason?: string; message?: string };
-      s.provider.treecloud.lastCheck = { ok: false, at: Date.now(), message: err.reason || err.message || '连接失败' };
+      s.direct.lastCheck = { ok: false, at: Date.now(), message: err.reason || err.message || '连接失败' };
     }
     core.store.settings = s;
     core.emitModels();
@@ -386,36 +434,34 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.patch('/api/settings', async (req) => {
     const body = S.settingsSchema.parse(req.body);
     const s = core.store.settings;
-    let needRefresh = false;
-    if (body.provider) {
-      if (body.provider.concurrency) s.provider.concurrency = body.provider.concurrency;
-      const tc = body.provider.treecloud;
-      if (tc?.baseUrl) {
-        s.provider.treecloud.baseUrl = tc.baseUrl.replace(/\/+$/, '');
-        needRefresh = true;
+    let needDirect = false;
+    if (body.cloud?.baseUrl !== undefined) s.cloud.baseUrl = body.cloud.baseUrl.replace(/\/+$/, '');
+    if (body.runner?.concurrency) s.runner.concurrency = body.runner.concurrency;
+    if (body.direct) {
+      const d = body.direct;
+      if (d.baseUrl) {
+        s.direct.baseUrl = d.baseUrl.replace(/\/+$/, '');
+        needDirect = true;
       }
-      if (tc?.clearKey) {
-        delete s.provider.treecloud.keyEnc;
-        delete s.provider.treecloud.keyHint;
-        delete s.provider.treecloud.lastCheck;
-        s.provider.active = 'mock';
-        core.store.treecloudModels = { models: [], chat: [], at: 0 };
+      if (d.clearKey) {
+        delete s.direct.keyEnc;
+        delete s.direct.keyHint;
+        delete s.direct.lastCheck;
+        s.direct.enabled = false;
+        core.store.directModels = { models: [], chat: [], at: 0 };
       }
-      if (tc?.apiKey) {
-        const key = tc.apiKey.trim();
-        s.provider.treecloud.keyEnc = core.secrets.encrypt(key);
-        s.provider.treecloud.keyHint = `${key.slice(0, 6)}…${key.slice(-4)}`;
-        needRefresh = true;
+      if (d.apiKey) {
+        const key = d.apiKey.trim();
+        s.direct.keyEnc = core.secrets.encrypt(key);
+        s.direct.keyHint = `${key.slice(0, 6)}…${key.slice(-4)}`;
+        needDirect = true;
       }
-      if (body.provider.active) {
-        if (body.provider.active === 'treecloud' && !s.provider.treecloud.keyEnc) throw new HttpError(400, '先填入 TreeCloud API Key');
-        s.provider.active = body.provider.active;
+      if (d.enabled !== undefined) {
+        if (d.enabled && !s.direct.keyEnc) throw new HttpError(400, '先填入你自己的 TreeCloud API Key');
+        s.direct.enabled = d.enabled;
       }
     }
-    if (body.chat) {
-      if (body.chat.enabled !== undefined) s.chat.enabled = body.chat.enabled;
-      if (body.chat.model !== undefined) s.chat.model = body.chat.model;
-    }
+    if (body.chat?.model !== undefined) s.chat.model = body.chat.model;
     if (body.prices) {
       for (const [k, v] of Object.entries(body.prices)) {
         if (v == null) delete s.prices[k];
@@ -434,16 +480,34 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
       });
     }
     core.store.settings = s;
-    if (needRefresh && s.provider.treecloud.keyEnc) return { settings: await refreshTreecloud() };
+    if (body.cloud?.baseUrl !== undefined) {
+      /* 云端地址变了：重新探测；已登录的话重建事件流 */
+      const probe = await core.session.probe();
+      if (probe.ok && !core.session.loggedIn) await core.session.restore();
+      core.events.emit({ type: 'session', session: core.sessionInfo() });
+    }
+    if (needDirect && s.direct.keyEnc) return { settings: await refreshDirect() };
     core.emitModels();
     const pub = core.publicSettings();
     core.events.emit({ type: 'settings', settings: pub });
     return { settings: pub };
   });
 
-  app.post('/api/settings/treecloud/refresh', async () => {
-    if (!core.store.settings.provider.treecloud.keyEnc) throw new HttpError(400, '先填入 TreeCloud API Key');
-    return { settings: await refreshTreecloud() };
+  app.post('/api/settings/direct/refresh', async () => {
+    if (!core.store.settings.direct.keyEnc) throw new HttpError(400, '先填入你自己的 TreeCloud API Key');
+    return { settings: await refreshDirect() };
+  });
+
+  app.post('/api/settings/cloud/refresh', async () => {
+    const probe = await core.session.probe();
+    if (probe.ok && core.session.loggedIn) {
+      await core.session.refreshWallet().catch(() => {});
+      await core.session.refreshModels().catch(() => {});
+      core.store.cloudModelsCache = core.session.models;
+      core.emitModels();
+    }
+    core.events.emit({ type: 'session', session: core.sessionInfo() });
+    return { ok: probe.ok, message: probe.message, meta: probe.meta };
   });
 
   app.put('/api/ui', async (req) => {
@@ -452,7 +516,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return { ok: true };
   });
 
-  /* ---------------- 文件 ---------------- */
+  /* ---------------- 文件 / 链接预览 ---------------- */
 
   app.post('/api/files', async (req) => {
     const out = [];
@@ -477,7 +541,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     }
   });
 
-  /* ---------------- 提示词辅助 ---------------- */
+  /* ---------------- 提示词辅助（走真实模型路由） ---------------- */
 
   app.post('/api/assist/optimize', async (req) => {
     const body = S.optimizeSchema.parse(req.body);
@@ -488,14 +552,9 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return { enhanced: await enhanceAgent(core, body) };
   });
 
-  /* ---------------- API Key（本地 OpenAPI） ---------------- */
+  /* ---------------- 本地 API Key（OpenAPI 鉴权用） ---------------- */
 
-  const emitApi = () =>
-    core.events.emit({
-      type: 'api',
-      apiKeys: core.store.apiKeys.all().map(({ hash: _h, ...k }) => k),
-      apiUsage: core.store.apiUsage.all().sort((a, b) => b.at - a.at).slice(0, 200),
-    });
+  const emitApi = () => core.events.emit({ type: 'api', apiKeys: core.store.apiKeys.all().map(({ hash: _h, ...k }) => k) });
 
   app.post('/api/keys', async (req) => {
     const body = S.keySchema.parse(req.body || {});
@@ -504,7 +563,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     const k = {
       id: uid('k'),
       name: body.name || `新 Key ${n}`,
-      channel: body.channel || core.store.settings.provider.active,
+      channel: (body.channel || 'cloud') as 'cloud' | 'direct',
       masked: `${secret.slice(0, 13)}······${secret.slice(-3)}`,
       createdAt: Date.now(),
       on: true,
@@ -532,5 +591,3 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   registerOpenApi(app, core);
   return app;
 }
-
-export type { FastifyReply };

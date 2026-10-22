@@ -4,8 +4,10 @@ import type { Core } from './core';
 import type { ChatMessage } from './providers/types';
 
 /* ============================================================================
-   提示词辅助：配置了 TreeCloud 对话模型就用 LLM，否则走原型里的规则。
-   LLM 失败时静默回退规则，不让「帮我写详细」这一步卡住。
+   提示词辅助：真正调用模型。路由顺序：
+     1. 直连模式已启用且选了对话模型 → 用户自己的 TreeCloud Key
+     2. 已登录云端 → 云端网关的对话能力（扣平台点数）
+     3. 都没有 → 回退规则推断，并在响应里说明原因
    ========================================================================== */
 
 export function ruleOptimize(type: MediaType, prompt: string): OptimizeReply {
@@ -17,11 +19,20 @@ export function ruleOptimize(type: MediaType, prompt: string): OptimizeReply {
   return { mode: 'add', result: '', add: cfg.add, neg: cfg.neg, note: cfg.note, llm: false };
 }
 
-function chatModel(core: Core) {
+export type ChatRoute = { kind: 'direct'; model: string } | { kind: 'cloud' } | null;
+
+export function chatRoute(core: Core): ChatRoute {
   const s = core.store.settings;
-  if (!s.chat.enabled || !s.chat.model) return null;
-  if (!core.treecloud.channel().ready) return null;
-  return s.chat.model;
+  if (s.direct.enabled && s.direct.keyEnc && s.chat.model && core.store.directModels.chat.includes(s.chat.model)) {
+    return { kind: 'direct', model: s.chat.model };
+  }
+  if (core.session.loggedIn) return { kind: 'cloud' };
+  return null;
+}
+
+export function chatRouteLabel(route: ChatRoute) {
+  if (!route) return '没有可用的对话模型：登录云端账号，或在「设置 · 直连」里启用并选择对话模型';
+  return route.kind === 'cloud' ? '云端网关' : '直连 TreeCloud';
 }
 
 /** 从模型回复里抠出第一个 JSON 对象 */
@@ -35,11 +46,12 @@ export function extractJson<T>(text: string): T | null {
   }
 }
 
-async function ask(core: Core, model: string, messages: ChatMessage[]) {
+async function ask(core: Core, route: Exclude<ChatRoute, null>, messages: ChatMessage[]) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), 45_000);
   try {
-    return await core.treecloud.chat(model, messages, ac.signal);
+    if (route.kind === 'direct') return await core.direct.chat(route.model, messages, ac.signal);
+    return await core.cloud.chat('', messages, ac.signal);
   } finally {
     clearTimeout(t);
   }
@@ -47,8 +59,8 @@ async function ask(core: Core, model: string, messages: ChatMessage[]) {
 
 export async function optimizePrompt(core: Core, type: MediaType, prompt: string): Promise<OptimizeReply> {
   const fallback = ruleOptimize(type, prompt);
-  const model = chatModel(core);
-  if (!model) return fallback;
+  const route = chatRoute(core);
+  if (!route) return { ...fallback, reason: chatRouteLabel(route) };
   const kind = TYPES[type].name;
   const expand = fallback.mode === 'expand';
   const sys =
@@ -57,16 +69,14 @@ export async function optimizePrompt(core: Core, type: MediaType, prompt: string
       ? `把它扩写成一条完整、可直接用于${kind}生成的中文提示词：保留用户原话在最前，补充主体、场景、光线、材质、构图${type === 'video' ? '、运镜与节奏' : type === 'audio' ? '、语气、语速与混音要求' : ''}，不超过 120 字。`
       : '用户的描述已经够长，不要改写原话，只给出一段可以追加在末尾的补充细节（不超过 50 字）。') +
     '同时给出通用负面词（逗号分隔）和一句话说明为什么这样补。' +
-    (expand
-      ? '只输出 JSON：{"result":"完整提示词","neg":"负面词","note":"说明"}'
-      : '只输出 JSON：{"add":"追加内容","neg":"负面词","note":"说明"}');
+    (expand ? '只输出 JSON：{"result":"完整提示词","neg":"负面词","note":"说明"}' : '只输出 JSON：{"add":"追加内容","neg":"负面词","note":"说明"}');
   try {
-    const text = await ask(core, model, [
+    const text = await ask(core, route, [
       { role: 'system', content: sys },
       { role: 'user', content: prompt.trim() },
     ]);
     const j = extractJson<{ result?: string; add?: string; neg?: string; note?: string }>(text);
-    if (!j) return fallback;
+    if (!j) return { ...fallback, reason: '模型回复无法解析，已用规则补全' };
     if (expand && j.result?.trim()) {
       return { ...fallback, result: j.result.trim(), neg: j.neg?.trim() || fallback.neg, note: j.note?.trim() || fallback.note, llm: true };
     }
@@ -74,14 +84,14 @@ export async function optimizePrompt(core: Core, type: MediaType, prompt: string
       return { ...fallback, add: j.add.trim().replace(/^[。，,]/, ''), neg: j.neg?.trim() || fallback.neg, note: j.note?.trim() || fallback.note, llm: true };
     }
   } catch {
-    /* 回退规则 */
+    return { ...fallback, reason: '模型调用失败，已用规则补全' };
   }
-  return fallback;
+  return { ...fallback, reason: '模型回复为空，已用规则补全' };
 }
 
 export async function enhanceAgent(core: Core, body: AgentEnhanceBody): Promise<AgentEnhanceReply | null> {
-  const model = chatModel(core);
-  if (!model) return null;
+  const route = chatRoute(core);
+  if (!route) return null;
   const kind = TYPES[body.mainType].name;
   const sys =
     '你是社媒运营的创意 Agent。下面是用户画板选区里的真实信息：元素构成、产出的原始提示词、用户亲手写的文字（优先级最高）。' +
@@ -94,7 +104,7 @@ export async function enhanceAgent(core: Core, body: AgentEnhanceBody): Promise<
     `规则推断的草稿：${body.draft || '无'}`,
   ].join('\n');
   try {
-    const text = await ask(core, model, [
+    const text = await ask(core, route, [
       { role: 'system', content: sys },
       { role: 'user', content: user },
     ]);

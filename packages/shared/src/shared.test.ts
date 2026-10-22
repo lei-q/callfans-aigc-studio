@@ -1,70 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { affordable, chargeJob, dailyFreeLeft, ensureDaily, refundJob, topup } from './billing';
+import { affordable, dailyFreeLeft } from './wallet';
 import { applyFix, pickImageSize, unitPrice, validateJob, maxResFromSizes } from './pricing';
 import { agentReadBoard } from './agent';
-import type { Job, ModelInfo, Wallet } from './types';
+import type { Job, ModelInfo, WalletDto } from './cloud';
 
-const wallet = (): Wallet => ({
-  balance: 10,
-  spent: { image: 0, video: 0, audio: 0 },
-  dailyFree: 0.5,
-  dailyUsed: 0,
-  dailyDate: '2026-10-21',
-  firstTopupDone: false,
-});
+const wallet = (): WalletDto => ({ balance: 10, freeToday: 0.5, updatedAt: 0 });
 
 const job = (cost: number, type: Job['type'] = 'image'): Job => ({
   id: 'j1', name: 't', type, ws: 'w1', model: 'm', prompt: 'p', refs: [], cost,
-  status: 'queued', createdAt: 0, results: [], charged: false,
+  status: 'queued', createdAt: 0, results: [],
 });
 
-const U2: ModelInfo = { id: 'u2', name: 'U2', type: 'image', price: 0.3, basis: '张', status: 'on', channel: 'mock', maxRes: '2k', note: '', caps: [], limit: '' };
+const U2: ModelInfo = { id: 'u2', name: 'U2', type: 'image', price: 0.3, basis: '张', status: 'on', channel: 'cloud', maxRes: '2k', note: '', caps: [], limit: '' };
 const X1: ModelInfo = { ...U2, id: 'x1', name: 'X1', price: 0.45, maxRes: '4k' };
-const C1: ModelInfo = { id: 'c1', name: 'C1', type: 'video', price: 0.8, basis: '秒', status: 'on', channel: 'mock', durs: [3, 5, 8], note: '', caps: [], limit: '' };
+const C1: ModelInfo = { id: 'c1', name: 'C1', type: 'video', price: 0.8, basis: '秒', status: 'on', channel: 'cloud', durs: [3, 5, 8], note: '', caps: [], limit: '' };
 
-describe('billing', () => {
-  it('优先抵扣当日免费点数，再扣余额', () => {
+describe('wallet（云端钱包的本地展示计算）', () => {
+  it('免费额度与可支付判断', () => {
     const w = wallet();
-    const j = job(1.2);
-    chargeJob(w, j);
-    expect(w.dailyUsed).toBe(0.5);
-    expect(w.balance).toBe(9.3);
-    expect(w.spent.image).toBe(1.2);
-    expect(dailyFreeLeft(w)).toBe(0);
-  });
-
-  it('取消 → 重跑的净支出正好是一次费用，不会双重扣费或重复退款', () => {
-    const w = wallet();
-    const j = job(1.2);
-    chargeJob(w, j);
-    expect(chargeJob(w, j)).toBe(false);
-    refundJob(w, j);
-    expect(w.balance).toBe(10);
-    expect(w.dailyUsed).toBe(0);
-    expect(refundJob(w, j)).toBe(false);
-    chargeJob(w, j);
-    expect(round(w.balance + (0.5 - w.dailyUsed))).toBe(round(10.5 - 1.2));
-  });
-
-  it('跨天重置免费额度', () => {
-    const w = wallet();
-    w.dailyUsed = 0.5;
-    ensureDaily(w, new Date('2026-10-22T10:00:00').getTime());
-    expect(w.dailyUsed).toBe(0);
-    expect(w.dailyDate).toBe('2026-10-22');
-  });
-
-  it('首充翻倍只有一次', () => {
-    const w = wallet();
-    expect(topup(w, 10).got).toBe(20);
-    expect(topup(w, 10).got).toBe(10);
-    expect(w.balance).toBe(40);
-  });
-
-  it('余额 + 免费额度判断够不够', () => {
-    const w = wallet();
+    expect(dailyFreeLeft(w)).toBe(0.5);
     expect(affordable(w, 10.5)).toBe(true);
     expect(affordable(w, 10.6)).toBe(false);
+    expect(affordable(null, 1)).toBe(false);
   });
 });
 
@@ -142,6 +99,3 @@ describe('agent', () => {
   });
 });
 
-function round(n: number) {
-  return Math.round(n * 10) / 10;
-}
