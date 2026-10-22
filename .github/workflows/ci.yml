@@ -35,7 +35,7 @@ jobs:
           pnpm --filter @aigc/server build
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
-      - name: E2E（Web 模式 + 演示渠道）
+      - name: E2E（Web 模式 + Mock 云）
         run: pnpm e2e
       - name: Upload Playwright report
         if: failure()

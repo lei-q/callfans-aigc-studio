@@ -40,30 +40,41 @@
 
 ---
 
-## 接入 TreeCloud 真实生成
+## 账号、点数与生成
 
-默认使用**演示渠道**：本地模拟进度，用示意素材出片，不产生任何费用，方便先把流程走一遍。
+首次启动是一个干净的空项目：没有示例素材，也没有假数据。生成有两条路，在「设置」里可以看到当前走哪条：
 
-接入真实模型：
+- **云端账号（默认）**：登录后用平台点数生成，点数跟着账号走，换设备也不丢。生成与 AI 辅助（「帮我写详细」、Agent）都走云端网关，按实际用量扣点；失败与取消自动退回。
+- **直连 TreeCloud（高级）**：在「设置 · 直连」填自己的 `sk-tc-` Key，请求直接发给 TreeCloud，**不扣平台点数**，费用由 TreeCloud 结算。
+
+没有登录、也没有启用直连时，生成按钮会变成「登录后生成」。
+
+### 登录与充值
+
+- **登录**：设备码流程。点「登录」后在浏览器（电脑或手机扫码）里完成确认，应用自动继续；应用本身不接触账号凭证。
+- **充值**：选档位和支付渠道（微信支付 / 支付宝），应用展示收款码，扫码支付后点数实时到账。
+- **云端地址**：「设置 · 云端」里填写，或启动时设置环境变量 `AIGC_CLOUD_URL`。云端接口约定见 [`docs/cloud-api-contract.md`](docs/cloud-api-contract.md)；云端系统的设计与排期见 [`docs/cloud-implementation-plan.md`](docs/cloud-implementation-plan.md)。
+
+> 配套云端系统**还没有上线**。仓库里的 `packages/cloud-mock` 是按同一份合同实现的开发用 Mock 云（不是安全实现，数据存在内存里，重启即清空），可以走通登录、扫码支付、生成、扣费与退款；它的「支付」只是点一下按钮，**不涉及真实付款**。
+
+### 直连 TreeCloud
 
 1. 在 [TreeCloud 控制台](https://console.jtreecloud.com) 创建一个 `sk-tc-` 开头的 API Key；
-2. 打开应用「设置 · 生成渠道」，填入 Key，点「保存并连接」；
-3. 连接成功后会自动切到 TreeCloud 渠道，并按 `GET /v1/models` 返回的结果列出当前 Key 可用的模型。
+2. 打开应用「设置 · 直连」，填入 Key，点「保存并连接」，再启用直连；
+3. 连接成功后会按 `GET /v1/models` 返回的结果列出当前 Key 可用的模型。
 
 | 能力 | TreeCloud 接口 | 说明 |
 | --- | --- | --- |
 | 图像 | `POST /v1/images/generations`；有参考图时 `POST /v1/images/edits` | 比例 + 分辨率换算成模型支持的 `size`；返回的 `b64_json` / `url` 立即保存到本机。**不自动重试**，避免重复计费 |
 | 视频 | `POST /api/v3/contents/generations/tasks` → 轮询 `GET …/{id}` | 参考图作为首帧或参考图传入；运镜写进提示词；取消时调用 `DELETE`；应用重启后接着查询 |
-| 配音 | `POST /v1/audio/speech` | 音色映射到网关公开音色；音乐与音效 TreeCloud 暂不提供，只能在演示渠道体验 |
-| 对话（可选） | `POST /v1/chat/completions` | 开启后「帮我写详细」和 Agent 的「需求理解 / 建议提示词」由对话模型生成，失败时回退到规则推断 |
+| 配音 | `POST /v1/audio/speech` | 音色映射到网关公开音色。TreeCloud 暂不提供音乐与音效，所以这两类直连不可用 |
+| 对话 | `POST /v1/chat/completions` | 「帮我写详细」和 Agent 的「需求理解 / 建议提示词」由对话模型生成；失败时回退到规则推断，并在界面上标明 |
 
 错误会翻译成「原因 + 修复建议」，并带上响应头里的 `X-Request-Id`，方便到 TreeCloud 控制台核对。Key 用本机密钥加密保存，只会发给你填写的 Base URL。
 
-**关于点数**：应用里的点数钱包是本地预算记账（创建即扣、失败与取消退回、每日免费额度、首充翻倍），充值不涉及真实支付。接入 TreeCloud 后，真实扣费以 TreeCloud 账单为准，可以在「设置 · 本地单价」里按控制台价格调整每个模型的点数单价。
-
 ### 本地 OpenAPI
 
-「API 接入」页可以创建 `sk-local-` Key，把本机服务接进脚本或 agent，和网页共用同一份余额：
+「API 接入」页可以创建 `sk-local-` Key，把本机服务接进脚本或 agent，和网页共用同一个账号与点数（需要先登录云端账号，或启用直连）：
 
 ```bash
 curl http://127.0.0.1:5780/openapi/v1/images/generations \
@@ -82,9 +93,9 @@ curl http://127.0.0.1:5780/openapi/v1/images/generations \
 
 ```bash
 pnpm install
-pnpm dev            # 本机服务（:5780）+ Vite 前端（:5173），改代码自动刷新
-pnpm test           # 单元测试与 TreeCloud 合约测试（vitest）
-pnpm e2e            # 端到端测试（Playwright，需先 pnpm build）
+pnpm dev            # Mock 云（:5790）+ 本机服务（:5780）+ Vite 前端（:5173），改代码自动刷新
+pnpm test           # 单元测试，以及对着 Mock 云的云端合同测试（vitest）
+pnpm e2e            # 端到端测试（Playwright，自动起 Mock 云与本机服务，需先构建 web 与 server）
 pnpm lint && pnpm typecheck
 
 pnpm build          # 构建 shared / server / web / desktop
@@ -93,24 +104,27 @@ pnpm desktop        # 以 Electron 桌面应用运行（首次会弹出运行方
 pnpm dist           # 打当前平台的安装包，产物在 packages/desktop/release
 ```
 
+`pnpm dev` 里的 `dev:server` 用了行内环境变量写法，Windows 下请在 Git Bash / WSL 中运行，或自己先设置 `AIGC_CLOUD_URL=http://127.0.0.1:5790` 再分别启动。
+
 国内网络下载 Electron 慢时，可以设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 与 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`。
 
 ### 项目结构
 
 ```
 packages/
-  shared/    领域类型、常量、计价与参数校验、计费、Agent 规则推断（前后端共用）
-  server/    Fastify 本机服务：sql.js 存储、任务调度、Provider（演示 / TreeCloud）、SSE、本地 OpenAPI
+  shared/    领域类型、常量、计价与参数校验、云端合同类型、Agent 规则推断（前后端共用）
+  server/    Fastify 本机服务：sql.js 存储、任务调度、云端会话、Provider（云端网关 / 直连 TreeCloud）、SSE、本地 OpenAPI
   web/       React + Zustand 前端：生成表单、无限画布、Agent、素材库、审美库、设置…
+  cloud-mock/ 开发 / 演示 / CI 用的 Mock 云，实现云端合同（不打包进安装包）
   desktop/   Electron 外壳：桌面 / Web 双模式、首次启动选择、托盘、安装器定制
-resources/samples/   演示渠道的示意素材
+docs/                云端 API 合同与云端实施计划
 prototype/           v0.27 交互原型与原型文档
 e2e/                 Playwright 端到端测试
 ```
 
 - **一个服务，两种外壳**：前端只和本机 HTTP 服务通信。桌面模式由 Electron 内嵌服务并加载窗口；Web 模式由同一程序起服务、托盘常驻；无界面时以 `ELECTRON_RUN_AS_NODE=1` 直接运行服务包。
 - **零原生依赖**：数据库用 sql.js（WASM），macOS 双架构可以在一台机器上交叉打包。
-- **Provider 层**：`packages/server/src/providers/` 下每个渠道实现同一套接口（模型目录、图像、视频创建与轮询、配音、对话）。新增渠道只需再实现一个 Provider。
+- **Provider 层**：`packages/server/src/providers/` 下每个渠道（云端网关、直连 TreeCloud）实现同一套接口（模型目录、图像、视频创建与轮询、配音、对话）。新增渠道只需再实现一个 Provider。
 
 ### 发布
 

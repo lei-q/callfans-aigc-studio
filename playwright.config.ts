@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const port = 5791;
+const cloudPort = 5790;
 const dataDir = path.join(os.tmpdir(), `aigc-e2e-${process.pid}`);
 
 export default defineConfig({
@@ -18,11 +19,20 @@ export default defineConfig({
     trace: 'retain-on-failure',
     acceptDownloads: true,
   },
-  webServer: {
-    command: `node packages/server/dist/server.cjs --port ${port} --data "${dataDir}"`,
-    url: `http://127.0.0.1:${port}/api/health`,
-    reuseExistingServer: false,
-    timeout: 30_000,
-    env: { AIGC_MOCK_TICK: '60' },
-  },
+  webServer: [
+    {
+      command: `pnpm --filter @aigc/cloud-mock exec tsx src/cli.ts --port ${cloudPort}`,
+      url: `http://127.0.0.1:${cloudPort}/meta`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: { MOCK_JOB_MS: '300' },
+    },
+    {
+      command: `node packages/server/dist/server.cjs --port ${port} --data "${dataDir}"`,
+      url: `http://127.0.0.1:${port}/api/health`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: { AIGC_CLOUD_URL: `http://127.0.0.1:${cloudPort}` },
+    },
+  ],
 });
