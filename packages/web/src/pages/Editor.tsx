@@ -352,7 +352,7 @@ function Stage({ t, cur }: { t: MediaType; cur: Result | null }) {
   /* 真实视频：在入点到出点之间按倍速播放 */
   useEffect(() => {
     const v = videoRef.current;
-    if (!v || !cur || cur.simulated) return;
+    if (!v || !cur) return;
     v.playbackRate = vops.speed;
     v.muted = vops.mute;
     if (playing) {
@@ -404,10 +404,7 @@ function Stage({ t, cur }: { t: MediaType; cur: Result | null }) {
       <>
         <PlayRow cur={cur} from={clipV.a} to={clipV.b} onToggle={() => togglePlay(cur.id, { from: clipV.a, to: clipV.b, rate: vops.speed })} />
         <div className="es-media">
-          {cur.simulated ? (
-            <img src={thumbOf(cur)} alt={cur.title} style={{ objectPosition: pos }} />
-          ) : (
-            <video
+          <video
               ref={videoRef}
               src={cur.src}
               playsInline
@@ -418,9 +415,8 @@ function Stage({ t, cur }: { t: MediaType; cur: Result | null }) {
                 if (v.currentTime >= clipV.b) stopPlay();
                 else reportTime(cur.id, v.currentTime);
               }}
-              onEnded={() => playing && stopPlay()}
-            />
-          )}
+            onEnded={() => playing && stopPlay()}
+          />
           {vops.caption && <span className="es-caption">{vops.caption}</span>}
           <span className="es-flag">
             <Icon name="volume" />
@@ -468,7 +464,7 @@ function Stage({ t, cur }: { t: MediaType; cur: Result | null }) {
       <Readout
         items={[`音量 ${aops.volume}%`, `淡入 ${aops.fadeIn}s`, `淡出 ${aops.fadeOut}s`, aops.denoise ? '已降噪' : '未降噪', aops.norm ? '响度标准化' : '不标准化']}
       />
-      {!cur.simulated && <div className="tiny dim">剪辑参数作为非破坏性设置保存：试听与播放时生效，原文件不变。</div>}
+      <div className="tiny dim">剪辑参数作为非破坏性设置保存：试听与播放时生效，原文件不变。</div>
     </>
   );
 }

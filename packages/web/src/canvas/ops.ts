@@ -921,7 +921,7 @@ export async function divergeRun() {
   const axes = DIVERGE_AXES.filter((a) => d.axes.includes(a.k));
   const total = round1(unit * axes.length);
   if (!canAfford(s, total)) {
-    toast('warn', '点数不够发散这么多方向', `需要 ${total} 点，当前余额 ${s.wallet.balance} 点`);
+    toast('warn', '点数不够发散这么多方向', `需要 ${total} 点，当前余额 ${s.wallet?.balance ?? 0} 点`);
     return;
   }
   const ref = refFromItem(s, it);
@@ -953,7 +953,7 @@ export async function platformsRun() {
   const list = PLATFORMS.filter((pf) => d.picks.includes(pf.k));
   const total = round1(unit * list.length);
   if (!canAfford(s, total)) {
-    toast('warn', '点数不够适配这么多平台', `需要 ${total} 点，当前余额 ${s.wallet.balance} 点`);
+    toast('warn', '点数不够适配这么多平台', `需要 ${total} 点，当前余额 ${s.wallet?.balance ?? 0} 点`);
     return;
   }
   const ref = refFromItem(s, it);
@@ -996,7 +996,7 @@ export async function agentOpen() {
   const s = getState();
   const result = computeAgent(s);
   const seq = ++agentSeq;
-  const llm = !!(s.settings?.chat.enabled && s.settings.chat.model && s.settings.provider.treecloud.hasKey);
+  const llm = !!s.session?.loggedIn || !!(s.settings?.direct.enabled && s.settings.direct.hasKey && s.settings.chat.model);
   setState((st) => void (st.agent = { open: true, result, loading: llm && !!result.draft }));
   if (!llm || !result.draft) return;
   try {

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { TYPES, TYPE_KEYS } from '@aigc/shared';
 import { useStore } from '../store';
 import { createProject, openDrawer, openQueue, pickType, pickWs, switchPage } from '../store/actions';
-import { balance, failJobs, libResults, openJobs, spentTotal } from '../store/selectors';
+import { balance, failJobs, libResults, openJobs } from '../store/selectors';
 import { Icon } from './common';
 
 export function Topbar() {
@@ -99,7 +99,7 @@ export function Topbar() {
                   </div>
                 )}
                 <div className="wm-sum">
-                  个人账户 · 余额 {bal} 点 · 累计消耗 {spentTotal(s)} 点
+                  {s.session?.loggedIn ? `账号 ${s.session.profile?.nickname || ''} · 余额 ${bal} 点` : '还没有登录：点数跟着账号走，登录后充值与产出记录都能跨设备找回'}
                 </div>
               </div>
             )}
@@ -135,12 +135,19 @@ export function Topbar() {
             </span>
           )}
         </div>
-        <button className={`balance-chip ${low ? 'low' : ''}`} onClick={() => openDrawer('topup')} title="点数余额：点击充值">
-          <Icon name="coins" />
-          <span className="bc-num num">{bal}</span>
-          <span className="bc-unit">点</span>
-          <span className="bc-topup">{low ? '去充值' : '充值'}</span>
-        </button>
+        {s.session?.loggedIn ? (
+          <button className={`balance-chip ${low ? 'low' : ''}`} onClick={() => openDrawer('topup')} title="点数余额：点击充值">
+            <Icon name="coins" />
+            <span className="bc-num num">{bal}</span>
+            <span className="bc-unit">点</span>
+            <span className="bc-topup">{low ? '去充值' : '充值'}</span>
+          </button>
+        ) : (
+          <button className="balance-chip login" onClick={() => openDrawer('account')} title="登录账号：点数跟着账号走">
+            <Icon name="user" />
+            <span className="bc-topup">登录</span>
+          </button>
+        )}
         <button className="icon-btn tb-help" onClick={() => openDrawer('help')} title="使用地图">
           ?
         </button>
@@ -156,7 +163,8 @@ export function Sidebar() {
   const s = useStore();
   const lib = libResults(s);
   const open = openJobs(s).length;
-  const active = s.settings?.provider.active || 'mock';
+  const loggedIn = s.session?.loggedIn;
+  const directOn = !!(s.settings?.direct.enabled && s.settings.direct.hasKey);
   return (
     <aside className="sidebar">
       <div className="side-sec">
@@ -204,7 +212,7 @@ export function Sidebar() {
         <button className={`side-item ${s.page === 'settings' ? 'active' : ''}`} onClick={() => switchPage('settings')}>
           <Icon name="gear" />
           <span className="side-label">设置</span>
-          {active === 'mock' && <span className="side-badge num">演示</span>}
+          {!loggedIn && !directOn && <span className="side-badge num">未接入</span>}
         </button>
       </div>
       <div className="side-spacer" />
@@ -212,7 +220,11 @@ export function Sidebar() {
         <Icon name="coins" />
         <span>
           1 点 = ¥1 · 按次扣费 · 点数不过期。
-          {active === 'mock' ? '当前是演示渠道：生成为本地模拟，不产生真实费用。' : '当前接入 TreeCloud：真实生成，实际扣费以 TreeCloud 账单为准。'}
+          {loggedIn
+            ? '生成走云端网关，按真实用量扣点数；失败自动退回。'
+            : directOn
+              ? '当前为直连模式：用你自己的 TreeCloud Key 生成，费用在 TreeCloud 结算。'
+              : '登录后用微信 / 支付宝充值点数即可生成；也可以在设置里填自己的 TreeCloud Key 直连。'}
         </span>
       </div>
     </aside>

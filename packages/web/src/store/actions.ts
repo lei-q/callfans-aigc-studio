@@ -1,16 +1,20 @@
 import type {
   AestheticItem,
   CreateJobBody,
+  DevicePollReply,
+  DeviceStartReply,
   Job,
   MediaType,
   OptimizeReply,
+  OrderDto,
+  PackDto,
+  PayChannel,
   Post,
   Project,
   RefInput,
   Result,
   SettingsPatch,
   UploadReply,
-  Wallet,
 } from '@aigc/shared';
 import {
   EDIT_DEF,
@@ -24,10 +28,9 @@ import {
   resoOf,
   unitPrice,
   uid,
-  ensureDaily,
 } from '@aigc/shared';
 import { api } from '../lib/api';
-import { copyText, downloadText, downloadUrl, editCss, pickFiles, renderEditedImage, resultDownloadUrl, thumbOf } from '../lib/util';
+import { copyText, downloadText, downloadUrl, pickFiles, renderEditedImage, resultDownloadUrl, thumbOf } from '../lib/util';
 import { cloneEditDefaults, getState, setState, type DrawerType, type Page, type State } from './index';
 import { fixParams } from './data';
 import { boardOf, canvasItems, inScope, jobById, libResults, modelOf, resultById, wsShort } from './selectors';
@@ -168,8 +171,8 @@ export async function optimizePrompt() {
   try {
     const r = await api.post<OptimizeReply>('/api/assist/optimize', { type: t, prompt: cur });
     setState((st) => void (st.optimize = r));
-    if (r.mode === 'expand') toast('ai', r.llm ? '已用对话模型补成完整提示词' : '已把这句话补成完整提示词', '看一眼，不满意就点「忽略」');
-    else toast('ai', '给了几条可加的细节', '挑不挑都行，不改也能直接生成');
+    if (r.mode === 'expand') toast('ai', r.llm ? '已用对话模型补成完整提示词' : '已把这句话补成完整提示词', r.llm ? '看一眼，不满意就点「忽略」' : r.reason || '看一眼，不满意就点「忽略」');
+    else toast('ai', '给了几条可加的细节', r.llm ? '挑不挑都行，不改也能直接生成' : r.reason || '挑不挑都行，不改也能直接生成');
   } catch (e) {
     toastError(e);
   } finally {
@@ -304,7 +307,7 @@ export async function gen() {
     }
   } catch (e) {
     toastError(e, '没能加入队列');
-    if ((e as { status?: number }).status === 402) openDrawer('topup');
+    if ((e as { status?: number }).status === 402 || (e as { status?: number }).status === 403) openDrawer((e as { status?: number }).status === 402 ? 'topup' : 'account');
   }
 }
 
@@ -508,7 +511,7 @@ export function downloadResult(id: string) {
   const r = resultById(getState(), id);
   if (!r) return;
   downloadUrl(resultDownloadUrl(r));
-  toast('success', '已开始下载', r.simulated ? `${r.title} · 演示素材只有封面图` : `${r.title} · 产出可直接商用`);
+  toast('success', '已开始下载', `${r.title} · 产出可直接商用`);
 }
 
 export async function deleteResult(id: string) {
@@ -739,17 +742,151 @@ export async function aestheticAddFile() {
 
 /* ---------------- 钱包 ---------------- */
 
-export async function topupPoints(amount: number) {
+export const canAfford = (s: State, cost: number) => affordable(s.wallet, cost);
+
+/* ---------------- 账号：设备码登录 ---------------- */
+
+export async function loginStart() {
+  setState((st) => {
+    st.loginError = null;
+    st.loginFlow = null;
+  });
   try {
-    const r = await api.post<{ wallet: Wallet; got: number; double: boolean }>('/api/wallet/topup', { amount });
-    setState((s) => void (s.wallet = r.wallet));
-    toast('success', `已到账 ${r.got} 点`, r.double ? `首充翻倍：充 ${amount} 得 ${r.got}` : `当前余额 ${r.wallet.balance} 点`);
+    const r = await api.post<DeviceStartReply>('/api/auth/login', {});
+    setState((st) => void (st.loginFlow = { ...r, startedAt: Date.now() }));
+    window.open(r.loginUrl, '_blank', 'noopener');
+    void loginPollLoop();
+  } catch (e) {
+    setState((st) => void (st.loginError = (e as Error).message));
+    toastError(e, '发起登录失败');
+  }
+}
+
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+export function loginPollLoop() {
+  if (pollTimer) clearTimeout(pollTimer);
+  const step = async () => {
+    const flow = getState().loginFlow;
+    if (!flow) return;
+    if (Date.now() - flow.startedAt > flow.expiresIn * 1000) {
+      setState((st) => void (st.loginError = '登录链接已过期，请重新发起'));
+      setState((st) => void (st.loginFlow = null));
+      return;
+    }
+    let r: DevicePollReply | null = null;
+    try {
+      r = await api.post<DevicePollReply>('/api/auth/poll', { deviceCode: flow.deviceCode });
+    } catch {
+      /* 网络抖动：继续轮询 */
+    }
+    if (r?.status === 'approved') {
+      setState((st) => {
+        st.loginFlow = null;
+        st.loginError = null;
+      });
+      toast('success', '登录成功', '点数已跟你的账号绑定，换设备也不会丢');
+      return;
+    }
+    if (r?.status === 'expired' || r?.status === 'denied') {
+      setState((st) => {
+        st.loginFlow = null;
+        st.loginError = r?.status === 'denied' ? '登录被拒绝' : '登录链接已过期';
+      });
+      return;
+    }
+    pollTimer = setTimeout(step, (r ? 2 : flow.interval) * 1000);
+  };
+  pollTimer = setTimeout(step, 1500);
+}
+
+export function loginCancel() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = null;
+  setState((st) => void (st.loginFlow = null));
+  api.post('/api/auth/cancel').catch(() => {});
+}
+
+export async function logout() {
+  try {
+    await api.post('/api/auth/logout');
+    toast('info', '已退出登录', '本机的项目与素材保留在这台电脑上');
   } catch (e) {
     toastError(e);
   }
 }
 
-export const canAfford = (s: State, cost: number) => affordable(ensureDaily({ ...s.wallet }), cost);
+/* ---------------- 充值：微信 / 支付宝在线支付 ---------------- */
+
+export async function loadPacks() {
+  setState((st) => void (st.packsLoading = true));
+  try {
+    const { packs } = await api.get<{ packs: PackDto[] }>('/api/billing/packs');
+    setState((st) => void (st.packs = packs));
+  } catch (e) {
+    toastError(e, '没能拉到充值档位');
+  } finally {
+    setState((st) => void (st.packsLoading = false));
+  }
+}
+
+export async function createOrder(packId: string, channel: PayChannel) {
+  try {
+    const { order } = await api.post<{ order: OrderDto }>('/api/billing/orders', { packId, channel });
+    setState((st) => void (st.activeOrder = order));
+    void pollOrder(order.id);
+    return order;
+  } catch (e) {
+    toastError(e, '下单失败');
+    return null;
+  }
+}
+
+let orderTimer: ReturnType<typeof setTimeout> | null = null;
+export function pollOrder(id: string) {
+  if (orderTimer) clearTimeout(orderTimer);
+  const step = async () => {
+    const cur = getState().activeOrder;
+    if (!cur || cur.id !== id) return;
+    if (cur.status === 'paid' || cur.status === 'closed' || cur.status === 'refunded') return;
+    if (Date.now() > cur.expireAt) {
+      setState((st) => void (st.activeOrder = st.activeOrder && { ...st.activeOrder, status: 'closed' }));
+      return;
+    }
+    try {
+      const { order } = await api.get<{ order: OrderDto }>(`/api/billing/orders/${id}`);
+      setState((st) => {
+        st.activeOrder = order;
+        const i = st.orders.findIndex((x) => x.id === order.id);
+        if (i >= 0) st.orders[i] = order;
+        else st.orders.unshift(order);
+      });
+      if (order.status === 'paid') {
+        toast('success', '充值到账', `${order.points} 点 · ${order.packName}`);
+        return;
+      }
+      if (order.status === 'closed' || order.status === 'refunded') return;
+    } catch {
+      /* 网络抖动：继续轮询 */
+    }
+    orderTimer = setTimeout(step, 2000);
+  };
+  orderTimer = setTimeout(step, 1500);
+}
+
+export function closeActiveOrder() {
+  if (orderTimer) clearTimeout(orderTimer);
+  orderTimer = null;
+  setState((st) => void (st.activeOrder = null));
+}
+
+export async function loadOrders() {
+  try {
+    const { orders } = await api.get<{ orders: OrderDto[] }>('/api/billing/orders');
+    setState((st) => void (st.orders = orders));
+  } catch (e) {
+    toastError(e, '没能拉到订单');
+  }
+}
 
 /* ---------------- 项目 ---------------- */
 
@@ -838,7 +975,7 @@ export async function refreshModels() {
       s.settings = settings;
       fixParams(s);
     });
-    const c = settings?.provider.treecloud.lastCheck;
+    const c = settings?.direct.lastCheck;
     toast(c?.ok ? 'success' : 'warn', c?.ok ? '模型列表已刷新' : '连接失败', c?.message || '');
   } catch (e) {
     toastError(e);
@@ -926,17 +1063,14 @@ export async function editSave() {
   }
   try {
     let dataUrl: string | undefined;
-    let css: string | undefined;
-    if (t === 'image' && !cur.simulated) {
+    if (t === 'image') {
       dataUrl = await renderEditedImage(cur.src, s.editOps.image, cur.ratio);
-    } else if (t === 'image') {
-      css = `filter:${editCss(s.editOps.image)}`;
     }
     const { result } = await api.post<{ result: Result }>('/api/results/edited', {
       sourceId: cur.id,
       title: `${cur.title.replace(/（已编辑）$/, '')}（已编辑）`,
       tags: editTags(s, t),
-      edit: { css, ops: ops as unknown as Record<string, unknown> },
+      edit: { ops: ops as unknown as Record<string, unknown> },
       dataUrl,
     });
     setState((st) => {

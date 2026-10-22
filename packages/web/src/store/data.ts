@@ -45,6 +45,7 @@ export async function boot() {
       s.jobs = b.jobs;
       s.results = b.results;
       s.wallet = b.wallet;
+      s.session = b.session;
       s.boards = b.boards;
       s.aesthetic = b.aesthetic;
       s.posts = b.posts;
@@ -52,7 +53,6 @@ export async function boot() {
       s.channels = b.channels;
       s.settings = b.settings;
       s.apiKeys = b.apiKeys;
-      s.apiUsage = b.apiUsage;
       const ui = b.ui as Partial<Record<(typeof UI_KEYS)[number], unknown>>;
       if (typeof ui.formOpen === 'boolean') s.formOpen = ui.formOpen;
       if (typeof ui.agentDock === 'boolean') s.agentDock = ui.agentDock;
@@ -104,6 +104,18 @@ export function applyEvent(raw: unknown) {
       case 'wallet':
         s.wallet = e.wallet;
         break;
+      case 'session':
+        s.session = e.session;
+        if (!e.session.loggedIn) {
+          s.wallet = null;
+          s.loginFlow = null;
+        }
+        fixParams(s);
+        break;
+      case 'order':
+        upsert(s.orders, e.order, (a, b2) => b2.createdAt - a.createdAt);
+        if (s.activeOrder && s.activeOrder.id === e.order.id) s.activeOrder = e.order;
+        break;
       case 'project':
         upsert(s.projects, e.project, (a, b) => a.createdAt - b.createdAt);
         if (!s.boards[e.project.id]) s.boards[e.project.id] = emptyBoard();
@@ -124,7 +136,6 @@ export function applyEvent(raw: unknown) {
         break;
       case 'api':
         s.apiKeys = e.apiKeys;
-        s.apiUsage = e.apiUsage;
         break;
     }
   });

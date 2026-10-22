@@ -23,7 +23,6 @@ interface LaunchConfig {
 interface ServerModule {
   startServer(o: {
     dataDir: string;
-    samplesDir: string;
     webDir?: string;
     mode: Mode;
     desktop: boolean;
@@ -43,7 +42,6 @@ const pendingFile = path.join(userData, 'pending-mode.json');
 const res = (...p: string[]) => (isDev ? path.join(__dirname, '..', '..', ...p) : path.join(process.resourcesPath, ...p));
 const serverEntry = () => (isDev ? path.join(__dirname, '..', '..', 'server', 'dist', 'server.cjs') : res('server', 'server.cjs'));
 const webDir = () => (isDev ? path.join(__dirname, '..', '..', 'web', 'dist') : res('web'));
-const samplesDir = () => (isDev ? path.join(__dirname, '..', '..', '..', 'resources', 'samples') : res('samples'));
 const iconPath = () => path.join(__dirname, 'icon.png');
 
 function readJson<T>(file: string): T | null {
@@ -133,7 +131,6 @@ async function startDesktop() {
   const token = crypto.randomBytes(24).toString('hex');
   server = await loadServer().startServer({
     dataDir: userData,
-    samplesDir: samplesDir(),
     webDir: webDir(),
     mode: 'desktop',
     desktop: true,
@@ -184,7 +181,6 @@ async function startWeb() {
     try {
       server = await loadServer().startServer({
         dataDir: userData,
-        samplesDir: samplesDir(),
         webDir: webDir(),
         mode: 'web',
         desktop: false,

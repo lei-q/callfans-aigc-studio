@@ -2,8 +2,8 @@ import { getState, setState } from './index';
 import { resultById } from './selectors';
 
 /* ============================================================================
-   播放：演示素材（只有封面）按时间轴模拟推进；真实音频用全局 <audio>，
-   真实视频由卡片 / 舞台里的 <video> 自己播，进度回写到这里。
+   播放：真实音频用全局 <audio>，进度回写到这里；
+   真实视频由卡片 / 舞台里的 <video> 元素自己播。
    ========================================================================== */
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -51,18 +51,6 @@ export function togglePlay(id: string, o: PlayOptions = {}) {
   setState((st) => {
     st.play = { id, t: from };
   });
-  if (r.simulated) {
-    const total = o.to ?? (r.dur || 5);
-    const step = 0.25 * (o.rate || 1);
-    timer = setInterval(() => {
-      const cur = getState().play;
-      if (cur.id !== id) return;
-      const t = Math.round((cur.t + step) * 100) / 100;
-      if (t >= total) stopPlay();
-      else reportTime(id, t);
-    }, 250);
-    return;
-  }
   if (r.type === 'audio') {
     audio = audio || new Audio();
     audio.src = r.src;

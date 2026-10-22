@@ -43,7 +43,7 @@ import {
   setPrompt,
   toggleAdv,
 } from '../store/actions';
-import { activeChannel, balance, boardOf, canvasItems, dailyFreeLeft, libResults, modelOf, modelsFor, queueJobs } from '../store/selectors';
+import { balance, boardOf, canvasItems, dailyFreeLeft, libResults, modelOf, modelsFor, queueJobs, routeInfo } from '../store/selectors';
 import { Editor } from './Editor';
 
 export function Studio() {
@@ -166,7 +166,8 @@ function Composer() {
   const T = TYPES[t];
   const m = modelOf(s, p.model);
   const cost = estCost(s);
-  const enough = canAfford(s, cost);
+  const route = routeInfo(s, t, t === 'audio' ? p.use : undefined);
+  const enough = route.kind === 'direct' ? true : route.kind === 'cloud' ? canAfford(s, cost) : false;
   const opt = s.optimize;
   const prompt = s.prompt[t];
   const plen = prompt.trim().length;
@@ -174,7 +175,6 @@ function Composer() {
   const seeded = prompt === SEED_PROMPTS[t];
   const free = dailyFreeLeft(s);
   const refs = s.refs[t];
-  const real = activeChannel(s) === 'treecloud';
   const models = modelsFor(s, t, t === 'audio' ? p.use : undefined);
 
   return (
@@ -198,7 +198,7 @@ function Composer() {
           <div className="field-head">
             <span className="field-label">
               <Icon name="pen" />
-              {t === 'audio' && p.use === 'tts' && real ? '配音文案' : '提示词'}
+              {t === 'audio' && p.use === 'tts' ? '配音文案' : '提示词'}
             </span>
             {seeded && (
               <span className="chip outline">
@@ -223,7 +223,7 @@ function Composer() {
               className="prompt-input"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder={t === 'audio' && p.use === 'tts' && real ? '要念的文案：写下完整的口播稿，模型会按所选音色朗读' : '描述画面 / 镜头 / 声音：主体、场景、光线、材质、运镜、语气…'}
+              placeholder={t === 'audio' && p.use === 'tts' ? '要念的文案：写下完整的口播稿，模型会按所选音色朗读' : '描述画面 / 镜头 / 声音：主体、场景、光线、材质、运镜、语气…'}
             />
             <div className="prompt-foot">
               <button className="btn sm ghost" onClick={clearPrompt}>
@@ -313,7 +313,7 @@ function Composer() {
             </div>
             <div className="ref-note">
               <Icon name="shield" />
-              {real && t === 'image' && m.maxInputImages === 0
+              {m.channel === 'direct' && t === 'image' && m.maxInputImages === 0
                 ? '当前模型不支持参考图，生成时会忽略参考素材。'
                 : t === 'video'
                   ? '第一张参考图会作为首帧（可在下面切换为纯文生视频）；参考图只用于本次生成，不会进入素材库。'
@@ -329,7 +329,7 @@ function Composer() {
               <Icon name="cpu" />
               模型
             </span>
-            <span className="field-hint">{m.note}</span>
+            <span className="field-hint">{models.length ? m.note : ''}</span>
           </div>
           {models.length ? (
             <select className="form-select" value={p.model} onChange={(e) => changeModel(e.target.value)}>
@@ -343,10 +343,13 @@ function Composer() {
           ) : (
             <div className="channel-note">
               <Icon name="alert" />
-              <span>
-                当前渠道没有可用的{t === 'audio' ? (p.use === 'music' ? '音乐' : p.use === 'sfx' ? '音效' : '配音') : T.name}模型。
-                {real ? '到「设置」刷新模型列表，或切回演示渠道体验。' : ''}
-              </span>
+              <span>{route.kind === null ? route.reason : `当前没有可用的${T.name}模型，到「设置」里刷新模型列表。`}</span>
+              {route.kind === null && (
+                <button className="btn sm primary" onClick={() => openDrawer(s.session?.loggedIn ? 'topup' : 'account')}>
+                  <Icon name={s.session?.loggedIn ? 'coins' : 'user'} />
+                  {s.session?.loggedIn ? '去充值' : '去登录'}
+                </button>
+              )}
             </div>
           )}
           <Params t={t} />
@@ -378,7 +381,13 @@ function Composer() {
             </span>
           </div>
           <span className="grow" />
-          <span className="tiny dim">{free > 0 ? `今日免费 ${free} 点优先抵扣` : '1 点 = ¥1 · 生成失败自动退回'}</span>
+          <span className="tiny dim">
+            {route.kind === 'direct'
+              ? '直连模式：费用由 TreeCloud 结算，不扣平台点数'
+              : free > 0
+                ? `今日免费 ${free} 点优先抵扣`
+                : '1 点 = ¥1 · 生成失败自动退回'}
+          </span>
         </div>
 
         {s.genLock ? (
@@ -386,8 +395,13 @@ function Composer() {
             <Icon name="check" />
             已加入队列
           </button>
+        ) : route.kind === null ? (
+          <button className="btn primary gen-btn" onClick={() => openDrawer(s.session?.loggedIn ? 'topup' : 'account')}>
+            <Icon name={s.session?.loggedIn ? 'coins' : 'user'} />
+            {s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
+          </button>
         ) : enough ? (
-          <button className="btn primary gen-btn" onClick={() => void gen()} disabled={!models.length}>
+          <button className="btn primary gen-btn" onClick={() => void gen()}>
             <Icon name="send" />
             生成{t === 'image' ? ` ${p.count} 张` : ` ${p.dur}s`} · {cost} 点
           </button>
@@ -398,7 +412,8 @@ function Composer() {
           </button>
         )}
         <div className="tiny dim">
-          生成后进入队列，可继续写下一条，不必等待完成。{real ? '当前接入 TreeCloud，实际扣费以 TreeCloud 账单为准。' : ''}
+          生成后进入队列，可继续写下一条，不必等待完成。
+          {route.kind === 'cloud' ? '点数在云端按真实用量结算，失败自动退回。' : ''}
         </div>
       </div>
     </section>

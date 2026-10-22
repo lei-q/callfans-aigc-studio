@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
-import type { Job, Result } from '@aigc/shared';
-import { HELP_TOPICS, MAX_REFS, POST_PLATFORMS, TOPUP_PACKS, TYPES, mmss, paramsBrief, timeLabel } from '@aigc/shared';
+import QRCode from 'qrcode';
+import type { Job, OrderDto, Result } from '@aigc/shared';
+import { HELP_TOPICS, MAX_REFS, POST_PLATFORMS, TYPES, mmss, paramsBrief, timeLabel } from '@aigc/shared';
 import { useStore } from '../store';
 import {
   addRefItem,
   adoptResult,
   cancelJob,
+  closeActiveOrder,
   closeDrawer,
   copyPromptOf,
+  createOrder,
   deleteProject,
   deleteResult,
   downloadResult,
@@ -16,7 +19,13 @@ import {
   goJobs,
   goStudio,
   helpJump,
+  loadOrders,
+  loadPacks,
+  loginCancel,
+  loginStart,
+  logout,
   makeVariant,
+  openDrawer,
   openInEditor,
   postCopy,
   postDel,
@@ -31,12 +40,11 @@ import {
   renameProject,
   retryJob,
   saveMeta,
-  topupPoints,
 } from '../store/actions';
 import { addResultToCanvas } from '../canvas/ops';
 import { togglePlay } from '../store/player';
-import { balance, dailyFreeLeft, jobById, libResults, modelOf, queueJobs, resultById, spentTotal } from '../store/selectors';
-import { thumbOf, cssOfEdit } from '../lib/util';
+import { balance, dailyFreeLeft, jobById, libResults, modelOf, queueJobs, resultById } from '../store/selectors';
+import { cssOfEdit } from '../lib/util';
 import { Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, TypeChip, Wave } from '../components/common';
 
 export function Drawer() {
@@ -54,6 +62,7 @@ export function Drawer() {
         {d.type === 'queue' && <QueueDrawer />}
         {d.type === 'ref-add' && <RefAddDrawer />}
         {d.type === 'topup' && <TopupDrawer />}
+        {d.type === 'account' && <AccountDrawer />}
         {d.type === 'edit' && <EditMetaDrawer id={d.id!} />}
         {d.type === 'post' && <PostDrawer id={d.id!} />}
         {d.type === 'project' && <ProjectDrawer />}
@@ -112,8 +121,8 @@ function ResultDrawer({ id }: { id: string }) {
         <div className="d-section">
           <div className="stage">
             <div className={`stage-media ${playing ? 'playing' : ''}`}>
-              {r.simulated || r.type === 'image' ? (
-                <img src={r.type === 'image' ? r.src : thumbOf(r)} alt={r.title} style={cssOfEdit(r.edit?.css)} />
+              {r.type === 'image' ? (
+                <img src={r.src} alt={r.title} style={cssOfEdit(r.edit?.css)} />
               ) : r.type === 'video' ? (
                 <video src={r.src} controls playsInline style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
               ) : (
@@ -122,7 +131,7 @@ function ResultDrawer({ id }: { id: string }) {
                 </div>
               )}
             </div>
-            {isMedia && (r.simulated || r.type === 'audio') && (
+            {isMedia && r.type === 'audio' && (
               <div className="stage-ctrl">
                 <button className="sc-btn" onClick={() => togglePlay(r.id)}>
                   <Icon name={playing ? 'pause' : 'play'} />
@@ -138,11 +147,7 @@ function ResultDrawer({ id }: { id: string }) {
             )}
           </div>
           <div className="tiny dim" style={{ marginTop: 6 }}>
-            {r.simulated
-              ? '演示渠道的示意产物：只有封面图，播放进度为本地模拟。'
-              : r.type === 'image'
-                ? '原件已保存在本机，可直接下载或带去继续生成。'
-                : '原件已保存在本机，可直接播放与下载。'}
+            {r.type === 'image' ? '原件已保存在本机，可直接下载或带去继续生成。' : '原件已保存在本机，可直接播放与下载。'}
           </div>
         </div>
 
@@ -295,7 +300,8 @@ function DangerButton({ label, confirmLabel, onConfirm }: { label: string; confi
 /* ---------------- 使用地图 ---------------- */
 
 function HelpDrawer() {
-  const active = useStore((s) => s.settings?.provider.active || 'mock');
+  const loggedIn = useStore((s) => !!s.session?.loggedIn);
+  const directOn = useStore((s) => !!(s.settings?.direct.enabled && s.settings.direct.hasKey));
   return (
     <>
       <Head ic="compass" title="使用地图" sub="四步走完一次生成，以及常见异常的处理入口" />
@@ -347,21 +353,23 @@ function HelpDrawer() {
           <div className="ai-note">
             <div className="ai-note-head">
               <Icon name="shield" />
-              {active === 'mock' ? '当前为演示渠道' : '当前接入 TreeCloud'}
+              {loggedIn ? '当前走云端网关' : directOn ? '当前为直连模式' : '还没有接入生成能力'}
             </div>
             <ul>
-              {active === 'mock' ? (
+              {loggedIn ? (
                 <>
-                  <li>生成、进度与播放为本地模拟，产出是示意素材，不产生真实费用。</li>
-                  <li>到「设置」填入 TreeCloud API Key，即可切换到真实生成。</li>
+                  <li>图像、视频、配音经云端网关真实生成，按用量扣点数，结果保存在本机。</li>
+                  <li>生成失败或取消时，冻结的点数自动退回。</li>
+                </>
+              ) : directOn ? (
+                <>
+                  <li>用你自己的 TreeCloud Key 直连上游，费用在 TreeCloud 结算，不扣平台点数。</li>
+                  <li>登录云端账号后也可以改走平台点数。</li>
                 </>
               ) : (
-                <>
-                  <li>图像、视频、配音都会真实调用 TreeCloud，结果保存在本机。</li>
-                  <li>本地点数是预算记账；真实扣费以 TreeCloud 控制台账单为准。</li>
-                  <li>图片请求不会自动重试：超时不代表没执行，重提可能再次计费。</li>
-                </>
+                <li>先登录账号（微信 / 支付宝充值点数），或在「设置 · 直连」填自己的 TreeCloud Key，才能开始生成。</li>
               )}
+              <li>图片请求不会自动重试：超时不代表没执行，重提可能再次计费。</li>
               <li>失败触发规则：所选分辨率超过模型上限，或视频时长超出模型上限。</li>
             </ul>
           </div>
@@ -570,117 +578,280 @@ function RefAddDrawer() {
   );
 }
 
-/* ---------------- 充值 ---------------- */
+/* ---------------- 账号：登录 / 账户 ---------------- */
 
-function TopupDrawer() {
+function Qr({ content, size = 168 }: { content: string; size?: number }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    let alive = true;
+    QRCode.toDataURL(content, { width: size * 2, margin: 1, color: { dark: '#171A23', light: '#FFFFFF' } })
+      .then((u) => alive && setUrl(u))
+      .catch(() => alive && setUrl(''));
+    return () => {
+      alive = false;
+    };
+  }, [content, size]);
+  return url ? <img className="qr-img" src={url} alt="二维码" width={size} height={size} /> : <div className="qr-img qr-empty" style={{ width: size, height: size }} />;
+}
+
+function AccountDrawer() {
   const s = useStore();
-  const w = s.wallet;
-  const double = !w.firstTopupDone;
-  const free = dailyFreeLeft(s);
-  const real = s.settings?.provider.active === 'treecloud';
-  return (
-    <>
-      <Head ic="coins" icCls="amber" title="点数与充值" sub={<span>1 点 = ¥1 · 按次扣费 · 点数不过期</span>} />
-      <div className="drawer-body">
-        <div className="d-section">
-          <div className="wallet-card">
-            <div>
-              <div className="tiny dim">当前余额</div>
-              <div className="wc-balance num">
-                {balance(s)}
-                <span>点</span>
+  const flow = s.loginFlow;
+  if (s.session?.loggedIn) {
+    const p = s.session.profile;
+    return (
+      <>
+        <Head ic="user" title={p?.nickname || '已登录'} sub={<span>{p?.phoneMasked || '云端账号'} · 点数跟着账号走，换设备不丢</span>} />
+        <div className="drawer-body">
+          <div className="d-section">
+            <div className="wallet-card">
+              <div>
+                <div className="tiny dim">当前余额</div>
+                <div className="wc-balance num">
+                  {balance(s)}
+                  <span>点</span>
+                </div>
+              </div>
+              <div className="wc-side">
+                <div className="tiny dim">今日免费 {dailyFreeLeft(s)} 点</div>
+                <div className="wc-split">
+                  <span>1 点 = ¥1</span>
+                  <span>点数不过期</span>
+                </div>
               </div>
             </div>
-            <div className="wc-side">
-              <div className="tiny dim">累计消耗 {spentTotal(s)} 点</div>
-              <div className="wc-split">
-                <span>
-                  <i style={{ background: 'var(--primary)' }} />
-                  图像 {w.spent.image}
-                </span>
-                <span>
-                  <i style={{ background: 'var(--ai)' }} />
-                  视频 {w.spent.video}
-                </span>
-                <span>
-                  <i style={{ background: 'var(--blue)' }} />
-                  音频 {w.spent.audio}
-                </span>
-              </div>
+          </div>
+          <div className="d-section">
+            <div className="d-section-title">
+              <Icon name="clock" />
+              最近订单
             </div>
+            <OrderList />
           </div>
         </div>
-        {free > 0 ? (
-          <div className="free-tip">
-            <Icon name="sparkles" />
-            <span>
-              今日还有 <b className="num">{free} 点</b> 免费额度，生成时自动优先抵扣；每天 0 点重置，不累积。
-            </span>
-          </div>
+        <div className="drawer-foot">
+          <button className="btn primary" onClick={() => openDrawer('topup')}>
+            <Icon name="coins" />
+            充值
+          </button>
+          <span className="grow" />
+          <button className="btn ghost" onClick={() => void logout()}>
+            退出登录
+          </button>
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      <Head ic="user" title="登录账号" sub={<span>点数、订单与用量跟着账号走；换一台设备登录就能接着用</span>} />
+      <div className="drawer-body">
+        {!flow ? (
+          <Empty icon="user" title="还没有登录" desc={s.loginError || '登录后才能用平台点数生成；也可以在「设置 · 直连」里填自己的 TreeCloud Key。'}>
+            <button className="btn primary" onClick={() => void loginStart()}>
+              <Icon name="send" />
+              开始登录
+            </button>
+          </Empty>
         ) : (
-          <div className="free-tip done">
-            <Icon name="check" />
-            <span>今日免费额度已用完，明天 0 点重置。</span>
+          <div className="login-box">
+            <div className="login-qr">
+              <Qr content={flow.qrContent} />
+            </div>
+            <div className="login-steps">
+              <b>用手机扫码，或</b>
+              <a href={flow.loginUrl} target="_blank" rel="noreferrer">
+                在浏览器里打开登录页
+              </a>
+              <span className="tiny dim">在登录页确认后就完成授权；这个抽屉会自动继续。</span>
+              <span className="chip info">
+                <span className="cdot" />
+                等待确认…
+              </span>
+            </div>
           </div>
         )}
         <div className="d-section">
-          <div className="d-section-title">
-            <Icon name="coins" />
-            充值{double ? ' · 首充翻倍' : ''}
-          </div>
-          <div className="pack-grid">
-            {TOPUP_PACKS.map((k) => (
-              <button key={k.p} className={`pack-card ${k.p === 30 ? 'hot' : ''}`} onClick={() => void topupPoints(k.p)}>
-                {k.p === 30 && <span className="pack-hot">最常用</span>}
-                <span className="pack-tag">{k.tag}</span>
-                <span className="pack-price num">¥{k.p}</span>
-                <span className="pack-got num">
-                  得 {double ? k.p * 2 : k.p} 点{double && <i>首充翻倍</i>}
-                </span>
-                <span className="pack-note">{k.note}</span>
-              </button>
-            ))}
-          </div>
-          {double && (
-            <div className="tiny dim" style={{ marginTop: 8 }}>
-              <Icon name="sparkles" />
-              首次充值翻倍，每人限一次
+          <div className="ai-note">
+            <div className="ai-note-head">
+              <Icon name="shield" />
+              账号与点数
             </div>
-          )}
-        </div>
-        <div className="d-section">
-          <div className="d-section-title">
-            <Icon name="shield" />
-            你会得到什么
-          </div>
-          <div className="d-card d-card-pad">
-            <div className="snap-row">
-              <span className="sk">计费方式</span>
-              <span className="sv">按次扣费，用多少扣多少，没有月费</span>
-            </div>
-            <div className="snap-row">
-              <span className="sk">失败处理</span>
-              <span className="sv">生成失败的点数自动退回</span>
-            </div>
-            <div className="snap-row">
-              <span className="sk">有效期</span>
-              <span className="sv">点数不过期，不会每月清零</span>
-            </div>
-            <div className="snap-row">
-              <span className="sk">商用</span>
-              <span className="sv">产出可直接商用，不需要额外授权费</span>
-            </div>
-            <div className="snap-row">
-              <span className="sk">API</span>
-              <span className="sv">网页与 API 共用同一份余额</span>
-            </div>
+            <ul>
+              <li>充值走微信支付 / 支付宝，点数实时到账，不过期。</li>
+              <li>生成失败或取消，冻结的点数自动退回。</li>
+              <li>本机的项目、画板与素材仍留在这台电脑上；账号负责点数与订单归属。</li>
+            </ul>
           </div>
         </div>
       </div>
       <div className="drawer-foot">
+        {flow && (
+          <button className="btn ghost" onClick={loginCancel}>
+            取消
+          </button>
+        )}
+        <span className="grow" />
+        <button className="btn ghost" onClick={closeDrawer}>
+          关闭
+        </button>
+      </div>
+    </>
+  );
+}
+
+function OrderList() {
+  const orders = useStore((s) => s.orders);
+  const loaded = useStore((s) => s.orders.length > 0);
+  useEffect(() => {
+    if (!loaded) void loadOrders();
+  }, [loaded]);
+  if (!orders.length) return <div className="tiny dim">还没有订单。充值后会在这里留下记录。</div>;
+  const name = (ch: string) => (ch === 'wechat' ? '微信支付' : ch === 'alipay' ? '支付宝' : ch);
+  return (
+    <div className="order-list">
+      {orders.slice(0, 8).map((o) => (
+        <div key={o.id} className="order-row">
+          <span className="or-ch">
+            <Icon name={o.channel === 'wechat' ? 'check' : 'coins'} />
+            {name(o.channel)}
+          </span>
+          <span className="grow or-name">{o.packName}</span>
+          <span className="num or-pts">+{o.points} 点</span>
+          <span className="num tiny dim">¥{o.amountCny.toFixed(2)}</span>
+          <span className={`chip ${o.status === 'paid' ? 'success' : o.status === 'created' || o.status === 'paying' ? 'warn' : 'neutral'}`}>
+            {o.status === 'paid' ? '已支付' : o.status === 'refunded' ? '已退款' : o.status === 'closed' ? '已关闭' : '待支付'}
+          </span>
+          <span className="tiny dim">{timeLabel(o.createdAt)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------- 充值：微信 / 支付宝在线支付 ---------------- */
+
+function TopupDrawer() {
+  const s = useStore();
+  const order = s.activeOrder;
+  useEffect(() => {
+    void loadPacks();
+    void loadOrders();
+    return () => closeActiveOrder();
+  }, []);
+  const paying = order && (order.status === 'created' || order.status === 'paying');
+  return (
+    <>
+      <Head
+        ic="coins"
+        icCls="amber"
+        title="点数充值"
+        sub={
+          <span>
+            1 点 = ¥1 · 按次扣费 · 点数不过期 · 余额 {balance(s)} 点
+          </span>
+        }
+      />
+      <div className="drawer-body">
+        {s.session?.loggedIn ? (
+          paying && order ? (
+            <PayPanel order={order} />
+          ) : (
+            <>
+              <div className="d-section">
+                <div className="d-section-title">
+                  <Icon name="coins" />
+                  选择档位
+                </div>
+                <div className="pack-grid">
+                  {s.packs.map((k) => (
+                    <button
+                      key={k.id}
+                      className={`pack-card ${k.tag === '常用' ? 'hot' : ''}`}
+                      onClick={() => void createOrder(k.id, s.payChannel)}
+                    >
+                      {k.tag === '常用' && <span className="pack-hot">最常用</span>}
+                      <span className="pack-tag">{k.tag || k.name}</span>
+                      <span className="pack-price num">¥{k.amountCny}</span>
+                      <span className="pack-got num">
+                        得 {k.points + (k.bonusPoints || 0)} 点{k.bonusPoints ? <i>含赠送 {k.bonusPoints}</i> : null}
+                      </span>
+                      <span className="pack-note">{k.note}</span>
+                    </button>
+                  ))}
+                </div>
+                {s.packsLoading && <div className="tiny dim">正在读取档位…</div>}
+              </div>
+              <div className="d-section">
+                <div className="d-section-title">
+                  <Icon name="link" />
+                  支付渠道
+                </div>
+                <div className="mini-tabs">
+                  {(
+                    [
+                      ['wechat', '微信支付'],
+                      ['alipay', '支付宝'],
+                    ] as const
+                  ).map(([k, n]) => (
+                    <button key={k} className={s.payChannel === k ? 'active' : ''} onClick={() => useStore.setState((st) => void (st.payChannel = k))}>
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <div className="tiny dim" style={{ marginTop: 8 }}>选好档位后生成收款码，用手机扫码完成支付；点数实时到账。</div>
+              </div>
+              <div className="d-section">
+                <div className="d-section-title">
+                  <Icon name="shield" />
+                  你会得到什么
+                </div>
+                <div className="d-card d-card-pad">
+                  <div className="snap-row">
+                    <span className="sk">计费方式</span>
+                    <span className="sv">按次扣费，用多少扣多少，没有月费</span>
+                  </div>
+                  <div className="snap-row">
+                    <span className="sk">失败处理</span>
+                    <span className="sv">生成失败的点数自动退回</span>
+                  </div>
+                  <div className="snap-row">
+                    <span className="sk">有效期</span>
+                    <span className="sv">点数不过期，不会每月清零</span>
+                  </div>
+                  <div className="snap-row">
+                    <span className="sk">商用</span>
+                    <span className="sv">产出可直接商用，不需要额外授权费</span>
+                  </div>
+                </div>
+              </div>
+              <div className="d-section">
+                <div className="d-section-title">
+                  <Icon name="clock" />
+                  订单记录
+                </div>
+                <OrderList />
+              </div>
+            </>
+          )
+        ) : (
+          <Empty icon="user" title="先登录账号" desc="点数跟着账号走：登录后充值，换设备余额也还在。">
+            <button
+              className="btn primary"
+              onClick={() => {
+                closeDrawer();
+                openDrawer('account');
+              }}
+            >
+              去登录
+            </button>
+          </Empty>
+        )}
+      </div>
+      <div className="drawer-foot">
         <span className="tiny dim">
           <Icon name="shield" />
-          {real ? '本地点数为预算记账，不涉及真实支付；真实费用在 TreeCloud 控制台结算' : '演示渠道内为模拟充值，不产生真实扣款'}
+          支付由微信 / 支付宝完成，本平台不接触你的支付密码
         </span>
         <span className="grow" />
         <button className="btn ghost" onClick={closeDrawer}>
@@ -688,6 +859,42 @@ function TopupDrawer() {
         </button>
       </div>
     </>
+  );
+}
+
+function PayPanel({ order }: { order: OrderDto }) {
+  const left = Math.max(0, Math.round((order.expireAt - Date.now()) / 1000));
+  const [sec, setSec] = useState(left);
+  useEffect(() => {
+    const t = setInterval(() => setSec(Math.max(0, Math.round((order.expireAt - Date.now()) / 1000))), 1000);
+    return () => clearInterval(t);
+  }, [order.expireAt]);
+  const chName = order.channel === 'wechat' ? '微信' : '支付宝';
+  return (
+    <div className="pay-panel">
+      <div className="pay-head">
+        <span className={`pay-ch ${order.channel}`}>{chName}支付</span>
+        <span className="grow" />
+        <span className="tiny dim num">{mmss(sec)} 后过期</span>
+      </div>
+      <div className="pay-qr">
+        <Qr content={order.qrContent || order.cashierUrl || ''} size={190} />
+      </div>
+      <div className="pay-amount num">¥{order.amountCny.toFixed(2)}</div>
+      <div className="pay-pts">
+        到账 {order.points} 点{order.points > 0 ? '' : ''}
+      </div>
+      <div className="pay-tip tiny dim">
+        打开{chName}扫一扫完成支付；支付成功后点数自动到账，这个页面会自动继续。
+        <br />
+        电脑端也可以<a href={order.cashierUrl} target="_blank" rel="noreferrer">打开收银台</a>完成支付。
+      </div>
+      <div className="pay-actions">
+        <button className="btn ghost" onClick={closeActiveOrder}>
+          取消这笔订单
+        </button>
+      </div>
+    </div>
   );
 }
 

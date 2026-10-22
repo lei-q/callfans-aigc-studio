@@ -14,8 +14,6 @@ extraResources:
     filter: ["server.cjs", "sql-wasm.wasm"]
   - from: ../web/dist
     to: web
-  - from: ../../resources/samples
-    to: samples
   - from: build/bin
     to: bin
 asar: true

@@ -13,23 +13,36 @@ export const wsShort = (s: State, id: string) => {
 export const modelOf = (s: State, id: string): ModelInfo =>
   s.models.find((m) => m.id === id) || {
     id,
-    name: id.replace(/^tc:/, ''),
+    name: id.replace(/^(tc:|cloud:)/, '') || '未选择',
     type: 'image',
     price: 0,
     basis: '张',
     status: 'off',
-    channel: 'mock',
-    note: '模型已不在当前目录里',
+    channel: 'cloud',
+    note: id ? '模型已不在当前目录里' : '还没有可用模型',
     caps: [],
     limit: '',
   };
 
-export const activeChannel = (s: State) => s.settings?.provider.active || 'mock';
+/** 渠道是否可用：云端要登录，直连要启用且配了 Key */
+export const channelReady = (s: State, ch: 'cloud' | 'direct') =>
+  ch === 'cloud' ? !!s.session?.loggedIn : !!(s.settings?.direct.enabled && s.settings.direct.hasKey);
 
-/** 当前渠道下某类型可用的模型；音频再按用途过滤 */
+/** 当前某类型可用的模型；音频再按用途过滤 */
 export function modelsFor(s: State, type: MediaType, use?: AudioUse) {
-  const ch = activeChannel(s);
-  return s.models.filter((m) => m.type === type && m.channel === ch && (type !== 'audio' || !use || !m.uses || m.uses.includes(use)));
+  return s.models.filter((m) => m.type === type && channelReady(s, m.channel) && (type !== 'audio' || !use || !m.uses || m.uses.includes(use)));
+}
+
+/** 当前生成走哪条路：云端网关扣点数；直连由 TreeCloud 结算 */
+export function routeInfo(s: State, type: MediaType, use?: AudioUse): { kind: 'cloud' | 'direct'; model?: ModelInfo } | { kind: null; reason: string } {
+  const ready = modelsFor(s, type, use);
+  const cloud = ready.find((m) => m.channel === 'cloud');
+  if (cloud) return { kind: 'cloud', model: cloud };
+  const direct = ready.find((m) => m.channel === 'direct');
+  if (direct) return { kind: 'direct', model: direct };
+  if (!s.session?.loggedIn && s.settings?.direct.enabled && s.settings.direct.hasKey) return { kind: null, reason: '直连模式下没有该类型的可用模型，到「设置」里刷新模型列表' };
+  if (!s.session?.loggedIn) return { kind: null, reason: s.session?.cloudReachable ? '登录后才能用平台点数生成' : '还没有配置云端地址：到「设置 · 云端连接」填写，或启用直连模式' };
+  return { kind: null, reason: '当前账号下没有该类型的可用模型' };
 }
 
 export const resultById = (s: State, id?: string | null) => (id ? s.results.find((r) => r.id === id) : undefined);
@@ -45,9 +58,8 @@ export const queueJobs = (s: State) => s.jobs.filter((j) => j.status === 'runnin
 export const failJobs = (s: State) => s.jobs.filter((j) => j.status === 'failed');
 export const openJobs = (s: State) => s.jobs.filter((j) => j.status === 'running' || j.status === 'queued');
 
-export const spentTotal = (s: State) => round1(s.wallet.spent.image + s.wallet.spent.video + s.wallet.spent.audio);
-export const balance = (s: State) => round1(s.wallet.balance);
-export const dailyFreeLeft = (s: State) => round1(Math.max(0, s.wallet.dailyFree - s.wallet.dailyUsed));
+export const balance = (s: State) => round1(s.wallet?.balance ?? 0);
+export const dailyFreeLeft = (s: State) => round1(Math.max(0, s.wallet?.freeToday ?? 0));
 
 /* ---------------- 画布 ---------------- */
 

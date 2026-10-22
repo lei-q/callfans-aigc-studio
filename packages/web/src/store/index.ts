@@ -4,27 +4,31 @@ import type {
   AestheticItem,
   AgentResult,
   ApiKey,
-  ApiUsage,
   AppInfo,
   Board,
   Channel,
+  DeviceStartReply,
   EditOpsMap,
   Job,
   JobParams,
   MediaType,
   ModelInfo,
   OptimizeReply,
+  OrderDto,
+  PackDto,
+  PayChannel,
   Post,
   Project,
   RefInput,
   Result,
+  SessionInfo,
   Settings,
-  Wallet,
+  WalletDto,
 } from '@aigc/shared';
 import { EDIT_DEF, PEN_COLORS, SEED_PROMPTS } from '@aigc/shared';
 
 export type Page = 'studio' | 'jobs' | 'library' | 'models' | 'aesthetic' | 'api' | 'settings';
-export type DrawerType = 'result' | 'help' | 'queue' | 'ref-add' | 'topup' | 'edit' | 'post' | 'project';
+export type DrawerType = 'result' | 'help' | 'queue' | 'ref-add' | 'topup' | 'edit' | 'post' | 'project' | 'account';
 
 export interface Toast {
   id: number;
@@ -45,7 +49,9 @@ export interface State {
   projects: Project[];
   jobs: Job[];
   results: Result[];
-  wallet: Wallet;
+  /** 云端钱包缓存；未登录为 null */
+  wallet: WalletDto | null;
+  session: SessionInfo | null;
   boards: Record<string, Board>;
   aesthetic: AestheticItem[];
   posts: Post[];
@@ -53,7 +59,15 @@ export interface State {
   channels: Channel[];
   settings: Settings | null;
   apiKeys: ApiKey[];
-  apiUsage: ApiUsage[];
+
+  /* ---------------- 账号 / 充值 ---------------- */
+  loginFlow: (DeviceStartReply & { startedAt: number }) | null;
+  loginError: string | null;
+  packs: PackDto[];
+  packsLoading: boolean;
+  payChannel: PayChannel;
+  activeOrder: OrderDto | null;
+  orders: OrderDto[];
 
   /* ---------------- 导航 ---------------- */
   page: Page;
@@ -122,15 +136,6 @@ export interface State {
   toasts: Toast[];
 }
 
-export const emptyWallet: Wallet = {
-  balance: 0,
-  spent: { image: 0, video: 0, audio: 0 },
-  dailyFree: 0.5,
-  dailyUsed: 0,
-  dailyDate: '',
-  firstTopupDone: false,
-};
-
 export const cloneEditDefaults = (): EditOpsMap => ({
   image: { ...EDIT_DEF.image },
   video: { ...EDIT_DEF.video },
@@ -145,7 +150,8 @@ export const initialState: State = {
   projects: [],
   jobs: [],
   results: [],
-  wallet: emptyWallet,
+  wallet: null,
+  session: null,
   boards: {},
   aesthetic: [],
   posts: [],
@@ -153,7 +159,14 @@ export const initialState: State = {
   channels: [],
   settings: null,
   apiKeys: [],
-  apiUsage: [],
+
+  loginFlow: null,
+  loginError: null,
+  packs: [],
+  packsLoading: false,
+  payChannel: 'wechat',
+  activeOrder: null,
+  orders: [],
 
   page: 'studio',
   ws: '',
@@ -166,9 +179,9 @@ export const initialState: State = {
   negative: { image: '', video: '', audio: '' },
   refs: { image: [], video: [], audio: [] },
   params: {
-    image: { model: 'm-img-u2', ratio: '1:1', count: 4, res: '2k', seed: '', refWeight: 0.6, format: 'PNG' },
-    video: { model: 'm-vid-c1', ratio: '9:16', dur: 5, cam: '推近', fps: 24, firstFrame: true, loop: false, vres: '720p' },
-    audio: { model: 'm-aud-tts', use: 'tts', dur: 30, voice: 'lan', mood: 'morning', lang: '中文', volume: 80 },
+    image: { model: '', ratio: '1:1', count: 4, res: '2k', seed: '', refWeight: 0.6, format: 'PNG' },
+    video: { model: '', ratio: '9:16', dur: 5, cam: '推近', fps: 24, firstFrame: true, loop: false, vres: '720p' },
+    audio: { model: '', use: 'tts', dur: 30, voice: 'lan', mood: 'morning', lang: '中文', volume: 80 },
   },
   optimize: null,
   optimizing: false,
