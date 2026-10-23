@@ -131,7 +131,7 @@ e2e/                 Playwright 端到端测试
 推送 `v*` 标签即触发 [Release 工作流](.github/workflows/release.yml)：在 macOS（arm64 runner，同时产出 arm64 与 x64）、Windows、Linux 上并行打包，产物与 `SHA256SUMS.txt` 一起上传到 GitHub Release。
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 配置 `CSC_LINK` / `CSC_KEY_PASSWORD`（以及 macOS 的 `APPLE_INSTALLER_IDENTITY`）secrets 后会自动启用代码签名。
