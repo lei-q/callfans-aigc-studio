@@ -90,6 +90,10 @@ export interface MockCloudOptions {
   host?: string;
   /** fixture 生成耗时（毫秒），测试里调小 */
   jobMs?: number;
+  /** 开放的支付渠道，默认微信 + 支付宝；传空数组模拟「暂未开放充值」 */
+  payChannels?: PayChannel[];
+  /** 提示词包含其中任一词即按内容不合规拒绝（40302，不冻结、不扣点） */
+  blockWords?: string[];
   logger?: boolean;
 }
 
@@ -260,7 +264,7 @@ button{width:100%;border:0;border-radius:9px;padding:11px;background:#4F46E5;col
 
   /* ---------------- 合同端点 ---------------- */
 
-  app.get('/meta', async () => ({ ok: true, name: 'Mock Cloud', version: '0.1.0-mock', payChannels: ['wechat', 'alipay'] as PayChannel[], loginMethods: ['phone'] } satisfies CloudMeta));
+  app.get('/meta', async () => ({ ok: true, name: 'Mock Cloud', version: '0.1.0-mock', payChannels: o.payChannels ?? (['wechat', 'alipay'] as PayChannel[]), loginMethods: ['phone'] } satisfies CloudMeta));
 
   app.post('/auth/device/start', async (req) => {
     const code = crypto.randomBytes(12).toString('hex');
@@ -325,7 +329,8 @@ button{width:100%;border:0;border-radius:9px;padding:11px;background:#4F46E5;col
     const b = req.body as { packId?: string; channel?: PayChannel };
     const pack = PACKS.find((p) => p.id === b.packId);
     if (!pack) return err(reply, CLOUD_ERROR.NOT_FOUND, '档位不存在', 404);
-    if (b.channel !== 'wechat' && b.channel !== 'alipay') return err(reply, CLOUD_ERROR.NOT_FOUND, '支付渠道不支持', 400);
+    const channel = b.channel;
+    if (!channel || !(o.payChannels ?? ['wechat', 'alipay']).includes(channel)) return err(reply, CLOUD_ERROR.NOT_FOUND, '支付渠道不支持', 400);
     const bonus = !u.firstTopupDone && pack.promo === 'first-topup-double' ? pack.points : 0;
     const base = await baseUrl(app);
     const od: OrderDto & { userId: string } = {
@@ -333,7 +338,7 @@ button{width:100%;border:0;border-radius:9px;padding:11px;background:#4F46E5;col
       userId: u.id,
       packId: pack.id,
       packName: pack.name,
-      channel: b.channel,
+      channel,
       amountCny: pack.amountCny,
       points: pack.points + bonus,
       status: 'created',
@@ -373,6 +378,7 @@ button{width:100%;border:0;border-radius:9px;padding:11px;background:#4F46E5;col
     const m = GEN_MODELS.find((x) => x.id === b.model);
     if (!m) return err(reply, CLOUD_ERROR.NOT_FOUND, '模型不存在', 404);
     if (!b.prompt?.trim()) return err(reply, CLOUD_ERROR.INTERNAL, '提示词为空', 400);
+    if ((o.blockWords || []).some((w) => b.prompt.includes(w))) return err(reply, CLOUD_ERROR.CONTENT_BLOCKED, '内容未通过安全审核', 403);
     const cost = estimate(m, b);
     if (cost > round2(u.wallet.balance + u.wallet.freeToday)) return err(reply, CLOUD_ERROR.BALANCE_NOT_ENOUGH, `点数不足：需要 ${cost} 点，当前 ${round2(u.wallet.balance + u.wallet.freeToday)} 点`, 402);
     const frozen = freeze(u, cost);

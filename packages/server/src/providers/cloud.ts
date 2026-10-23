@@ -72,6 +72,7 @@ export class CloudProvider implements Provider {
     if (e instanceof CloudError) {
       if (e.isBalance) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用微信 / 支付宝充值');
       if (e.isAuth) return new ProviderError('E-AUTH-01', e.message || '登录已失效', '重新登录后重试');
+      if (e.code === CLOUD_ERROR.CONTENT_BLOCKED) return new ProviderError('E-SAFE-03', e.message || '内容未通过安全审核', '修改提示词或参考图后再试；这次没有扣点');
       if (e.code === CLOUD_ERROR.RATE_LIMITED) return new ProviderError('E-RATE-29', e.message, '稍后重试');
       if (e.code === CLOUD_ERROR.UPSTREAM_FAILED) return new ProviderError('E-UPS-50', e.message, e.requestId ? `带上请求 ID ${e.requestId} 联系支持` : '稍后重试');
       return new ProviderError('E-CLD-50', e.message, '稍后重试；持续失败请检查云端地址与网络');

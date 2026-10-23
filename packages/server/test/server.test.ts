@@ -230,3 +230,47 @@ describe('HTTP 边界', () => {
     await app.close();
   });
 });
+
+describe('决策：充值开放与内容审核', () => {
+  async function withCloud(opts: Parameters<typeof startMockCloud>[0], fn: (c: MockCloudHandle) => Promise<void>) {
+    const c = await startMockCloud({ jobMs: 60, ...opts });
+    try {
+      await fn(c);
+    } finally {
+      await c.close();
+    }
+  }
+
+  it('云端没有开通支付渠道：登录后 session.payChannels 为空，下单被拒绝', async () => {
+    await withCloud({ payChannels: [] }, async (c) => {
+      const core = await makeCore();
+      const st = core.store.settings;
+      st.cloud.baseUrl = c.url;
+      core.store.settings = st;
+      const start = await core.session.loginStart('web');
+      c.approveDevice(start.deviceCode);
+      await core.session.loginPoll();
+      expect(core.sessionInfo().payChannels).toEqual([]);
+      await expect(core.session.client.request('/billing/orders', { json: { packId: 'p10', channel: 'wechat' } })).rejects.toThrow();
+    });
+  });
+
+  it('内容审核拦截：任务失败、给出可修改的提示，且不扣点', async () => {
+    await withCloud({ blockWords: ['违禁词'] }, async (c) => {
+      const core = await makeCore();
+      const st = core.store.settings;
+      st.cloud.baseUrl = c.url;
+      core.store.settings = st;
+      const start = await core.session.loginStart('web');
+      c.approveDevice(start.deviceCode);
+      await core.session.loginPoll();
+      const before = core.session.wallet!.balance + core.session.wallet!.freeToday;
+      const j = core.runner.create({ type: 'image', ws: 'w1', model: 'cloud:g-img-1', prompt: '含有违禁词的描述', refs: [], ratio: '1:1', count: 1, res: '2k' });
+      const done = await waitJob(core, j.id);
+      expect(done.status).toBe('failed');
+      expect(done.fail?.code).toBe('E-SAFE-03');
+      await core.session.refreshWallet();
+      expect(core.session.wallet!.balance + core.session.wallet!.freeToday).toBe(before);
+    });
+  });
+});

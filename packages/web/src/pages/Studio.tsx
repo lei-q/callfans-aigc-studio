@@ -43,7 +43,7 @@ import {
   setPrompt,
   toggleAdv,
 } from '../store/actions';
-import { balance, boardOf, canvasItems, dailyFreeLeft, libResults, modelOf, modelsFor, queueJobs, routeInfo } from '../store/selectors';
+import { balance, boardOf, canvasItems, dailyFreeLeft, libResults, modelOf, modelsFor, queueJobs, routeInfo, topupOpen } from '../store/selectors';
 import { Editor } from './Editor';
 
 export function Studio() {
@@ -408,7 +408,7 @@ function Composer() {
         ) : (
           <button className="btn primary gen-btn" onClick={() => openDrawer('topup')} style={{ background: 'var(--amber)' }}>
             <Icon name="coins" />
-            点数不足 · 去充值
+            {topupOpen(s) ? '点数不足 · 去充值' : '点数不足 · 充值暂未开放'}
           </button>
         )}
         <div className="tiny dim">

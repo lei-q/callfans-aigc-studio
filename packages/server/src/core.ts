@@ -201,12 +201,7 @@ export class Core {
   }
 
   sessionInfo(): SessionInfo {
-    return {
-      loggedIn: this.session.loggedIn,
-      profile: this.session.profile || undefined,
-      cloudReachable: this.session.client.configured,
-      cloudMessage: this.session.client.configured ? undefined : '还没有配置云端地址',
-    };
+    return this.session.info();
   }
 
   appInfo(): AppInfo {

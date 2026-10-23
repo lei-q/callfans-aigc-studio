@@ -1,7 +1,7 @@
 /* ============================================================================
    领域类型：服务端与前端共用的一份数据合同
    ========================================================================== */
-import type { OrderDto, UserProfile, WalletDto } from './cloud';
+import type { OrderDto, PayChannel, UserProfile, WalletDto } from './cloud';
 
 export type MediaType = 'image' | 'video' | 'audio';
 export type ResKey = '1080p' | '2k' | '4k';
@@ -340,6 +340,8 @@ export interface SessionInfo {
   /** 登录页 / 云端不可达时的说明 */
   cloudReachable: boolean;
   cloudMessage?: string;
+  /** 云端当前开放的支付渠道；未知（还没探测到）为 undefined，明确为空数组表示暂未开放充值 */
+  payChannels?: PayChannel[];
 }
 
 export interface Bootstrap {

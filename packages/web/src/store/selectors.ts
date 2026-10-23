@@ -78,3 +78,6 @@ export function sourcePrompt(s: State, rid?: string) {
   const j = r ? jobById(s, r.job) : undefined;
   return { r, j };
 }
+
+/** 云端是否开放充值：明确返回空渠道才算未开放，未知时按开放处理（避免探测失败误藏入口） */
+export const topupOpen = (s: State) => !s.session || s.session.payChannels === undefined || s.session.payChannels.length > 0;

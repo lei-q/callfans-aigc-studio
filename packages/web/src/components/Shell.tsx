@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { TYPES, TYPE_KEYS } from '@aigc/shared';
 import { useStore } from '../store';
 import { createProject, openDrawer, openQueue, pickType, pickWs, switchPage } from '../store/actions';
-import { balance, failJobs, libResults, openJobs } from '../store/selectors';
+import { balance, failJobs, libResults, openJobs, topupOpen } from '../store/selectors';
 import { Icon } from './common';
 
 export function Topbar() {
@@ -12,6 +12,7 @@ export function Topbar() {
   const queue = openJobs(s).length;
   const bal = balance(s);
   const low = bal < 3;
+  const canTopup = topupOpen(s);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
 
@@ -136,11 +137,11 @@ export function Topbar() {
           )}
         </div>
         {s.session?.loggedIn ? (
-          <button className={`balance-chip ${low ? 'low' : ''}`} onClick={() => openDrawer('topup')} title="点数余额：点击充值">
+          <button className={`balance-chip ${low ? 'low' : ''}`} onClick={() => openDrawer(canTopup ? 'topup' : 'account')} title={canTopup ? '点数余额：点击充值' : '点数余额：充值暂未开放'}>
             <Icon name="coins" />
             <span className="bc-num num">{bal}</span>
             <span className="bc-unit">点</span>
-            <span className="bc-topup">{low ? '去充值' : '充值'}</span>
+            {canTopup && <span className="bc-topup">{low ? '去充值' : '充值'}</span>}
           </button>
         ) : (
           <button className="balance-chip login" onClick={() => openDrawer('account')} title="登录账号：点数跟着账号走">

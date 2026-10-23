@@ -1,4 +1,4 @@
-import type { CloudMeta, CloudTokens, DevicePollReply, DeviceStartReply, GatewayModel, OrderDto, UserProfile, WalletDto } from '@aigc/shared';
+import type { CloudMeta, CloudTokens, DevicePollReply, DeviceStartReply, GatewayModel, OrderDto, SessionInfo, UserProfile, WalletDto } from '@aigc/shared';
 import { CloudClient, CloudError } from './client';
 import type { EventHub } from '../events';
 import type { Secrets } from '../secrets';
@@ -49,6 +49,7 @@ export class CloudSession {
     const tokens = this.secrets.decryptCloudTokens(enc);
     if (!tokens) return;
     this.access = tokens;
+    await this.probe().catch(() => {});
     try {
       await this.fetchProfileAndWallet();
       this.status = 'logged_in';
@@ -83,6 +84,7 @@ export class CloudSession {
       await Promise.all([
         this.profile ? this.refreshWallet() : this.fetchProfileAndWallet(),
         this.refreshModels(),
+        this.probe(),
       ]).catch(() => {});
       this.startSse();
       this.emitSession();
@@ -233,16 +235,18 @@ export class CloudSession {
 
   /* ---------------- 广播 ---------------- */
 
+  info(): SessionInfo {
+    return {
+      loggedIn: this.loggedIn,
+      profile: this.profile || undefined,
+      cloudReachable: this.client.configured,
+      cloudMessage: this.client.configured ? undefined : '还没有配置云端地址',
+      payChannels: this.meta?.payChannels,
+    };
+  }
+
   private emitSession() {
-    this.events.emit({
-      type: 'session',
-      session: {
-        loggedIn: this.loggedIn,
-        profile: this.profile || undefined,
-        cloudReachable: this.client.configured,
-        cloudMessage: this.client.configured ? undefined : '还没有配置云端地址',
-      },
-    });
+    this.events.emit({ type: 'session', session: this.info() });
   }
 
   private emitWallet() {

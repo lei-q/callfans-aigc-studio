@@ -43,7 +43,7 @@ import {
 } from '../store/actions';
 import { addResultToCanvas } from '../canvas/ops';
 import { togglePlay } from '../store/player';
-import { balance, dailyFreeLeft, jobById, libResults, modelOf, queueJobs, resultById } from '../store/selectors';
+import { balance, dailyFreeLeft, jobById, libResults, modelOf, queueJobs, resultById, topupOpen } from '../store/selectors';
 import { cssOfEdit } from '../lib/util';
 import { Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, TypeChip, Wave } from '../components/common';
 
@@ -753,7 +753,9 @@ function TopupDrawer() {
         }
       />
       <div className="drawer-body">
-        {s.session?.loggedIn ? (
+        {s.session?.loggedIn && !topupOpen(s) ? (
+          <Empty icon="coins" title="充值暂未开放" desc="云端还没有开通支付渠道。已有的点数和每日免费额度可以继续使用；开放后这里会出现微信 / 支付宝充值。" />
+        ) : s.session?.loggedIn ? (
           paying && order ? (
             <PayPanel order={order} />
           ) : (
