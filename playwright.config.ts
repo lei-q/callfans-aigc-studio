@@ -32,7 +32,7 @@ export default defineConfig({
       url: `http://127.0.0.1:${port}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
-      env: { AIGC_CLOUD_URL: `http://127.0.0.1:${cloudPort}` },
+      env: { AIGC_CLOUD_URL: `http://127.0.0.1:${cloudPort}`, AIGC_ACCOUNT_PROVIDER: 'mock' },
     },
   ],
 });

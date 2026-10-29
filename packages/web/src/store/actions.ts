@@ -2,7 +2,10 @@ import type {
   AestheticItem,
   CreateJobBody,
   DevicePollReply,
-  DeviceStartReply,
+  ForgotReply,
+  RegisterCompleteReply,
+  RegisterStartReply,
+  LoginStartReply,
   Job,
   MediaType,
   OptimizeReply,
@@ -744,7 +747,7 @@ export async function aestheticAddFile() {
 
 export const canAfford = (s: State, cost: number) => affordable(s.wallet, cost);
 
-/* ---------------- 账号：设备码登录 ---------------- */
+/* ---------------- 账号：Fast-SSO（授权码 + PKCE）/ Mock 云设备码 ---------------- */
 
 export async function loginStart() {
   setState((st) => {
@@ -752,7 +755,7 @@ export async function loginStart() {
     st.loginFlow = null;
   });
   try {
-    const r = await api.post<DeviceStartReply>('/api/auth/login', {});
+    const r = await api.post<LoginStartReply>('/api/auth/login', {});
     setState((st) => void (st.loginFlow = { ...r, startedAt: Date.now() }));
     window.open(r.loginUrl, '_blank', 'noopener');
     void loginPollLoop();
@@ -796,7 +799,7 @@ export function loginPollLoop() {
     }
     pollTimer = setTimeout(step, (r ? 2 : flow.interval) * 1000);
   };
-  pollTimer = setTimeout(step, 1500);
+  pollTimer = setTimeout(step, 1200);
 }
 
 export function loginCancel() {
@@ -815,13 +818,46 @@ export async function logout() {
   }
 }
 
-/* ---------------- 充值：微信 / 支付宝在线支付 ---------------- */
+/* ---------------- 注册 / 找回密码 ---------------- */
+
+export async function loadAccountDocuments() {
+  return api.get<{ termsVersion: string; privacyVersion: string }>('/api/account/documents');
+}
+
+export async function registerStart(identifier: string) {
+  return api.post<RegisterStartReply>('/api/account/register/start', { identifier });
+}
+
+export async function registerComplete(body: {
+  challengeId: string;
+  identifier: string;
+  code: string;
+  password: string;
+  displayName?: string;
+  consents: { termsVersion: string; privacyVersion: string; marketing: boolean };
+}) {
+  return api.post<RegisterCompleteReply>('/api/account/register/complete', body);
+}
+
+export async function forgotPassword(identifier: string) {
+  return api.post<ForgotReply>('/api/account/password/forgot', { identifier });
+}
+
+export async function resetPassword(body: { challengeId: string; identifier: string; code: string; newPassword: string }) {
+  return api.post('/api/account/password/reset', body);
+}
+
+/* ---------------- 充值：Fast-SSO 积分档位 / 微信 / 支付宝 / 汇付 ---------------- */
 
 export async function loadPacks() {
   setState((st) => void (st.packsLoading = true));
   try {
     const { packs } = await api.get<{ packs: PackDto[] }>('/api/billing/packs');
-    setState((st) => void (st.packs = packs));
+    setState((st) => {
+      st.packs = packs;
+      const chans = st.session?.payChannels || [];
+      if (chans.length && !chans.includes(st.payChannel)) st.payChannel = chans[0]!;
+    });
   } catch (e) {
     toastError(e, '没能拉到充值档位');
   } finally {
@@ -829,14 +865,44 @@ export async function loadPacks() {
   }
 }
 
+function newCheckoutKey() {
+  const c = globalThis.crypto as Crypto | undefined;
+  return c?.randomUUID?.() || `ck-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export async function createOrder(packId: string, channel: PayChannel) {
+  /* 幂等键：网络超时重试复用同一个；成功后再生成新的 */
+  const key = getState().checkoutKey || newCheckoutKey();
+  setState((st) => void (st.checkoutKey = key));
   try {
-    const { order } = await api.post<{ order: OrderDto }>('/api/billing/orders', { packId, channel });
+    const { order } = await api.post<{ order: OrderDto }>('/api/billing/orders', { packId, channel, idempotencyKey: key });
     setState((st) => void (st.activeOrder = order));
+    let next = order;
+    try {
+      const pre = await api.post<{ order: OrderDto }>(`/api/billing/orders/${encodeURIComponent(order.id)}/prepay`, {});
+      next = pre.order;
+      setState((st) => void (st.activeOrder = pre.order));
+    } catch (e) {
+      toastError(e, '生成收款码失败');
+    }
+    setState((st) => void (st.checkoutKey = null));
     void pollOrder(order.id);
-    return order;
+    return next;
   } catch (e) {
     toastError(e, '下单失败');
+    return null;
+  }
+}
+
+/** 重新展示已有订单的收款码（关闭弹窗再打开 / 上次 prepay 失败） */
+export async function prepayOrder(id: string) {
+  try {
+    const { order } = await api.post<{ order: OrderDto }>(`/api/billing/orders/${encodeURIComponent(id)}/prepay`, {});
+    setState((st) => void (st.activeOrder = order));
+    void pollOrder(id);
+    return order;
+  } catch (e) {
+    toastError(e, '获取收款码失败');
     return null;
   }
 }
@@ -853,7 +919,7 @@ export function pollOrder(id: string) {
       return;
     }
     try {
-      const { order } = await api.get<{ order: OrderDto }>(`/api/billing/orders/${id}`);
+      const { order } = await api.get<{ order: OrderDto }>(`/api/billing/orders/${encodeURIComponent(id)}`);
       setState((st) => {
         st.activeOrder = order;
         const i = st.orders.findIndex((x) => x.id === order.id);
@@ -870,7 +936,7 @@ export function pollOrder(id: string) {
     }
     orderTimer = setTimeout(step, 2000);
   };
-  orderTimer = setTimeout(step, 1500);
+  orderTimer = setTimeout(step, 1200);
 }
 
 export function closeActiveOrder() {

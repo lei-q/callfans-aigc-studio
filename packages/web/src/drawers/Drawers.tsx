@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import type { Job, OrderDto, Result } from '@aigc/shared';
+import type { AccountDocuments, ForgotReply, Job, OrderDto, RegisterStartReply, Result } from '@aigc/shared';
 import { HELP_TOPICS, MAX_REFS, POST_PLATFORMS, TYPES, mmss, paramsBrief, timeLabel } from '@aigc/shared';
 import { useStore } from '../store';
 import {
@@ -16,9 +16,11 @@ import {
   downloadResult,
   favResult,
   fixJob,
+  forgotPassword,
   goJobs,
   goStudio,
   helpJump,
+  loadAccountDocuments,
   loadOrders,
   loadPacks,
   loginCancel,
@@ -36,8 +38,12 @@ import {
   postItemShift,
   postPlatform,
   postSave,
+  prepayOrder,
   refPool,
+  registerComplete,
+  registerStart,
   renameProject,
+  resetPassword,
   retryJob,
   saveMeta,
 } from '../store/actions';
@@ -578,7 +584,10 @@ function RefAddDrawer() {
   );
 }
 
-/* ---------------- 账号：登录 / 账户 ---------------- */
+/* ---------------- 账号：登录 / 注册 / 找回 ---------------- */
+
+const CHANNEL_LABEL: Record<string, string> = { huifu: '汇付聚合', wechat: '微信支付', alipay: '支付宝' };
+const channelName = (c: string) => CHANNEL_LABEL[c] || c;
 
 function Qr({ content, size = 168 }: { content: string; size?: number }) {
   const [url, setUrl] = useState('');
@@ -594,9 +603,270 @@ function Qr({ content, size = 168 }: { content: string; size?: number }) {
   return url ? <img className="qr-img" src={url} alt="二维码" width={size} height={size} /> : <div className="qr-img qr-empty" style={{ width: size, height: size }} />;
 }
 
+/** 验证码倒计时：每次发送（resetKey 变化）从 seconds 重新开始 */
+function useResend(seconds: number, resetKey: number) {
+  const [left, setLeft] = useState(seconds);
+  useEffect(() => {
+    setLeft(seconds);
+  }, [seconds, resetKey]);
+  useEffect(() => {
+    if (left <= 0) return;
+    const t = setTimeout(() => setLeft((n) => Math.max(0, n - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [left]);
+  return left;
+}
+
+function RegisterForm({ onBack }: { onBack: () => void }) {
+  const [identifier, setIdentifier] = useState('');
+  const [start, setStart] = useState<RegisterStartReply | null>(null);
+  const [docs, setDocs] = useState<AccountDocuments | null>(null);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [agree, setAgree] = useState(false);
+  const [marketing, setMarketing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const [done, setDone] = useState<{ username: string } | null>(null);
+  const left = useResend(start ? start.resendAfterSeconds : 0, nonce);
+
+  useEffect(() => {
+    void loadAccountDocuments()
+      .then(setDocs)
+      .catch(() => setDocs(null));
+  }, []);
+
+  const send = async () => {
+    setErr(null);
+    if (!identifier.trim()) return setErr('请填写手机号或邮箱');
+    setBusy(true);
+    try {
+      const r = await registerStart(identifier.trim());
+      setStart(r);
+      setNonce((n) => n + 1);
+      setErr(null);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!start) return;
+    setErr(null);
+    if (!/^\d{6}$/.test(code.trim())) return setErr('验证码是 6 位数字');
+    if (password.length < 10 || password.length > 128) return setErr('密码需要 10–128 位');
+    if (!agree) return setErr('请先同意用户协议与隐私政策');
+    if (!docs) return setErr('条款版本还没读到，请检查网络后重试');
+    setBusy(true);
+    try {
+      const r = await registerComplete({
+        challengeId: start.challengeId,
+        identifier: identifier.trim(),
+        code: code.trim(),
+        password,
+        displayName: name.trim() || undefined,
+        consents: { termsVersion: docs?.termsVersion || '', privacyVersion: docs?.privacyVersion || '', marketing },
+      });
+      setDone({ username: r.username });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <div className="auth-wait">
+        <div className="auth-wait-ic">
+          <Icon name="check" />
+        </div>
+        <b>账号已创建</b>
+        <span className="tiny dim">用户名 {done.username}。现在用刚才的密码登录就能开始使用。</span>
+        <button className="btn primary" onClick={onBack}>
+          去登录
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="field-block">
+        <div className="field-head">
+          <span className="field-label">手机号 / 邮箱</span>
+        </div>
+        <input
+          className="form-input"
+          value={identifier}
+          onChange={(e) => setIdentifier(e.target.value)}
+          placeholder="用于接收验证码"
+          autoComplete="username"
+          disabled={!!start}
+        />
+      </div>
+      {!start ? (
+        <div className="auth-actions">
+          <button className="btn primary" disabled={busy} onClick={() => void send()}>
+            {busy ? '正在发送…' : '获取验证码'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="field-block">
+            <div className="field-head">
+              <span className="field-label">验证码</span>
+              <span className="grow" />
+              <button className="link-btn" disabled={left > 0 || busy} onClick={() => void send()}>
+                {left > 0 ? `${left}s 后重发` : '重新发送'}
+              </button>
+            </div>
+            <input className="form-input num" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6 位数字" inputMode="numeric" autoComplete="one-time-code" />
+            <div className="field-hint">验证码已发送到 {start.maskedIdentifier || identifier}</div>
+          </div>
+          <div className="field-block">
+            <div className="field-head">
+              <span className="field-label">设置密码</span>
+            </div>
+            <input className="form-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="10–128 位，含大小写字母、数字和符号" autoComplete="new-password" />
+          </div>
+          <div className="field-block">
+            <div className="field-head">
+              <span className="field-label">昵称</span>
+              <span className="field-hint">选填</span>
+            </div>
+            <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="显示在账号里的名字" maxLength={40} />
+          </div>
+          <div className="field-block">
+            <label className="auth-consent">
+              <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+              <span>
+                我已阅读并同意
+                {docs ? `《用户协议》${docs.termsVersion} 与《隐私政策》${docs.privacyVersion}` : '用户协议与隐私政策'}
+              </span>
+            </label>
+            <label className="auth-consent">
+              <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} />
+              <span>接收产品更新与优惠信息（可随时退订）</span>
+            </label>
+          </div>
+          <div className="auth-actions">
+            <button className="btn primary" disabled={busy} onClick={() => void submit()}>
+              {busy ? '正在创建…' : '创建账号'}
+            </button>
+          </div>
+        </>
+      )}
+      {err && <div className="auth-err">{err}</div>}
+    </>
+  );
+}
+
+function ForgotForm({ onBack }: { onBack: () => void }) {
+  const [identifier, setIdentifier] = useState('');
+  const [start, setStart] = useState<ForgotReply | null>(null);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const send = async () => {
+    setErr(null);
+    if (!identifier.trim()) return setErr('请填写手机号或邮箱');
+    setBusy(true);
+    try {
+      setStart(await forgotPassword(identifier.trim()));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!start) return;
+    setErr(null);
+    if (!/^\d{6}$/.test(code.trim())) return setErr('验证码是 6 位数字');
+    if (password.length < 10 || password.length > 128) return setErr('密码需要 10–128 位');
+    setBusy(true);
+    try {
+      await resetPassword({ challengeId: start.challengeId, identifier: identifier.trim(), code: code.trim(), newPassword: password });
+      setDone(true);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <div className="auth-wait">
+        <div className="auth-wait-ic">
+          <Icon name="check" />
+        </div>
+        <b>密码已重置</b>
+        <span className="tiny dim">用新密码登录即可。</span>
+        <button className="btn primary" onClick={onBack}>
+          去登录
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="field-block">
+        <div className="field-head">
+          <span className="field-label">手机号 / 邮箱</span>
+        </div>
+        <input className="form-input" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="注册时用的号码或邮箱" disabled={!!start} />
+      </div>
+      {!start ? (
+        <div className="auth-actions">
+          <button className="btn primary" disabled={busy} onClick={() => void send()}>
+            {busy ? '正在发送…' : '获取验证码'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="field-block">
+            <div className="field-head">
+              <span className="field-label">验证码</span>
+              <span className="grow" />
+              <button className="link-btn" disabled={busy} onClick={() => void send()}>
+                重新发送
+              </button>
+            </div>
+            <input className="form-input num" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6 位数字" inputMode="numeric" autoComplete="one-time-code" />
+          </div>
+          <div className="field-block">
+            <div className="field-head">
+              <span className="field-label">新密码</span>
+            </div>
+            <input className="form-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="10–128 位，含大小写字母、数字和符号" autoComplete="new-password" />
+          </div>
+          <div className="auth-actions">
+            <button className="btn primary" disabled={busy} onClick={() => void submit()}>
+              {busy ? '正在重置…' : '重置密码'}
+            </button>
+          </div>
+        </>
+      )}
+      {err && <div className="auth-err">{err}</div>}
+    </>
+  );
+}
+
 function AccountDrawer() {
   const s = useStore();
   const flow = s.loginFlow;
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   if (s.session?.loggedIn) {
     const p = s.session.profile;
     return (
@@ -642,53 +912,112 @@ function AccountDrawer() {
       </>
     );
   }
+  const registerEnabled = !!s.session?.registerEnabled;
+  const browser = flow?.mode === 'browser';
   return (
     <>
-      <Head ic="user" title="登录账号" sub={<span>点数、订单与用量跟着账号走；换一台设备登录就能接着用</span>} />
+      <Head
+        ic="user"
+        title={mode === 'login' ? '登录账号' : mode === 'register' ? '注册账号' : '找回密码'}
+        sub={<span>点数、订单与用量跟着账号走；换一台设备登录就能接着用</span>}
+      />
       <div className="drawer-body">
-        {!flow ? (
-          <Empty icon="user" title="还没有登录" desc={s.loginError || '登录后才能用平台点数生成；也可以在「设置 · 直连」里填自己的 TreeCloud Key。'}>
-            <button className="btn primary" onClick={() => void loginStart()}>
-              <Icon name="send" />
-              开始登录
-            </button>
-          </Empty>
+        {mode === 'login' ? (
+          <>
+            {!flow ? (
+              <Empty
+                icon="user"
+                title="还没有登录"
+                desc={
+                  s.loginError ||
+                  (s.settings?.account.provider === 'fastsso'
+                    ? '登录后可以查看余额、充值与订单；生成请在「设置 · 直连 TreeCloud」填自己的 Key。'
+                    : '登录后才能用平台点数生成；也可以在「设置 · 直连」里填自己的 TreeCloud Key。')
+                }
+              >
+                <div className="auth-actions">
+                  <button className="btn primary" onClick={() => void loginStart()}>
+                    <Icon name="user" />
+                    {s.session?.loginMode === 'device' ? '开始登录' : '使用账号登录'}
+                  </button>
+                  {registerEnabled && (
+                    <button className="btn ghost" onClick={() => setMode('register')}>
+                      注册新账号
+                    </button>
+                  )}
+                </div>
+              </Empty>
+            ) : browser ? (
+              <div className="auth-wait">
+                <div className="auth-wait-ic">
+                  <Icon name="shield" />
+                </div>
+                <b>已在浏览器中打开登录页</b>
+                <span className="tiny dim">在浏览器里完成登录或注册，授权完成后这个抽屉会自动继续。</span>
+                <a className="btn ghost" href={flow.loginUrl} target="_blank" rel="noreferrer">
+                  重新打开登录页
+                </a>
+                <span className="chip info">
+                  <span className="cdot" />
+                  等待授权…
+                </span>
+              </div>
+            ) : (
+              <div className="login-box">
+                {flow.qrContent && (
+                  <div className="login-qr">
+                    <Qr content={flow.qrContent} />
+                  </div>
+                )}
+                <div className="login-steps">
+                  <b>{flow.qrContent ? '用手机扫码，或' : '在浏览器中继续'}</b>
+                  <a href={flow.loginUrl} target="_blank" rel="noreferrer">
+                    在浏览器里打开登录页
+                  </a>
+                  <span className="tiny dim">在登录页确认后就完成授权；这个抽屉会自动继续。</span>
+                  <span className="chip info">
+                    <span className="cdot" />
+                    等待确认…
+                  </span>
+                </div>
+              </div>
+            )}
+            <div className="d-section">
+              <div className="ai-note">
+                <div className="ai-note-head">
+                  <Icon name="shield" />
+                  账号与点数
+                </div>
+                <ul>
+                  <li>充值走汇付聚合 / 微信支付 / 支付宝，点数实时到账，不过期。</li>
+                  <li>生成失败或取消，冻结的点数自动退回。</li>
+                  <li>本机的项目、画板与素材仍留在这台电脑上；账号负责点数与订单归属。</li>
+                </ul>
+              </div>
+            </div>
+            {registerEnabled && !flow && (
+              <div className="auth-links">
+                <button className="link-btn" onClick={() => setMode('forgot')}>
+                  忘记密码？
+                </button>
+              </div>
+            )}
+          </>
+        ) : mode === 'register' ? (
+          <RegisterForm onBack={() => setMode('login')} />
         ) : (
-          <div className="login-box">
-            <div className="login-qr">
-              <Qr content={flow.qrContent} />
-            </div>
-            <div className="login-steps">
-              <b>用手机扫码，或</b>
-              <a href={flow.loginUrl} target="_blank" rel="noreferrer">
-                在浏览器里打开登录页
-              </a>
-              <span className="tiny dim">在登录页确认后就完成授权；这个抽屉会自动继续。</span>
-              <span className="chip info">
-                <span className="cdot" />
-                等待确认…
-              </span>
-            </div>
-          </div>
+          <ForgotForm onBack={() => setMode('login')} />
         )}
-        <div className="d-section">
-          <div className="ai-note">
-            <div className="ai-note-head">
-              <Icon name="shield" />
-              账号与点数
-            </div>
-            <ul>
-              <li>充值走微信支付 / 支付宝，点数实时到账，不过期。</li>
-              <li>生成失败或取消，冻结的点数自动退回。</li>
-              <li>本机的项目、画板与素材仍留在这台电脑上；账号负责点数与订单归属。</li>
-            </ul>
-          </div>
-        </div>
       </div>
       <div className="drawer-foot">
         {flow && (
           <button className="btn ghost" onClick={loginCancel}>
             取消
+          </button>
+        )}
+        {mode !== 'login' && (
+          <button className="btn ghost" onClick={() => setMode('login')}>
+            返回登录
           </button>
         )}
         <span className="grow" />
@@ -707,14 +1036,13 @@ function OrderList() {
     if (!loaded) void loadOrders();
   }, [loaded]);
   if (!orders.length) return <div className="tiny dim">还没有订单。充值后会在这里留下记录。</div>;
-  const name = (ch: string) => (ch === 'wechat' ? '微信支付' : ch === 'alipay' ? '支付宝' : ch);
   return (
     <div className="order-list">
       {orders.slice(0, 8).map((o) => (
         <div key={o.id} className="order-row">
           <span className="or-ch">
             <Icon name={o.channel === 'wechat' ? 'check' : 'coins'} />
-            {name(o.channel)}
+            {channelName(o.channel)}
           </span>
           <span className="grow or-name">{o.packName}</span>
           <span className="num or-pts">+{o.points} 点</span>
@@ -729,17 +1057,23 @@ function OrderList() {
   );
 }
 
-/* ---------------- 充值：微信 / 支付宝在线支付 ---------------- */
+/* ---------------- 充值：积分档位 / 汇付 / 微信 / 支付宝 ---------------- */
 
 function TopupDrawer() {
   const s = useStore();
   const order = s.activeOrder;
+  const loggedIn = !!s.session?.loggedIn;
   useEffect(() => {
-    void loadPacks();
-    void loadOrders();
+    /* 档位、渠道与订单都要登录后才能读，未登录时不打这两个接口 */
+    if (loggedIn) {
+      void loadPacks();
+      void loadOrders();
+    }
     return () => closeActiveOrder();
-  }, []);
+  }, [loggedIn]);
   const paying = order && (order.status === 'created' || order.status === 'paying');
+  /* 渠道以账号服务返回为准；undefined 表示还没读到，不展示选择 */
+  const chans = s.session?.payChannels;
   return (
     <>
       <Head
@@ -754,7 +1088,7 @@ function TopupDrawer() {
       />
       <div className="drawer-body">
         {s.session?.loggedIn && !topupOpen(s) ? (
-          <Empty icon="coins" title="充值暂未开放" desc="云端还没有开通支付渠道。已有的点数和每日免费额度可以继续使用；开放后这里会出现微信 / 支付宝充值。" />
+          <Empty icon="coins" title="充值暂未开放" desc="账号服务还没有开通支付渠道。已有的点数和每日免费额度可以继续使用；开放后这里会出现充值入口。" />
         ) : s.session?.loggedIn ? (
           paying && order ? (
             <PayPanel order={order} />
@@ -783,26 +1117,26 @@ function TopupDrawer() {
                   ))}
                 </div>
                 {s.packsLoading && <div className="tiny dim">正在读取档位…</div>}
+                {!s.packsLoading && !s.packs.length && <div className="tiny dim">账号服务暂无可用档位。</div>}
               </div>
-              <div className="d-section">
-                <div className="d-section-title">
-                  <Icon name="link" />
-                  支付渠道
+              {chans && chans.length > 0 && (
+                <div className="d-section">
+                  <div className="d-section-title">
+                    <Icon name="link" />
+                    支付渠道
+                  </div>
+                  <div className="mini-tabs">
+                    {chans.map((k) => (
+                      <button key={k} className={s.payChannel === k ? 'active' : ''} onClick={() => useStore.setState((st) => void (st.payChannel = k))}>
+                        {channelName(k)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="tiny dim" style={{ marginTop: 8 }}>
+                    选好档位后生成收款码，用手机扫码完成支付；点数实时到账。
+                  </div>
                 </div>
-                <div className="mini-tabs">
-                  {(
-                    [
-                      ['wechat', '微信支付'],
-                      ['alipay', '支付宝'],
-                    ] as const
-                  ).map(([k, n]) => (
-                    <button key={k} className={s.payChannel === k ? 'active' : ''} onClick={() => useStore.setState((st) => void (st.payChannel = k))}>
-                      {n}
-                    </button>
-                  ))}
-                </div>
-                <div className="tiny dim" style={{ marginTop: 8 }}>选好档位后生成收款码，用手机扫码完成支付；点数实时到账。</div>
-              </div>
+              )}
               <div className="d-section">
                 <div className="d-section-title">
                   <Icon name="shield" />
@@ -853,7 +1187,7 @@ function TopupDrawer() {
       <div className="drawer-foot">
         <span className="tiny dim">
           <Icon name="shield" />
-          支付由微信 / 支付宝完成，本平台不接触你的支付密码
+          支付由汇付 / 微信 / 支付宝完成，本平台不接触你的支付密码
         </span>
         <span className="grow" />
         <button className="btn ghost" onClick={closeDrawer}>
@@ -867,33 +1201,55 @@ function TopupDrawer() {
 function PayPanel({ order }: { order: OrderDto }) {
   const left = Math.max(0, Math.round((order.expireAt - Date.now()) / 1000));
   const [sec, setSec] = useState(left);
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     const t = setInterval(() => setSec(Math.max(0, Math.round((order.expireAt - Date.now()) / 1000))), 1000);
     return () => clearInterval(t);
   }, [order.expireAt]);
-  const chName = order.channel === 'wechat' ? '微信' : '支付宝';
+  const ch = channelName(order.channel);
+  const qr = order.qrContent || order.cashierUrl || '';
+  const paid = order.status === 'paid';
   return (
     <div className="pay-panel">
       <div className="pay-head">
-        <span className={`pay-ch ${order.channel}`}>{chName}支付</span>
+        <span className={`pay-ch ${order.channel}`}>{ch}</span>
         <span className="grow" />
-        <span className="tiny dim num">{mmss(sec)} 后过期</span>
+        <span className="tiny dim num">{paid ? '已支付' : `${mmss(sec)} 后过期`}</span>
       </div>
-      <div className="pay-qr">
-        <Qr content={order.qrContent || order.cashierUrl || ''} size={190} />
-      </div>
+      {qr ? (
+        <div className="pay-qr">
+          <Qr content={qr} size={190} />
+        </div>
+      ) : (
+        <div className="pay-qr">
+          <div className="qr-img qr-empty" style={{ width: 190, height: 190 }} />
+          <button
+            className="btn ghost"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              await prepayOrder(order.id);
+              setBusy(false);
+            }}
+          >
+            {busy ? '正在获取…' : '刷新收款码'}
+          </button>
+        </div>
+      )}
       <div className="pay-amount num">¥{order.amountCny.toFixed(2)}</div>
-      <div className="pay-pts">
-        到账 {order.points} 点{order.points > 0 ? '' : ''}
-      </div>
+      <div className="pay-pts">到账 {order.points} 点</div>
       <div className="pay-tip tiny dim">
-        打开{chName}扫一扫完成支付；支付成功后点数自动到账，这个页面会自动继续。
-        <br />
-        电脑端也可以<a href={order.cashierUrl} target="_blank" rel="noreferrer">打开收银台</a>完成支付。
+        {paid ? '支付已完成，点数已到账。' : `打开${ch}扫一扫完成支付；支付成功后点数自动到账，这个页面会自动继续。`}
+        {order.cashierUrl && (
+          <>
+            <br />
+            电脑端也可以<a href={order.cashierUrl} target="_blank" rel="noreferrer">打开收银台</a>完成支付。
+          </>
+        )}
       </div>
       <div className="pay-actions">
         <button className="btn ghost" onClick={closeActiveOrder}>
-          取消这笔订单
+          {paid ? '完成' : '取消这笔订单'}
         </button>
       </div>
     </div>

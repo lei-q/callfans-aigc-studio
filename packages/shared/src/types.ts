@@ -2,6 +2,7 @@
    领域类型：服务端与前端共用的一份数据合同
    ========================================================================== */
 import type { OrderDto, PayChannel, UserProfile, WalletDto } from './cloud';
+import type { AccountConfig } from './account';
 
 export type MediaType = 'image' | 'video' | 'audio';
 export type ResKey = '1080p' | '2k' | '4k';
@@ -298,7 +299,9 @@ export interface CheckInfo {
 }
 
 export interface Settings {
-  /** 云端地址（账号 / 积分 / 支付 / 网关） */
+  /** 账号服务（Fast-SSO 登录 / 注册 / 积分 / 充值） */
+  account: AccountConfig;
+  /** 可选：平台生成网关地址；未接入时留空，生成只走直连 TreeCloud */
   cloud: { baseUrl: string };
   runner: { concurrency: number };
   /** 高级选项：用户自填 TreeCloud Key 直连，不扣平台点数 */
@@ -342,6 +345,10 @@ export interface SessionInfo {
   cloudMessage?: string;
   /** 云端当前开放的支付渠道；未知（还没探测到）为 undefined，明确为空数组表示暂未开放充值 */
   payChannels?: PayChannel[];
+  /** browser：系统浏览器 OIDC 授权码；device：设备码（开发用 Mock 云） */
+  loginMode?: 'browser' | 'device';
+  /** 是否支持在应用内注册 / 找回密码（Fast-SSO 账号服务） */
+  registerEnabled?: boolean;
 }
 
 export interface Bootstrap {

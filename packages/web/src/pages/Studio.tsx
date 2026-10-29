@@ -41,6 +41,7 @@ import {
   setNegative,
   setParam,
   setPrompt,
+  switchPage,
   toggleAdv,
 } from '../store/actions';
 import { balance, boardOf, canvasItems, dailyFreeLeft, libResults, modelOf, modelsFor, queueJobs, routeInfo, topupOpen } from '../store/selectors';
@@ -166,6 +167,7 @@ function Composer() {
   const T = TYPES[t];
   const m = modelOf(s, p.model);
   const cost = estCost(s);
+  const fastsso = s.settings?.account.provider === 'fastsso';
   const route = routeInfo(s, t, t === 'audio' ? p.use : undefined);
   const enough = route.kind === 'direct' ? true : route.kind === 'cloud' ? canAfford(s, cost) : false;
   const opt = s.optimize;
@@ -396,9 +398,12 @@ function Composer() {
             已加入队列
           </button>
         ) : route.kind === null ? (
-          <button className="btn primary gen-btn" onClick={() => openDrawer(s.session?.loggedIn ? 'topup' : 'account')}>
-            <Icon name={s.session?.loggedIn ? 'coins' : 'user'} />
-            {s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
+          <button
+            className="btn primary gen-btn"
+            onClick={() => (fastsso ? switchPage('settings') : openDrawer(s.session?.loggedIn ? 'topup' : 'account'))}
+          >
+            <Icon name={fastsso ? 'gear' : s.session?.loggedIn ? 'coins' : 'user'} />
+            {fastsso ? '配置直连后生成' : s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
           </button>
         ) : enough ? (
           <button className="btn primary gen-btn" onClick={() => void gen()}>

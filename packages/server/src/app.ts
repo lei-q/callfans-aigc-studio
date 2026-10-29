@@ -9,6 +9,8 @@ import type { AestheticItem, Board, OrderDto, PackDto, Post, Project, Result, Se
 import { PROJECT_DOTS, uid } from '@aigc/shared';
 import { enhanceAgent, optimizePrompt } from './assist';
 import { CloudError } from './cloud/client';
+import { ConsumerError } from './account/consumer';
+import { OidcError } from './account/oidc';
 import type { Core } from './core';
 import { mimeOfExt } from './core';
 import { linkPreview } from './linkPreview';
@@ -49,6 +51,15 @@ button{margin-top:12px;width:100%;border:0;border-radius:9px;padding:10px;backgr
 
 const cloudErr = (e: unknown) => {
   if (e instanceof CloudError) return new HttpError(e.status >= 400 && e.status < 600 ? e.status : 502, e.message, e.requestId ? `请求 ID ${e.requestId}` : undefined);
+  return e as HttpError;
+};
+
+const accountErr = (e: unknown) => {
+  if (e instanceof ConsumerError) {
+    const detail = e.fields ? Object.entries(e.fields).map(([k, v]) => `${k}: ${v}`).join('；') : undefined;
+    return new HttpError(e.status >= 400 && e.status < 600 ? e.status : 502, e.message, detail);
+  }
+  if (e instanceof OidcError) return new HttpError(e.status >= 400 && e.status < 600 ? e.status : 502, e.message);
   return e as HttpError;
 };
 
@@ -171,62 +182,163 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     });
   });
 
-  /* ---------------- 账号（云端） ---------------- */
+  /* ---------------- 账号（Fast-SSO / Mock 云） ---------------- */
 
-  app.get('/api/auth/session', async () => ({ session: core.sessionInfo(), wallet: core.session.wallet }));
+  const fastsso = core.provider === 'fastsso';
+
+  app.get('/api/auth/session', async () => ({ session: core.sessionInfo(), wallet: core.account.wallet }));
   app.post('/api/auth/login', async (req) => {
     const body = (req.body || {}) as { deviceName?: string };
-    return core.session.loginStart(core.opts.desktop ? 'desktop' : 'web', body.deviceName).catch((e) => {
-      throw cloudErr(e);
+    return core.account.loginStart(core.opts.desktop ? 'desktop' : 'web', body.deviceName).catch((e) => {
+      throw fastsso ? accountErr(e) : cloudErr(e);
     });
   });
   app.post('/api/auth/poll', async () => {
-    const r = await core.session.loginPoll().catch((e) => {
-      throw cloudErr(e);
+    const r = await core.account.loginPoll().catch((e) => {
+      throw fastsso ? accountErr(e) : cloudErr(e);
     });
-    if (r.status === 'approved') {
+    if (r.status === 'approved' && !fastsso) {
       core.store.cloudModelsCache = core.session.models;
       core.emitModels();
     }
     return r;
   });
   app.post('/api/auth/cancel', async () => {
-    core.session.loginCancel();
+    core.account.loginCancel();
     return { ok: true };
   });
   app.post('/api/auth/logout', async () => {
-    await core.session.logout();
+    await core.account.logout();
     core.emitModels();
     return { ok: true };
   });
 
-  /* ---------------- 计费（云端） ---------------- */
+  /* ---------------- 注册 / 找回密码（Fast-SSO 公开接口） ---------------- */
 
-  app.get('/api/billing/packs', async () => ({
-    packs: await core.session.client.request<PackDto[]>('/billing/packs').catch((e) => {
-      throw cloudErr(e);
-    }),
-  }));
+  const requireFastsso = () => {
+    if (!fastsso) throw new HttpError(400, '当前是开发用 Mock 云，不支持应用内注册');
+  };
+
+  app.get('/api/account/documents', async () => {
+    requireFastsso();
+    return core.accounts.documents().catch((e) => {
+      throw accountErr(e);
+    });
+  });
+  app.post('/api/account/register/start', async (req) => {
+    requireFastsso();
+    const { identifier } = S.registerStartSchema.parse(req.body);
+    return core.accounts.registerStart(identifier).catch((e) => {
+      throw accountErr(e);
+    });
+  });
+  app.post('/api/account/register/complete', async (req) => {
+    requireFastsso();
+    const body = S.registerCompleteSchema.parse(req.body);
+    return core.accounts.registerComplete(body).catch((e) => {
+      throw accountErr(e);
+    });
+  });
+  app.post('/api/account/password/forgot', async (req) => {
+    requireFastsso();
+    const { identifier } = S.forgotSchema.parse(req.body);
+    return core.accounts.forgotPassword(identifier).catch((e) => {
+      throw accountErr(e);
+    });
+  });
+  app.post('/api/account/password/reset', async (req) => {
+    requireFastsso();
+    const body = S.resetPasswordSchema.parse(req.body);
+    return core.accounts.resetPassword(body).catch((e) => {
+      throw accountErr(e);
+    });
+  });
+
+  /* ---------------- 计费（Fast-SSO / Mock 云） ---------------- */
+
+  app.get('/api/billing/packs', async () => {
+    if (fastsso) {
+      return {
+        packs: await core.accounts.skus().catch((e) => {
+          throw accountErr(e);
+        }),
+      };
+    }
+    return {
+      packs: await core.session.client.request<PackDto[]>('/billing/packs').catch((e) => {
+        throw cloudErr(e);
+      }),
+    };
+  });
   app.post('/api/billing/orders', async (req) => {
     const body = S.orderSchema.parse(req.body);
-    const order = await core.session.client.request<OrderDto>('/billing/orders', { json: body }).catch((e) => {
+    if (fastsso) {
+      const order = await core.accounts.createOrder(body).catch((e) => {
+        throw accountErr(e);
+      });
+      core.events.emit({ type: 'order', order });
+      return { order };
+    }
+    const order = await core.session.client.request<OrderDto>('/billing/orders', { json: { packId: body.packId, channel: body.channel } }).catch((e) => {
       throw cloudErr(e);
     });
     core.events.emit({ type: 'order', order });
     return { order };
   });
-  app.get('/api/billing/orders/:id', async (req) => ({
-    order: await core.session.client.request<OrderDto>(`/billing/orders/${encodeURIComponent((req.params as { id: string }).id)}`).catch((e) => {
+  app.post('/api/billing/orders/:id/prepay', async (req) => {
+    const id = (req.params as { id: string }).id;
+    if (!fastsso) {
+      return {
+        order: await core.session.client.request<OrderDto>(`/billing/orders/${encodeURIComponent(id)}`).catch((e) => {
+          throw cloudErr(e);
+        }),
+      };
+    }
+    const { order } = await core.accounts.prepay(id).catch((e) => {
+      throw accountErr(e);
+    });
+    core.events.emit({ type: 'order', order });
+    return { order };
+  });
+  app.get('/api/billing/orders/:id', async (req) => {
+    const id = (req.params as { id: string }).id;
+    if (fastsso) {
+      const order = await core.accounts.getOrder(id).catch((e) => {
+        throw accountErr(e);
+      });
+      core.events.emit({ type: 'order', order });
+      return { order };
+    }
+    const order = await core.session.client.request<OrderDto>(`/billing/orders/${encodeURIComponent(id)}`).catch((e) => {
       throw cloudErr(e);
+    });
+    return { order };
+  });
+  app.get('/api/billing/orders', async () => {
+    if (fastsso) {
+      return {
+        orders: await core.accounts.listOrders().catch((e) => {
+          throw accountErr(e);
+        }),
+      };
+    }
+    return {
+      orders: await core.session.client.request<OrderDto[]>('/billing/orders').catch((e) => {
+        throw cloudErr(e);
+      }),
+    };
+  });
+  app.post('/api/billing/wallet/refresh', async () => ({
+    wallet: await (fastsso ? core.accounts : core.session).refreshWallet().catch((e) => {
+      throw fastsso ? accountErr(e) : cloudErr(e);
     }),
   }));
-  app.get('/api/billing/orders', async () => ({
-    orders: await core.session.client.request<OrderDto[]>('/billing/orders').catch((e) => {
-      throw cloudErr(e);
-    }),
-  }));
-  app.post('/api/billing/wallet/refresh', async () => ({ wallet: await core.session.refreshWallet() }));
   app.get('/api/usage/summary', async (req) => {
+    /* 平台生成网关尚未接入：账号服务没有按模型的用量明细，返回空汇总 */
+    if (fastsso) {
+      const q = req.query as { from?: string; to?: string };
+      return { from: Number(q.from || 0), to: Number(q.to || Date.now()), requests: 0, points: 0, byModel: [], byDay: [] } satisfies UsageSummary;
+    }
     const q = req.query as { from?: string; to?: string };
     const qs = new URLSearchParams();
     if (q.from) qs.set('from', q.from);
@@ -236,6 +348,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     });
   });
   app.get('/api/usage/requests', async (req) => {
+    if (fastsso) return { items: [], next: undefined };
     const q = req.query as { cursor?: string };
     return core.session.client.request<{ items: UsageRequest[]; next?: string }>(`/usage/requests${q.cursor ? `?cursor=${encodeURIComponent(q.cursor)}` : ''}`).catch((e) => {
       throw cloudErr(e);
@@ -480,7 +593,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
       });
     }
     core.store.settings = s;
-    if (body.cloud?.baseUrl !== undefined) {
+    if (body.cloud?.baseUrl !== undefined && core.provider === 'mock') {
       /* 云端地址变了：重新探测；已登录的话重建事件流 */
       const probe = await core.session.probe();
       if (probe.ok && !core.session.loggedIn) await core.session.restore();
@@ -498,7 +611,20 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return { settings: await refreshDirect() };
   });
 
+  const probeAccount = async () => {
+    const probe = await core.accounts.probe(true);
+    if (probe.ok && core.accounts.loggedIn) {
+      await core.accounts.refreshWallet().catch(() => {});
+      await core.accounts.refreshChannels().catch(() => {});
+    }
+    core.events.emit({ type: 'session', session: core.sessionInfo() });
+    return { ok: probe.ok, message: probe.message, meta: probe.meta };
+  };
+
+  app.post('/api/settings/account/refresh', probeAccount);
+
   app.post('/api/settings/cloud/refresh', async () => {
+    if (core.provider === 'fastsso') return probeAccount();
     const probe = await core.session.probe();
     if (probe.ok && core.session.loggedIn) {
       await core.session.refreshWallet().catch(() => {});

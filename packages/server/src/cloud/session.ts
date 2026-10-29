@@ -1,4 +1,4 @@
-import type { CloudMeta, CloudTokens, DevicePollReply, DeviceStartReply, GatewayModel, OrderDto, SessionInfo, UserProfile, WalletDto } from '@aigc/shared';
+import type { CloudMeta, CloudTokens, DevicePollReply, GatewayModel, LoginStartReply, OrderDto, SessionInfo, UserProfile, WalletDto } from '@aigc/shared';
 import { CloudClient, CloudError } from './client';
 import type { EventHub } from '../events';
 import type { Secrets } from '../secrets';
@@ -64,12 +64,12 @@ export class CloudSession {
 
   /* ---------------- 登录 / 登出 ---------------- */
 
-  async loginStart(client: 'desktop' | 'web', deviceName?: string): Promise<DeviceStartReply> {
-    const r = await this.client.request<DeviceStartReply>('/auth/device/start', { json: { client, deviceName }, auth: false });
-    this.pending = { deviceCode: r.deviceCode, timer: null };
+  async loginStart(client?: 'desktop' | 'web', deviceName?: string): Promise<LoginStartReply> {
+    const r = await this.client.request<Omit<LoginStartReply, 'mode'>>('/auth/device/start', { json: { client: client || 'web', deviceName }, auth: false });
+    this.pending = { deviceCode: r.deviceCode!, timer: null };
     this.status = 'pending';
     this.emitSession();
-    return r;
+    return { ...r, mode: 'device' };
   }
 
   async loginPoll(): Promise<DevicePollReply> {
@@ -242,6 +242,8 @@ export class CloudSession {
       cloudReachable: this.client.configured,
       cloudMessage: this.client.configured ? undefined : '还没有配置云端地址',
       payChannels: this.meta?.payChannels,
+      loginMode: 'device',
+      registerEnabled: false,
     };
   }
 

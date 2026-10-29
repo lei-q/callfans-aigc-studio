@@ -59,7 +59,10 @@ export class JobRunner {
     if (!this.store.projects.get(body.ws)) throw new HttpError(400, '项目不存在');
     const model = this.core.modelById(body.model);
     if (!model) {
-      if (body.model.startsWith('cloud:') && !this.core.session.loggedIn) {
+      if (body.model.startsWith('cloud:') && this.core.provider !== 'mock') {
+        throw new HttpError(400, '平台生成网关还没有接入', '当前版本请到「设置 · 直连」填自己的 TreeCloud Key 生成');
+      }
+      if (body.model.startsWith('cloud:') && !this.core.loggedIn) {
         throw new HttpError(403, '还没有登录账号', '登录后才能用平台点数生成；也可以在「设置」里启用直连模式');
       }
       throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');

@@ -7,10 +7,10 @@ import type {
   AppInfo,
   Board,
   Channel,
-  DeviceStartReply,
   EditOpsMap,
   Job,
   JobParams,
+  LoginStartReply,
   MediaType,
   ModelInfo,
   OptimizeReply,
@@ -61,7 +61,9 @@ export interface State {
   apiKeys: ApiKey[];
 
   /* ---------------- 账号 / 充值 ---------------- */
-  loginFlow: (DeviceStartReply & { startedAt: number }) | null;
+  loginFlow: (LoginStartReply & { startedAt: number }) | null;
+  /** 结算幂等键：同一档位/渠道的重试复用，成功后清空 */
+  checkoutKey: string | null;
   loginError: string | null;
   packs: PackDto[];
   packsLoading: boolean;
@@ -161,6 +163,7 @@ export const initialState: State = {
   apiKeys: [],
 
   loginFlow: null,
+  checkoutKey: null,
   loginError: null,
   packs: [],
   packsLoading: false,

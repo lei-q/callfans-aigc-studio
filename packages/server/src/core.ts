@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AppInfo, Bootstrap, Channel, ModelInfo, RunMode, SessionInfo, Settings } from '@aigc/shared';
 import { DEFAULT_PORT, uid } from '@aigc/shared';
+import { AccountSession } from './account/session';
 import { CloudSession } from './cloud/session';
 import { Db } from './db';
 import { EventHub } from './events';
@@ -23,6 +24,8 @@ export interface CoreOptions {
   memory?: boolean;
   cloudPollMs?: number;
   directPollMs?: number;
+  /** 测试 / 开发：覆盖账号服务地址与提供方 */
+  account?: Partial<import('@aigc/shared').AccountConfig>;
 }
 
 /** 运行模式：桌面 / Web、端口、是否允许局域网访问。Electron 启动前就要读，所以单独存成文件 */
@@ -59,6 +62,9 @@ export class Core {
   readonly store: Store;
   readonly secrets: Secrets;
   readonly events = new EventHub();
+  /** Fast-SSO 账号会话（登录 / 注册 / 积分 / 充值） */
+  readonly accounts: AccountSession;
+  /** 开发用 Mock 云的设备码会话；生产模式下只作为可选的生成网关客户端 */
   readonly session: CloudSession;
   readonly cloud: CloudProvider;
   readonly direct: TreeCloudProvider;
@@ -77,6 +83,7 @@ export class Core {
     fs.mkdirSync(this.mediaDir, { recursive: true });
     fs.mkdirSync(this.uploadsDir, { recursive: true });
 
+    this.accounts = new AccountSession(this.store, this.secrets, this.events, () => this.store.settings.account);
     this.session = new CloudSession(this.store, this.secrets, this.events, () => this.store.settings.cloud.baseUrl);
     this.cloud = new CloudProvider(
       () => this.session,
@@ -109,8 +116,26 @@ export class Core {
       db.metaSet('seeded', '1');
       db.metaSet('installed_at', String(Date.now()));
     }
-    await core.session.restore();
+    if (opts.account) {
+      core.store.settings = { ...core.store.settings, account: { ...core.store.settings.account, ...opts.account } };
+    }
+    if (core.provider === 'mock') await core.session.restore();
+    else await core.accounts.restore();
     return core;
+  }
+
+  /** 账号服务提供方：fastsso（生产）或 mock（开发 / CI） */
+  get provider() {
+    return this.store.settings.account.provider;
+  }
+
+  /** 当前生效的账号会话：两套实现对登录 / 钱包 / 资料的方法签名保持一致 */
+  get account(): CloudSession | AccountSession {
+    return this.provider === 'mock' ? this.session : this.accounts;
+  }
+
+  get loggedIn() {
+    return this.account.loggedIn;
   }
 
   /* ---------------- 运行配置 ---------------- */
@@ -136,11 +161,13 @@ export class Core {
   /* ---------------- 模型与渠道 ---------------- */
 
   providers(): Provider[] {
-    return [this.cloud, this.direct];
+    /* 平台生成网关尚未接入时（Fast-SSO 只提供账号与充值），只保留直连渠道 */
+    return this.provider === 'mock' ? [this.cloud, this.direct] : [this.direct];
   }
 
   models(): ModelInfo[] {
     const prices = this.store.settings.prices;
+    if (this.provider !== 'mock') return this.direct.models();
     const cloudCached = this.session.loggedIn ? this.session.models : this.store.cloudModelsCache;
     return [...cloudCached.map((g) => gatewayModelToModelInfo(g, prices[`cloud:${g.id}`])), ...this.direct.models()];
   }
@@ -157,10 +184,11 @@ export class Core {
   routeError(model: ModelInfo): string | null {
     if (model.channel === 'direct') {
       const d = this.store.settings.direct;
-      if (!d.enabled) return '直连模式没有启用：到「设置 · 直连 TreeCloud」里启用，或改用云端模型';
+      if (!d.enabled) return '直连模式没有启用：到「设置 · 直连 TreeCloud」里启用';
       if (!d.keyEnc) return '直连模式还没有配置 Key：到「设置 · 直连 TreeCloud」里填入你自己的 Key';
       return null;
     }
+    if (this.provider !== 'mock') return '平台生成网关还没有接入：当前版本请到「设置 · 直连」填自己的 TreeCloud Key 生成';
     if (!this.session.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「设置」里启用直连模式';
     return null;
   }
@@ -179,6 +207,7 @@ export class Core {
     const s = this.store.settings;
     const launch = this.readLaunch();
     return {
+      account: { ...s.account },
       cloud: { baseUrl: s.cloud.baseUrl },
       runner: { concurrency: s.runner.concurrency },
       direct: {
@@ -201,7 +230,7 @@ export class Core {
   }
 
   sessionInfo(): SessionInfo {
-    return this.session.info();
+    return this.account.info();
   }
 
   appInfo(): AppInfo {
@@ -223,7 +252,7 @@ export class Core {
       projects: s.projects.all().sort((a, b) => a.createdAt - b.createdAt),
       jobs: s.jobs.all().sort((a, b) => b.createdAt - a.createdAt),
       results: s.results.all().sort((a, b) => b.createdAt - a.createdAt),
-      wallet: this.session.wallet,
+      wallet: this.account.wallet,
       session: this.sessionInfo(),
       boards,
       aesthetic: s.aesthetic.all().sort((a, b) => b.createdAt - a.createdAt),
@@ -286,6 +315,7 @@ export class Core {
   close() {
     this.runner.stop();
     this.session.stop();
+    this.accounts.stop();
     this.store.flush();
     this.db.close();
   }

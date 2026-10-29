@@ -25,7 +25,7 @@ afterEach(() => {
 
 async function makeCore() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigc-test-'));
-  const core = await Core.create({ dataDir, mode: 'web', desktop: false, version: 'test', memory: true, cloudPollMs: 40, directPollMs: 40 });
+  const core = await Core.create({ dataDir, mode: 'web', desktop: false, version: 'test', memory: true, cloudPollMs: 40, directPollMs: 40, account: { provider: 'mock' } });
   const s = core.store.settings;
   s.cloud.baseUrl = cloud.url;
   core.store.settings = s;
@@ -36,7 +36,7 @@ async function makeCore() {
 
 async function login(core: Core, phone = '13800001111') {
   const start = await core.session.loginStart('web');
-  cloud.approveDevice(start.deviceCode, phone);
+  cloud.approveDevice(start.deviceCode!, phone);
   const poll = await core.session.loginPoll();
   expect(poll.status).toBe('approved');
   return start;
@@ -248,7 +248,7 @@ describe('决策：充值开放与内容审核', () => {
       st.cloud.baseUrl = c.url;
       core.store.settings = st;
       const start = await core.session.loginStart('web');
-      c.approveDevice(start.deviceCode);
+      c.approveDevice(start.deviceCode!);
       await core.session.loginPoll();
       expect(core.sessionInfo().payChannels).toEqual([]);
       await expect(core.session.client.request('/billing/orders', { json: { packId: 'p10', channel: 'wechat' } })).rejects.toThrow();
@@ -262,7 +262,7 @@ describe('决策：充值开放与内容审核', () => {
       st.cloud.baseUrl = c.url;
       core.store.settings = st;
       const start = await core.session.loginStart('web');
-      c.approveDevice(start.deviceCode);
+      c.approveDevice(start.deviceCode!);
       await core.session.loginPoll();
       const before = core.session.wallet!.balance + core.session.wallet!.freeToday;
       const j = core.runner.create({ type: 'image', ws: 'w1', model: 'cloud:g-img-1', prompt: '含有违禁词的描述', refs: [], ratio: '1:1', count: 1, res: '2k' });

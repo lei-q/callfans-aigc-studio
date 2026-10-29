@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type {
   CloudMeta,
   DevicePollReply,
-  DeviceStartReply,
+  LoginStartReply,
   GatewayChatReply,
   GatewayJob,
   GatewayJobBody,
@@ -270,7 +270,7 @@ button{width:100%;border:0;border-radius:9px;padding:11px;background:#4F46E5;col
     const code = crypto.randomBytes(12).toString('hex');
     devices.set(code, { code, status: 'pending', createdAt: Date.now() });
     const base = await baseUrl(app);
-    return { deviceCode: code, loginUrl: `${base}/login?code=${code}`, qrContent: `${base}/login?code=${code}`, expiresIn: 300, interval: 2 } satisfies DeviceStartReply;
+    return { deviceCode: code, loginUrl: `${base}/login?code=${code}`, qrContent: `${base}/login?code=${code}`, expiresIn: 300, interval: 2 } satisfies Omit<LoginStartReply, 'mode'>;
   });
 
   app.post('/auth/device/poll', async (req, reply) => {

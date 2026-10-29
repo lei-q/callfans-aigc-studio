@@ -40,6 +40,11 @@ export function routeInfo(s: State, type: MediaType, use?: AudioUse): { kind: 'c
   if (cloud) return { kind: 'cloud', model: cloud };
   const direct = ready.find((m) => m.channel === 'direct');
   if (direct) return { kind: 'direct', model: direct };
+  /* Fast-SSO 账号只有积分 / 充值，没有平台生成网关：生成只能走直连 */
+  if (s.settings?.account.provider === 'fastsso') {
+    if (!s.settings.direct.enabled || !s.settings.direct.hasKey) return { kind: null, reason: '平台生成网关还没有接入：到「设置 · 直连 TreeCloud」填好自己的 Key 后生成' };
+    return { kind: null, reason: '直连模式下没有该类型的可用模型，到「设置」里刷新模型列表' };
+  }
   if (!s.session?.loggedIn && s.settings?.direct.enabled && s.settings.direct.hasKey) return { kind: null, reason: '直连模式下没有该类型的可用模型，到「设置」里刷新模型列表' };
   if (!s.session?.loggedIn) return { kind: null, reason: s.session?.cloudReachable ? '登录后才能用平台点数生成' : '还没有配置云端地址：到「设置 · 云端连接」填写，或启用直连模式' };
   return { kind: null, reason: '当前账号下没有该类型的可用模型' };

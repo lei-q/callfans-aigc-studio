@@ -44,18 +44,21 @@
 
 首次启动是一个干净的空项目：没有示例素材，也没有假数据。生成有两条路，在「设置」里可以看到当前走哪条：
 
-- **云端账号（默认）**：登录后用平台点数生成，点数跟着账号走，换设备也不丢。生成与 AI 辅助（「帮我写详细」、Agent）都走云端网关，按实际用量扣点；失败与取消自动退回。
+- **平台账号（Fast-SSO）**：注册、登录、找回密码与充值都由账号中心完成，点数跟着账号走，换设备也不丢。本轮只接入账号与充值；平台生成网关还在接入，生成暂时仍走直连。
 - **直连 TreeCloud（高级）**：在「设置 · 直连」填自己的 `sk-tc-` Key，请求直接发给 TreeCloud，**不扣平台点数**，费用由 TreeCloud 结算。
 
 没有登录、也没有启用直连时，生成按钮会变成「登录后生成」。
 
-### 登录与充值
+### 登录、注册与充值
 
-- **登录**：设备码流程。点「登录」后在浏览器（电脑或手机扫码）里完成确认，应用自动继续；应用本身不接触账号凭证。
-- **充值**：选档位和支付渠道（微信支付 / 支付宝），应用展示收款码，扫码支付后点数实时到账。
-- **云端地址**：「设置 · 云端」里填写，或启动时设置环境变量 `AIGC_CLOUD_URL`。云端接口约定见 [`docs/cloud-api-contract.md`](docs/cloud-api-contract.md)；云端系统的设计与排期见 [`docs/cloud-implementation-plan.md`](docs/cloud-implementation-plan.md)。
+- **登录**：标准 OIDC 授权码 + PKCE。点「登录」后用系统浏览器打开 `sso.callfansai.com`，授权完成后浏览器回调到本机固定端口 `http://127.0.0.1:5781/auth/callback`，应用自动继续。access token 只放在本机服务内存里，refresh token 加密落盘；浏览器与窗口从不直连账号 API。
+- **注册 / 找回密码**：应用内表单，验证码与密码规则由账号中心下发（6 位验证码、密码 10–128 位）；条款版本从 `/public/consumer/documents` 读取。
+- **充值**：档位与渠道每次都从账号服务拉取（`/consumer/recharge/skus`、`/consumer/recharge/channels`，目前为汇付聚合 / 微信 / 支付宝）。选档位 → 下单（带幂等键）→ 展示收款码 → 轮询订单直到 `paid`。二维码内容是 `codeUrl`，应用本地渲染，不会把扫码串当跳转链接。
+- **账号配置**：见 [`docs/fast-sso-integration.md`](docs/fast-sso-integration.md)，可用环境变量 `AIGC_SSO_ISSUER`、`AIGC_ACCOUNT_API`、`AIGC_SSO_CLIENT_ID`、`AIGC_SSO_REDIRECT` 覆盖。
 
-> 配套云端系统**还没有上线**。仓库里的 `packages/cloud-mock` 是按同一份合同实现的开发用 Mock 云（不是安全实现，数据存在内存里，重启即清空），可以走通登录、扫码支付、生成、扣费与退款；它的「支付」只是点一下按钮，**不涉及真实付款**。
+> 开发与 CI 默认可以切回 Mock 云（`AIGC_ACCOUNT_PROVIDER=mock` + `AIGC_CLOUD_URL=http://127.0.0.1:5790`）：设备码登录、模拟扫码支付、生成与扣费都能跑通，**不涉及真实付款**。仓库里的 `packages/cloud-mock` 只用于联调和测试。
+
+> 使用 Fast-SSO 前需要在控制台把 `http://127.0.0.1:5781/auth/callback` 加进该应用的 `redirectUris`（逐字符一致），并确认应用 `realm=consumer`、`trust=一方`、`status=active`、`clientType=public`。
 
 ### 直连 TreeCloud
 
@@ -93,7 +96,7 @@ curl http://127.0.0.1:5780/openapi/v1/images/generations \
 
 ```bash
 pnpm install
-pnpm dev            # Mock 云（:5790）+ 本机服务（:5780）+ Vite 前端（:5173），改代码自动刷新
+pnpm dev            # Mock 云（:5790）+ 本机服务（:5780）+ Vite 前端（:5173），改代码自动刷新（账号默认走 Fast-SSO，见下方环境变量）
 pnpm test           # 单元测试，以及对着 Mock 云的云端合同测试（vitest）
 pnpm e2e            # 端到端测试（Playwright，自动起 Mock 云与本机服务，需先构建 web 与 server）
 pnpm lint && pnpm typecheck
@@ -104,7 +107,7 @@ pnpm desktop        # 以 Electron 桌面应用运行（首次会弹出运行方
 pnpm dist           # 打当前平台的安装包，产物在 packages/desktop/release
 ```
 
-`pnpm dev` 里的 `dev:server` 用了行内环境变量写法，Windows 下请在 Git Bash / WSL 中运行，或自己先设置 `AIGC_CLOUD_URL=http://127.0.0.1:5790` 再分别启动。
+`pnpm dev` 里的 `dev:server` 用了行内环境变量写法，Windows 下请在 Git Bash / WSL 中运行，或自己先设置 `AIGC_CLOUD_URL=http://127.0.0.1:5790` 再分别启动。开发时想用 Mock 云跑通登录与充值，加 `AIGC_ACCOUNT_PROVIDER=mock`（单测与 e2e 已自动设置）。
 
 国内网络下载 Electron 慢时，可以设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 与 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`。
 

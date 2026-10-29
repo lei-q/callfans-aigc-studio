@@ -43,14 +43,20 @@ export interface DeviceStartBody {
   client: 'desktop' | 'web';
   deviceName?: string;
 }
-export interface DeviceStartReply {
-  deviceCode: string;
+export interface LoginStartReply {
+  /**
+   * browser：OIDC 授权码 + PKCE，用户在系统浏览器里登录；
+   * device：设备码流程（Mock 云 / 开发用），二维码在应用内展示。
+   */
+  mode: 'browser' | 'device';
   /** 用户在浏览器里打开完成登录 */
   loginUrl: string;
-  /** 给客户端画二维码的内容（通常等于 loginUrl） */
-  qrContent: string;
+  /** 给客户端画二维码的内容；browser 模式没有（回环回调只能在发起登录的机器上打开） */
+  qrContent?: string;
   expiresIn: number;
   interval: number;
+  /** 仅 device 模式：轮询用的设备码 */
+  deviceCode?: string;
 }
 export type DevicePollStatus = 'pending' | 'approved' | 'expired' | 'denied';
 export interface DevicePollReply {
@@ -83,7 +89,8 @@ export interface WalletDto {
   updatedAt: number;
 }
 
-export type PayChannel = 'wechat' | 'alipay';
+/** 支付渠道：huifu 是汇付聚合正扫（默认支付宝，可切银联） */
+export type PayChannel = 'huifu' | 'wechat' | 'alipay';
 
 export interface PackDto {
   id: string;

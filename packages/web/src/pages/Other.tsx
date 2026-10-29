@@ -270,7 +270,7 @@ export function ApiPage() {
               <Icon name="plus" />
               创建新 Key
             </button>
-            <span className="tiny dim">Key 只在创建时完整展示一次；调用按当前路由计费（云端扣点数 / 直连记用量）</span>
+            <span className="tiny dim">Key 只在创建时完整展示一次；调用按当前路由计费（平台网关扣点数 / 直连记用量）</span>
           </div>
         </div>
       </div>
@@ -299,7 +299,7 @@ export function ApiPage() {
           ))}
           {!s.models.length && (
             <div className="key-row">
-              <span className="tiny dim">还没有可用模型：登录云端账号，或在「设置 · 直连」里配置 Key。</span>
+              <span className="tiny dim">还没有可用模型：登录账号，或在「设置 · 直连」里配置 Key。</span>
             </div>
           )}
         </div>
@@ -500,7 +500,7 @@ function ModelSection({ t, models }: { t: MediaType; models: ModelInfo[] }) {
       ) : (
         <div className="table-note">
           <Icon name="alert" />
-          <span>当前没有可用的{TYPES[t].name}模型：登录云端账号，或在「设置 · 直连」里配置 Key。</span>
+          <span>当前没有可用的{TYPES[t].name}模型：登录账号，或在「设置 · 直连」里配置 Key。</span>
         </div>
       )}
     </div>
@@ -584,30 +584,76 @@ export function SettingsPage() {
               </>
             )}
           </div>
-          <div className="form-row">
-            <span className="form-label">云端地址</span>
-            <input className="form-input" value={cloudUrl} onChange={(e) => setCloudUrl(e.target.value)} placeholder="https://cloud.example.com（云端上线后填写；开发期可指向本机 Mock 云）" />
-            <button
-              className="btn sm ghost"
-              onClick={() =>
-                void patchSettings({ cloud: { baseUrl: cloudUrl.trim() } }).then(async (ok) => {
-                  if (!ok) return;
-                  const r = await api.post<{ ok: boolean; message: string }>('/api/settings/cloud/refresh').catch(() => null);
-                  toast(r?.ok ? 'success' : 'warn', r?.ok ? '云端已连接' : '云端连不上', r?.message || '');
-                })
-              }
-            >
-              保存并测试
-            </button>
-          </div>
-          <div className="tiny dim">生成、对话辅助、充值与用量都走云端；云端未部署前，可以按 docs/cloud-api-contract.md 自建或跑仓库里的 Mock 云（pnpm --filter @aigc/cloud-mock dev）。</div>
+          {st.account.provider === 'fastsso' ? (
+            <>
+              <div className="d-card d-card-pad">
+                <div className="snap-row">
+                  <span className="sk">账号服务</span>
+                  <span className="sv num">{st.account.issuer}</span>
+                </div>
+                <div className="snap-row">
+                  <span className="sk">接口根</span>
+                  <span className="sv num">{st.account.apiBase}</span>
+                </div>
+                <div className="snap-row">
+                  <span className="sk">客户端</span>
+                  <span className="sv num">
+                    {st.account.clientId}（公共客户端 · PKCE）
+                  </span>
+                </div>
+                <div className="snap-row">
+                  <span className="sk">回调地址</span>
+                  <span className="sv num">{st.account.redirectUri}</span>
+                </div>
+              </div>
+              <div className="form-row">
+                <span className="form-label">连接</span>
+                <span className="tiny dim">登录在系统浏览器完成，授权结果由本机回调端口接收；这些值来自构建配置，不在界面里改。</span>
+                <button
+                  className="btn sm ghost"
+                  onClick={() =>
+                    void api.post<{ ok: boolean; message: string }>('/api/settings/account/refresh').then(
+                      (r) => toast(r.ok ? 'success' : 'warn', r.ok ? '账号服务已连接' : '账号服务连不上', r.message || ''),
+                      () => toast('warn', '账号服务连不上', '检查网络或账号服务地址'),
+                    )
+                  }
+                >
+                  测试连接
+                </button>
+              </div>
+              <div className="tiny dim">注册、登录、找回密码与充值都由账号服务完成；生成仍走「直连 TreeCloud」，点数只用于平台生成网关接入后的消耗。</div>
+            </>
+          ) : (
+            <>
+              <div className="form-row">
+                <span className="form-label">云端地址</span>
+                <input className="form-input" value={cloudUrl} onChange={(e) => setCloudUrl(e.target.value)} placeholder="https://cloud.example.com（云端上线后填写；开发期可指向本机 Mock 云）" />
+                <button
+                  className="btn sm ghost"
+                  onClick={() =>
+                    void patchSettings({ cloud: { baseUrl: cloudUrl.trim() } }).then(async (ok) => {
+                      if (!ok) return;
+                      const r = await api.post<{ ok: boolean; message: string }>('/api/settings/cloud/refresh').catch(() => null);
+                      toast(r?.ok ? 'success' : 'warn', r?.ok ? '云端已连接' : '云端连不上', r?.message || '');
+                    })
+                  }
+                >
+                  保存并测试
+                </button>
+              </div>
+              <div className="tiny dim">开发用 Mock 云：登录、充值与模型目录都来自本地 Mock（pnpm --filter @aigc/cloud-mock dev），用于联调和 e2e。</div>
+            </>
+          )}
         </div>
       </div>
 
       <div className="catalog-sec">
         <div className="catalog-sec-name">直连 TreeCloud（高级）</div>
         <div className="set-grid">
-          <button className={`set-choice ${d.enabled ? 'on' : ''}`} onClick={() => void patchSettings({ direct: { enabled: !d.enabled } }, d.enabled ? '已关闭直连，生成走云端点数' : '已启用直连')}>
+          <button
+            className={`set-choice ${d.enabled ? 'on' : ''}`}
+            onClick={() => void patchSettings({ direct: { enabled: !d.enabled } }, d.enabled ? '已关闭直连，生成走平台网关' : '已启用直连')}
+          >
             <TaskIc icon="globe" cls="violet" />
             <span>
               <b>启用直连模式</b>
@@ -710,7 +756,7 @@ export function SettingsPage() {
         </div>
         <div className="table-note">
           <Icon name="shield" />
-          <span>云端模式的实际扣费以云端账本为准（按真实用量结算）；这里的单价只用于生成前的预估展示。</span>
+          <span>平台网关的实际扣费以平台账本为准（按真实用量结算）；这里的单价只用于生成前的预估展示。</span>
         </div>
       </div>
 

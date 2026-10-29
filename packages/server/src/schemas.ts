@@ -101,7 +101,40 @@ export const postSchema = z.object({
   platform: z.string().max(20),
 });
 
-export const orderSchema = z.object({ packId: z.string().min(1).max(64), channel: z.enum(['wechat', 'alipay']) });
+export const orderSchema = z.object({
+  packId: z.string().min(1).max(64),
+  channel: z.enum(['huifu', 'wechat', 'alipay']),
+  /** 幂等键：网络超时重试要复用同一个值；换档位 / 渠道时换新值 */
+  idempotencyKey: z.string().min(8).max(100),
+});
+
+/* ---------------- Fast-SSO 注册 / 找回 ---------------- */
+
+const identifier = z.string().min(3).max(200);
+
+export const registerStartSchema = z.object({ identifier });
+
+export const registerCompleteSchema = z.object({
+  challengeId: z.string().min(1).max(100),
+  identifier,
+  code: z.string().regex(/^\d{6}$/, '验证码是 6 位数字'),
+  password: z.string().min(10).max(128),
+  displayName: z.string().max(40).optional(),
+  consents: z.object({
+    termsVersion: z.string().min(1).max(40),
+    privacyVersion: z.string().min(1).max(40),
+    marketing: z.boolean(),
+  }),
+});
+
+export const forgotSchema = z.object({ identifier });
+
+export const resetPasswordSchema = z.object({
+  challengeId: z.string().min(1).max(100),
+  identifier,
+  code: z.string().regex(/^\d{6}$/, '验证码是 6 位数字'),
+  newPassword: z.string().min(10).max(128),
+});
 
 export const settingsSchema = z.object({
   cloud: z.object({ baseUrl: z.union([z.string().url().max(200), z.literal('')]) }).optional(),

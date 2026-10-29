@@ -221,11 +221,15 @@ export function Sidebar() {
         <Icon name="coins" />
         <span>
           1 点 = ¥1 · 按次扣费 · 点数不过期。
-          {loggedIn
-            ? '生成走云端网关，按真实用量扣点数；失败自动退回。'
-            : directOn
+          {s.settings?.account.provider === 'fastsso'
+            ? directOn
               ? '当前为直连模式：用你自己的 TreeCloud Key 生成，费用在 TreeCloud 结算。'
-              : '登录后用微信 / 支付宝充值点数即可生成；也可以在设置里填自己的 TreeCloud Key 直连。'}
+              : '账号负责充值与订单；生成请在「设置 · 直连 TreeCloud」填自己的 Key（平台生成网关还在接入）。'
+            : loggedIn
+              ? '生成走云端网关，按真实用量扣点数；失败自动退回。'
+              : directOn
+                ? '当前为直连模式：用你自己的 TreeCloud Key 生成，费用在 TreeCloud 结算。'
+                : '登录后用微信 / 支付宝充值点数即可生成；也可以在设置里填自己的 TreeCloud Key 直连。'}
         </span>
       </div>
     </aside>

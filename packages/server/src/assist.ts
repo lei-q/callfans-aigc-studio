@@ -26,12 +26,12 @@ export function chatRoute(core: Core): ChatRoute {
   if (s.direct.enabled && s.direct.keyEnc && s.chat.model && core.store.directModels.chat.includes(s.chat.model)) {
     return { kind: 'direct', model: s.chat.model };
   }
-  if (core.session.loggedIn) return { kind: 'cloud' };
+  if (core.provider === 'mock' && core.session.loggedIn) return { kind: 'cloud' };
   return null;
 }
 
 export function chatRouteLabel(route: ChatRoute) {
-  if (!route) return '没有可用的对话模型：登录云端账号，或在「设置 · 直连」里启用并选择对话模型';
+  if (!route) return '没有可用的对话模型：到「设置 · 直连」启用并选择对话模型（平台生成网关尚未接入）';
   return route.kind === 'cloud' ? '云端网关' : '直连 TreeCloud';
 }
 

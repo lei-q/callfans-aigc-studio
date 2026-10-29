@@ -1,4 +1,6 @@
 import type {
+  AccountConfig,
+  AccountProvider,
   AestheticItem,
   ApiKey,
   Board,
@@ -56,6 +58,7 @@ export interface StoredBoard extends Board {
 }
 
 export interface SettingsInternal {
+  account: AccountConfig;
   cloud: { baseUrl: string };
   runner: { concurrency: number };
   direct: {
@@ -74,7 +77,16 @@ export interface StoredApiKey extends ApiKey {
   hash: string;
 }
 
+export const DEFAULT_ACCOUNT: AccountConfig = {
+  provider: (process.env.AIGC_ACCOUNT_PROVIDER === 'mock' ? 'mock' : 'fastsso') as AccountProvider,
+  issuer: process.env.AIGC_SSO_ISSUER || 'https://sso.callfansai.com/realms/consumer',
+  apiBase: process.env.AIGC_ACCOUNT_API || 'https://account.callfansai.com/api/v1',
+  clientId: process.env.AIGC_SSO_CLIENT_ID || 'aigc-callfans',
+  redirectUri: process.env.AIGC_SSO_REDIRECT || 'http://127.0.0.1:5781/auth/callback',
+};
+
 export const DEFAULT_SETTINGS: SettingsInternal = {
+  account: DEFAULT_ACCOUNT,
   cloud: { baseUrl: process.env.AIGC_CLOUD_URL || '' },
   runner: { concurrency: 2 },
   direct: { enabled: false, baseUrl: TREECLOUD_BASE_URL },
@@ -107,6 +119,7 @@ export class Store {
     return {
       ...DEFAULT_SETTINGS,
       ...s,
+      account: { ...DEFAULT_SETTINGS.account, ...s?.account },
       cloud: { ...DEFAULT_SETTINGS.cloud, ...s?.cloud },
       runner: { ...DEFAULT_SETTINGS.runner, ...s?.runner },
       direct: { ...DEFAULT_SETTINGS.direct, ...s?.direct },
@@ -126,6 +139,25 @@ export class Store {
   set cloudSession(v: string | null) {
     if (v == null) this.db.del('kv', 'cloud_session');
     else this.db.kvSet('cloud_session', v);
+  }
+
+  /** Fast-SSO 账号会话（加密后的令牌）；null = 未登录 */
+  get accountSession(): string | null {
+    return this.db.kvGet<string>('account_session');
+  }
+  set accountSession(v: string | null) {
+    if (v == null) this.db.del('kv', 'account_session');
+    else this.db.kvSet('account_session', v);
+  }
+
+  /** 设备指纹：注册 / 签到风控用，只在本机生成一次 */
+  get deviceFingerprint(): string {
+    let fp = this.db.kvGet<string>('device_fp');
+    if (!fp) {
+      fp = `aigc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      this.db.kvSet('device_fp', fp);
+    }
+    return fp;
   }
 
   get ui(): Record<string, unknown> {
