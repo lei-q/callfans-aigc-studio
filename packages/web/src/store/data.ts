@@ -147,6 +147,8 @@ const lastSaved = new Map<string, Board>();
 const lastSnap = new Map<string, string>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let applyingSnap = false;
+/** 正在写撤销栈：嵌套 setState 通知时不要再当成一次画板改动 */
+let recordingHistory = false;
 
 export const snapOf = (b: Board) => JSON.stringify({ i: b.items, l: b.links });
 
@@ -179,6 +181,7 @@ export function startPersistence() {
   if (persisting) return;
   persisting = true;
   useStore.subscribe((s, prev) => {
+    if (recordingHistory) return;
     if (s.boards !== prev.boards) {
       for (const [ws, board] of Object.entries(s.boards)) {
         if (lastSaved.get(ws) === board) continue;
@@ -194,14 +197,18 @@ export function startPersistence() {
         }
         if (k === last) continue;
         if (!applyingSnap) {
-          setTimeout(() =>
+          /* 同步入栈：拖拽、连线、对齐可能在同一帧里连续发生，延迟入栈会让撤销丢步 */
+          recordingHistory = true;
+          try {
             setState((st) => {
               const h = (st.history[ws] = st.history[ws] || []);
               h.push(last);
               if (h.length > 40) h.shift();
               st.future[ws] = [];
-            }),
-          );
+            });
+          } finally {
+            recordingHistory = false;
+          }
         }
         lastSnap.set(ws, k);
       }
