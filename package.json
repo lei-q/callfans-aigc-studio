@@ -1,7 +1,7 @@
 {
   "name": "callfans-aigc-studio",
   "private": true,
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "AIGC 创作台：按次付费、说一句就能出片的个人创作工具（桌面端 + Web 端）",
   "license": "GPL-3.0-only",
   "type": "module",

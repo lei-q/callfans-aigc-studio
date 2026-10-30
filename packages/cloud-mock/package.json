@@ -1,6 +1,6 @@
 {
   "name": "@aigc/cloud-mock",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "description": "开发 / 演示 / CI 用的 Mock 云端：实现 docs/cloud-api-contract.md 的全部端点",
   "main": "src/index.ts",
