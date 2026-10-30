@@ -248,6 +248,9 @@ test('导航：API 接入并入模型与价格，设置页改叫「账号」', a
   await page.locator('.side-item', { hasText: '模型与价格' }).click();
   await expect(page.locator('.page-title')).toHaveText('模型与价格');
   await expect(page.locator('.catalog-sec-name', { hasText: '用量与账单' })).toBeVisible();
+  /* 模型价格长表放在页面最下方 */
+  const secs = await page.locator('.catalog-sec-name').allTextContents();
+  expect(secs[secs.length - 1]).toBe('模型价格');
   await page.locator('.side-item', { hasText: '设置' }).click();
   await expect(page.locator('.catalog-sec-name').first()).toHaveText('账号');
   await expect(page.locator('.snap-row', { hasText: '账号服务' })).toHaveCount(0);

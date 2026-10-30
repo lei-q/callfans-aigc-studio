@@ -369,9 +369,6 @@ export function ModelsPage() {
               <Icon name="refresh" />
               {catBusy ? '读取中…' : '刷新清单'}
             </button>
-            {!custom && platOf('chat').length > 12 && (
-              <input className="form-input plat-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索模型…" />
-            )}
             <span className="grow" />
             {custom ? (
               <span className={`chip ${d.hasKey ? 'success' : 'warn'}`}>
@@ -398,10 +395,55 @@ export function ModelsPage() {
           <div className="tiny dim">
             {custom
               ? '提示词助手与 Agent 用自定义渠道的对话模型，费用在你自己的上游结算。'
-              : `提示词助手与 Agent 用平台对话模型，按点数计费。清单来自 ${cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1 分钟。`}
+              : '提示词助手与 Agent 用平台对话模型，按点数计费。'}
           </div>
         </div>
-        {!custom && !!platList.length && (
+      </div>
+
+      {TYPE_KEYS.map((t) => (
+        <ModelSection
+          key={t}
+          t={t}
+          custom={custom}
+          models={custom ? s.models.filter((m) => m.type === t) : []}
+          platform={custom ? [] : platOf(t)}
+          platformErr={catErr}
+          picked={(custom ? st.models.direct : st.models.cloud)[t]}
+          onPick={(id) => setModel(custom ? 'direct' : 'cloud', t, id)}
+        />
+      ))}
+
+      <UsageSection loggedIn={loggedIn} />
+
+      {/* 模型价格：长表放页面最下方，前面的渠道与默认模型配置不被挤走 */}
+      {!custom && (
+        <div className="catalog-sec">
+          <div className="catalog-sec-name">模型价格</div>
+          <div className="card set-card">
+            <div className="set-actions">
+              <input className="form-input plat-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索模型…" />
+              <span className="grow" />
+              {catErr ? (
+                <span className="chip danger">
+                  <span className="cdot" />
+                  {catErr}
+                </span>
+              ) : cat ? (
+                <span className="chip neutral">
+                  <span className="cdot" />
+                  {platList.length} / {cat.models.length} 个模型
+                </span>
+              ) : (
+                <span className="chip neutral">
+                  <span className="cdot" />
+                  读取中…
+                </span>
+              )}
+            </div>
+            <div className="tiny dim">
+              平台模型的上下文与上游标价（美元 / 百万 token），清单来自 {cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1 分钟；实际扣费以平台账本为准。
+            </div>
+          </div>
           <div className="card table-card plat-table">
             <div className="key-head">
               <span>模型</span>
@@ -422,27 +464,12 @@ export function ModelsPage() {
             ))}
             {!platList.length && (
               <div className="key-row">
-                <span className="tiny dim">{catErr ? '模型清单暂时读不到，稍后点「刷新清单」重试。' : '没有匹配的模型。'}</span>
+                <span className="tiny dim">{catErr ? '模型清单暂时读不到，稍后点上面的「刷新清单」重试。' : cat ? '没有匹配的模型。' : '读取中…'}</span>
               </div>
             )}
           </div>
-        )}
-      </div>
-
-      {TYPE_KEYS.map((t) => (
-        <ModelSection
-          key={t}
-          t={t}
-          custom={custom}
-          models={custom ? s.models.filter((m) => m.type === t) : []}
-          platform={custom ? [] : platOf(t)}
-          platformErr={catErr}
-          picked={(custom ? st.models.direct : st.models.cloud)[t]}
-          onPick={(id) => setModel(custom ? 'direct' : 'cloud', t, id)}
-        />
-      ))}
-
-      <UsageSection loggedIn={loggedIn} />
+        </div>
+      )}
 
       <div className="table-note">
         <Icon name="shield" />
