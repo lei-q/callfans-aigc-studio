@@ -21,13 +21,16 @@ import {
   mapSku,
   type FssBalance,
   type FssChannels,
+  type FssLlmKey,
   type FssMe,
   type FssOrder,
   type FssPrepay,
   type FssSku,
 } from './consumer';
 import { OidcClient, OidcError, randomToken, type OidcTokens } from './oidc';
+import { platformChat, PlatformError } from './platform';
 import type { EventHub } from '../events';
+import type { ChatMessage } from '../providers/types';
 import type { Secrets } from '../secrets';
 import type { Store } from '../store';
 
@@ -77,7 +80,11 @@ export class AccountSession {
   private refreshing: Promise<StoredTokens | null> | null = null;
   private oidc: OidcClient | null = null;
   private oidcKey = '';
+  /** 订单 → 最近一次 prepay 返回的二维码内容；订单查询本身不带 codeUrl */
+  private prepayCodes = new Map<string, string>();
   private skusCache: { value: PackDto[]; at: number } | null = null;
+  /** 并发只换一次 key */
+  private keyPending: Promise<string> | null = null;
 
   readonly api: ConsumerClient;
 
@@ -308,6 +315,7 @@ export class AccountSession {
     this.wallet = null;
     this.payChannels = undefined;
     this.skusCache = null;
+    this.prepayCodes.clear();
     this.status = 'logged_out';
     this.store.accountSession = null;
     this.emitSession();
@@ -354,6 +362,56 @@ export class AccountSession {
     }
     this.emitSession();
     return this.payChannels;
+  }
+
+  /* ---------------- 平台模型：长期密钥 + 对话 ---------------- */
+
+  /**
+   * 该账号在本应用里的长期 LiteLLM 密钥。
+   * 本地有副本就直接用；没有才向账号服务换一次（每个用户每个应用只有一把）。
+   * 409 litellm_key_exists = 平台已有、本机丢了：不重试，提示人工吊销。
+   * key 只留在后端（加密落库），绝不返回给前端。
+   */
+  async llmKey(): Promise<string> {
+    const userId = this.profile?.id;
+    if (!userId || !this.tokens) throw new ConsumerError(401, '还没有登录账号');
+    const held = this.secrets.decrypt(this.store.llmKeyOf(userId));
+    if (held) return held;
+    if (this.keyPending) return this.keyPending;
+    const p = (async () => {
+      try {
+        const r = await this.api.request<FssLlmKey>('/consumer/llm-keys', { method: 'POST', timeoutMs: 25_000 });
+        if (!r?.key) throw new ConsumerError(502, '账号服务没有返回模型密钥');
+        this.store.setLlmKey(userId, this.secrets.encrypt(r.key));
+        return r.key;
+      } catch (e) {
+        if (e instanceof ConsumerError && e.status === 409) {
+          if (e.code === 'billing_account_provisioning') throw new ConsumerError(409, '权益账户正在开通，约 30 秒后再试');
+          if (e.code === 'litellm_key_exists') throw new ConsumerError(409, '平台已为该账号签发过模型密钥，但本机没有副本：请先让平台吊销，再重新登录申请');
+        }
+        throw e;
+      }
+    })();
+    this.keyPending = p;
+    try {
+      return await p;
+    } finally {
+      if (this.keyPending === p) this.keyPending = null;
+    }
+  }
+
+  /** 用平台模型对话；网关 401 说明 key 被吊销，丢本地副本后只重换一次 */
+  async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
+    const baseUrl = this.cfg.gatewayBase;
+    const key = await this.llmKey();
+    try {
+      return await platformChat({ baseUrl, key, model, messages, signal });
+    } catch (e) {
+      const userId = this.profile?.id;
+      if (!(e instanceof PlatformError) || e.status !== 401 || !userId) throw e;
+      this.store.setLlmKey(userId, null);
+      return platformChat({ baseUrl, key: await this.llmKey(), model, messages, signal });
+    }
   }
 
   async probe(force = false): Promise<{ ok: boolean; message: string; meta: CloudMeta | null }> {
@@ -425,6 +483,7 @@ export class AccountSession {
       method: 'POST',
       timeoutMs: 25_000,
     });
+    this.prepayCodes.set(orderId, p.codeUrl);
     const o = await this.getOrder(orderId).catch(() => null);
     const order = o || {
       id: orderId,
@@ -444,15 +503,26 @@ export class AccountSession {
 
   async getOrder(orderId: string): Promise<OrderDto> {
     const o = await this.api.request<FssOrder>(`/consumer/recharge/orders/${encodeURIComponent(orderId)}`, { timeoutMs: 15_000 });
-    const order = mapOrder(o, { packName: await this.packName(o.skuCode) });
+    const order = mapOrder(o, { packName: await this.packName(o.skuCode), codeUrl: this.prepayCodes.get(orderId) });
+    if (order.status === 'paid' || order.status === 'closed' || order.status === 'refunded') this.prepayCodes.delete(orderId);
     if (order.status === 'paid') await this.refreshWallet().catch(() => {});
     return order;
+  }
+
+  /** 关闭待支付订单（Fast-SSO consumer close 接口）；已支付的订单会被上游拒绝。 */
+  async cancelOrder(orderId: string): Promise<OrderDto> {
+    const o = await this.api.request<FssOrder>(`/consumer/recharge/orders/${encodeURIComponent(orderId)}/close`, {
+      method: 'POST',
+      timeoutMs: 15_000,
+    });
+    this.prepayCodes.delete(orderId);
+    return mapOrder(o, { packName: await this.packName(o.skuCode) });
   }
 
   async listOrders(limit = 20): Promise<OrderDto[]> {
     const list = await this.api.request<FssOrder[]>(`/consumer/recharge/orders?limit=${limit}`, { timeoutMs: 15_000 });
     const names = new Map((this.skusCache?.value || []).map((s) => [s.id, s.name]));
-    return (list || []).map((o) => mapOrder(o, { packName: names.get(o.skuCode) || `${o.credits} 点` }));
+    return (list || []).map((o) => mapOrder(o, { packName: names.get(o.skuCode) || `${o.credits} 点`, codeUrl: this.prepayCodes.get(o.id) }));
   }
 
   /* ---------------- 注册 / 找回密码 ---------------- */

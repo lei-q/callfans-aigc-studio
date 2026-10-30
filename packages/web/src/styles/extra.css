@@ -127,3 +127,10 @@ button.avatar.sm { width: 28px; height: 28px; font-size: 12px; }
 .order-row .or-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .order-row .or-pts { font-weight: 700; color: var(--green); }
 .channel-note { display: flex; gap: 8px; align-items: center; }
+
+/* 临时：自定义测试金额（收到移除通知后整段删除） */
+.pack-custom { margin-top: 10px; padding: 12px 13px; border: 1px dashed var(--primary-border); border-radius: 12px; background: var(--surface); }
+.pack-custom-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.pack-custom-row .form-input { flex: 1; min-width: 0; }
+.pack-custom-row > .num { font-weight: 700; color: var(--t2); }
+.pack-custom-err { margin-top: 6px; color: var(--red, #D64545); line-height: 1.6; }

@@ -5,8 +5,8 @@ import type { ChatMessage } from './providers/types';
 
 /* ============================================================================
    提示词辅助：真正调用模型。路由顺序：
-     1. 直连模式已启用且选了对话模型 → 用户自己的 TreeCloud Key
-     2. 已登录云端 → 云端网关的对话能力（扣平台点数）
+     1. Fast-SSO 已登录 → 平台模型网关（用该账号的长期密钥，扣平台点数）
+     2. Mock 云已登录  → 本地 Mock 云的对话能力
      3. 都没有 → 回退规则推断，并在响应里说明原因
    ========================================================================== */
 
@@ -19,20 +19,30 @@ export function ruleOptimize(type: MediaType, prompt: string): OptimizeReply {
   return { mode: 'add', result: '', add: cfg.add, neg: cfg.neg, note: cfg.note, llm: false };
 }
 
-export type ChatRoute = { kind: 'direct'; model: string } | { kind: 'cloud' } | null;
+export type ChatRoute = { kind: 'platform'; model: string } | { kind: 'cloud' } | { kind: 'none'; reason: string };
 
-export function chatRoute(core: Core): ChatRoute {
-  const s = core.store.settings;
-  if (s.direct.enabled && s.direct.keyEnc && s.chat.model && core.store.directModels.chat.includes(s.chat.model)) {
-    return { kind: 'direct', model: s.chat.model };
+/** 平台模型走账号的长期密钥；模型名每次从清单里选，不写死 */
+export async function chatRoute(core: Core): Promise<ChatRoute> {
+  if (core.provider === 'mock') {
+    return core.session.loggedIn
+      ? { kind: 'cloud' }
+      : { kind: 'none', reason: '还没有登录账号：登录后就能用模型润色提示词' };
   }
-  if (core.provider === 'mock' && core.session.loggedIn) return { kind: 'cloud' };
-  return null;
+  if (!core.accounts.loggedIn) {
+    return { kind: 'none', reason: '还没有登录账号：登录后提示词助手与 Agent 会用平台模型，按点数计费' };
+  }
+  try {
+    const model = await core.platform.chatModel();
+    if (model) return { kind: 'platform', model };
+    return { kind: 'none', reason: '平台模型清单里没有可用的对话模型，稍后再试' };
+  } catch (e) {
+    return { kind: 'none', reason: (e as Error).message };
+  }
 }
 
 export function chatRouteLabel(route: ChatRoute) {
-  if (!route) return '没有可用的对话模型：到「设置 · 直连」启用并选择对话模型（平台生成网关尚未接入）';
-  return route.kind === 'cloud' ? '云端网关' : '直连 TreeCloud';
+  if (route.kind === 'none') return route.reason;
+  return route.kind === 'cloud' ? '云端网关' : `平台模型 ${route.model}`;
 }
 
 /** 从模型回复里抠出第一个 JSON 对象 */
@@ -46,11 +56,11 @@ export function extractJson<T>(text: string): T | null {
   }
 }
 
-async function ask(core: Core, route: Exclude<ChatRoute, null>, messages: ChatMessage[]) {
+async function ask(core: Core, route: Exclude<ChatRoute, { kind: 'none' }>, messages: ChatMessage[]) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), 45_000);
   try {
-    if (route.kind === 'direct') return await core.direct.chat(route.model, messages, ac.signal);
+    if (route.kind === 'platform') return await core.accounts.chat(route.model, messages, ac.signal);
     return await core.cloud.chat('', messages, ac.signal);
   } finally {
     clearTimeout(t);
@@ -59,8 +69,8 @@ async function ask(core: Core, route: Exclude<ChatRoute, null>, messages: ChatMe
 
 export async function optimizePrompt(core: Core, type: MediaType, prompt: string): Promise<OptimizeReply> {
   const fallback = ruleOptimize(type, prompt);
-  const route = chatRoute(core);
-  if (!route) return { ...fallback, reason: chatRouteLabel(route) };
+  const route = await chatRoute(core);
+  if (route.kind === 'none') return { ...fallback, reason: chatRouteLabel(route) };
   const kind = TYPES[type].name;
   const expand = fallback.mode === 'expand';
   const sys =
@@ -83,15 +93,15 @@ export async function optimizePrompt(core: Core, type: MediaType, prompt: string
     if (!expand && j.add?.trim()) {
       return { ...fallback, add: j.add.trim().replace(/^[。，,]/, ''), neg: j.neg?.trim() || fallback.neg, note: j.note?.trim() || fallback.note, llm: true };
     }
-  } catch {
-    return { ...fallback, reason: '模型调用失败，已用规则补全' };
+  } catch (e) {
+    return { ...fallback, reason: `${(e as Error).message || '模型调用失败'}，已用规则补全` };
   }
   return { ...fallback, reason: '模型回复为空，已用规则补全' };
 }
 
 export async function enhanceAgent(core: Core, body: AgentEnhanceBody): Promise<AgentEnhanceReply | null> {
-  const route = chatRoute(core);
-  if (!route) return null;
+  const route = await chatRoute(core);
+  if (route.kind === 'none') return null;
   const kind = TYPES[body.mainType].name;
   const sys =
     '你是社媒运营的创意 Agent。下面是用户画板选区里的真实信息：元素构成、产出的原始提示词、用户亲手写的文字（优先级最高）。' +

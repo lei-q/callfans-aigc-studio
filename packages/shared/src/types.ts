@@ -312,11 +312,6 @@ export interface Settings {
     keyHint?: string;
     lastCheck?: CheckInfo;
   };
-  chat: {
-    /** 直连模式下用哪个对话模型；云端模式由云端选择 */
-    model: string;
-    available: string[];
-  };
   /** 按模型覆盖预估单价（点），仅用于展示预估 */
   prices: Record<string, number>;
   runtime: {

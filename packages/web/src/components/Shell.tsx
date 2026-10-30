@@ -224,7 +224,7 @@ export function Sidebar() {
           {s.settings?.account.provider === 'fastsso'
             ? directOn
               ? '当前为直连模式：用你自己的 TreeCloud Key 生成，费用在 TreeCloud 结算。'
-              : '账号负责充值与订单；生成请在「设置 · 直连 TreeCloud」填自己的 Key（平台生成网关还在接入）。'
+              : '登录后提示词助手与 Agent 用平台模型（扣点数）；图片 / 视频生成请在「设置 · 直连 TreeCloud」填自己的 Key。'
             : loggedIn
               ? '生成走云端网关，按真实用量扣点数；失败自动退回。'
               : directOn

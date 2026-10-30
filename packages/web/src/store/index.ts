@@ -101,8 +101,6 @@ export interface State {
   refScope: 'ws' | 'all';
   editScope: 'ws' | 'all';
   aestheticFilter: 'all' | 'image' | 'video' | 'web';
-  apiLang: 'curl' | 'python' | 'node';
-  newKeySecret: string | null;
 
   /* ---------------- 编辑器 ---------------- */
   editPick: Record<MediaType, string | null>;
@@ -167,7 +165,7 @@ export const initialState: State = {
   loginError: null,
   packs: [],
   packsLoading: false,
-  payChannel: 'wechat',
+  payChannel: 'huifu',
   activeOrder: null,
   orders: [],
 
@@ -202,8 +200,6 @@ export const initialState: State = {
   refScope: 'ws',
   editScope: 'ws',
   aestheticFilter: 'all',
-  apiLang: 'curl',
-  newKeySecret: null,
 
   editPick: { image: null, video: null, audio: null },
   editOps: cloneEditDefaults(),

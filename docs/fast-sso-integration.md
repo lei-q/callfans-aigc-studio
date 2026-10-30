@@ -1,6 +1,6 @@
 # Fast-SSO 账号与充值接入
 
-AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供。**平台生成网关还没有接入**，本轮生成仍走「直连 TreeCloud」。
+AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费）。**平台生成网关还没有接入媒体模型**，图片、视频与配音生成仍走「直连 TreeCloud」。
 
 ## 架构
 
@@ -67,6 +67,7 @@ https://account.callfansai.com/api/v1
 | `GET /api/billing/wallet` | 余额与今日免费额度 |
 | `POST /api/billing/orders` | 下单，**必须**带 `Idempotency-Key`（请求体 `idempotencyKey`） |
 | `POST /api/billing/orders/:id/prepay` | 获取 `codeUrl`（二维码内容） |
+| `POST /api/billing/orders/:id/cancel` | 关闭待支付订单（`/consumer/recharge/orders/{id}/close`） |
 | `GET /api/billing/orders/:id` | 轮询订单状态，`paid` 为准 |
 | `GET /api/billing/orders` | 最近订单 |
 | `POST /api/settings/account/refresh` | 探测账号服务连通性（`/api/settings/cloud/refresh` 的别名） |
@@ -77,6 +78,7 @@ https://account.callfansai.com/api/v1
 - 授权：`scope=openid profile email`、`code_challenge_method=S256`。
 - 账号 API：只调 `/api/v1/consumer/**` 与 `/api/v1/public/**`；其他路径会被 `403 consumer_scope` 拒绝。
 - 充值：`/consumer/recharge/skus` → `/channels` → `POST /orders`（`Idempotency-Key`）→ `POST /orders/{id}/prepay` → 轮询 `GET /orders/{id}`。
+- 取消：`POST /consumer/recharge/orders/{id}/close`；只有待支付订单能关闭，已支付返回 409。该接口需要账号服务升级到包含 consumer close 的版本。
 - 渠道过滤：只保留 `huifu` / `wechat` / `alipay` 且服务端 `enabled=true`；`mock` 一律不展示。
 - 登录状态以 ID Token 校验通过 + `GET /consumer/entitlements/balance` 成功为准；access token 401 时刷新一次，失败则登出并提示。
 
@@ -90,7 +92,16 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 - 单元测试与 e2e 会自动设置 `AIGC_ACCOUNT_PROVIDER=mock`（`packages/server/test/server.test.ts`、`playwright.config.ts`）。
 - Mock 云合同见 [`cloud-api-contract.md`](cloud-api-contract.md)，只用于联调，不是安全实现。
 
+## 平台模型（对话）
+
+- 清单：`GET {gatewayBase}/models`，免令牌，缓存 60 秒；`gatewayBase` 默认 `https://api.callfansai.com`，可用 `AIGC_GATEWAY_URL` 覆盖。
+- 选模型：`AIGC_CHAT_MODEL` → 内置偏好（`deepseek-v4.1-flash-1017`、`claude-haiku-5-5`、`gpt-6-luna`）→ 最便宜的 openai 协议对话模型；不写死。
+- 密钥：`POST /consumer/llm-keys` 用 consumer token 换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。
+  - 409 `billing_account_provisioning` → 约 30 秒后重试；409 `litellm_key_exists` → 本地副本丢了，先让平台吊销再换，不重试。
+- 调用：`POST {gatewayBase}/v1/chat/completions`；401 丢本地副本重换一次，422 = 积分不足。
+- 失败时提示词辅助回退到规则推断，并在响应里带上原因。
+
 ## 尚未接入
 
-- 平台生成网关：登录后的点数目前只用于充值与订单；生成需要在「设置 · 直连 TreeCloud」填自己的 Key。网关接入后，账号会话可直接复用。
+- 平台生成网关的**媒体**能力（图片 / 视频 / 语音）：登录后的点数目前只用于对话与订单；生成需要在「设置 · 直连 TreeCloud」填自己的 Key。平台上线媒体路由后，`Provider` 层可直接复用账号会话。
 - 站内支付渠道以外的退款/对账界面：以账号中心后台为准。

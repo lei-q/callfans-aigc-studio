@@ -76,10 +76,16 @@ export class ConsumerClient {
       }
     })();
     if (!res.ok) {
-      const b = (body || {}) as { message?: string; error?: string; fields?: Record<string, string> };
-      const message = b.message || (b.error === 'consumer_scope' ? '账号令牌不能访问这个接口' : b.error) || `账号服务返回 HTTP ${res.status}`;
+      const b = (body || {}) as { message?: string; error?: unknown; code?: string; fields?: Record<string, string> };
+      /* Fast-SSO 的错误同时带 message / error / code；分支判断只认 code */
+      const errText = typeof b.error === 'string' ? b.error : '';
+      const code = b.code || errText || undefined;
+      const message =
+        b.message ||
+        (errText === 'consumer_scope' ? '账号令牌不能访问这个接口' : errText) ||
+        `账号服务返回 HTTP ${res.status}`;
       if (res.status === 401) this.hooks.onUnauthorized();
-      throw new ConsumerError(res.status, message, b.error, b.fields);
+      throw new ConsumerError(res.status, message, code, b.fields);
     }
     return body as T;
   }
@@ -153,6 +159,14 @@ export interface FssPrepay {
   channel: string;
   codeUrl: string;
   expiresAt?: string | null;
+}
+
+/** POST /consumer/llm-keys：每个 (用户, 应用) 一把，默认不过期 */
+export interface FssLlmKey {
+  key: string;
+  keyId: string;
+  expiresAt?: string | null;
+  appId?: string;
 }
 
 export interface FssLedgerEntry {

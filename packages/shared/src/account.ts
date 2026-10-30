@@ -12,6 +12,8 @@ export interface AccountConfig {
   issuer: string;
   /** identity-api 根，例如 https://account.callfansai.com/api/v1 */
   apiBase: string;
+  /** 平台模型网关（LiteLLM）根，例如 https://api.callfansai.com */
+  gatewayBase: string;
   /** Keycloak 客户端 ID */
   clientId: string;
   /** 登记过的回环回调，必须逐字符一致 */

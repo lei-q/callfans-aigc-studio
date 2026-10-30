@@ -300,6 +300,19 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     core.events.emit({ type: 'order', order });
     return { order };
   });
+  app.post('/api/billing/orders/:id/cancel', async (req) => {
+    const id = (req.params as { id: string }).id;
+    if (!fastsso) throw new HttpError(400, '当前是开发用 Mock 云，不支持取消订单');
+    const order = await core.accounts.cancelOrder(id).catch((e) => {
+      if (e instanceof ConsumerError && e.status === 404) {
+        throw new HttpError(404, /order not found/i.test(e.message) ? '订单不存在' : '账号服务还没有上线取消订单接口，请先部署新版 Fast-SSO');
+      }
+      if (e instanceof ConsumerError && e.status === 409) throw new HttpError(409, '订单已支付或已关闭，不能取消');
+      throw accountErr(e);
+    });
+    core.events.emit({ type: 'order', order });
+    return { order };
+  });
   app.get('/api/billing/orders/:id', async (req) => {
     const id = (req.params as { id: string }).id;
     if (fastsso) {
@@ -531,8 +544,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     try {
       const cat = await core.direct.fetchCatalog();
       core.store.directModels = cat;
-      s.direct.lastCheck = { ok: true, at: Date.now(), message: `连接正常 · ${cat.models.length} 个生成模型 · ${cat.chat.length} 个对话模型` };
-      if (s.chat.model && !cat.chat.includes(s.chat.model)) s.chat.model = cat.chat[0] || '';
+      s.direct.lastCheck = { ok: true, at: Date.now(), message: `连接正常 · ${cat.models.length} 个生成模型` };
     } catch (e) {
       const err = e as { reason?: string; message?: string };
       s.direct.lastCheck = { ok: false, at: Date.now(), message: err.reason || err.message || '连接失败' };
@@ -574,7 +586,6 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
         s.direct.enabled = d.enabled;
       }
     }
-    if (body.chat?.model !== undefined) s.chat.model = body.chat.model;
     if (body.prices) {
       for (const [k, v] of Object.entries(body.prices)) {
         if (v == null) delete s.prices[k];

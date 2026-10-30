@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { AppInfo, Bootstrap, Channel, ModelInfo, RunMode, SessionInfo, Settings } from '@aigc/shared';
 import { DEFAULT_PORT, uid } from '@aigc/shared';
 import { AccountSession } from './account/session';
+import { PlatformCatalog } from './account/platform';
 import { CloudSession } from './cloud/session';
 import { Db } from './db';
 import { EventHub } from './events';
@@ -64,6 +65,8 @@ export class Core {
   readonly events = new EventHub();
   /** Fast-SSO 账号会话（登录 / 注册 / 积分 / 充值） */
   readonly accounts: AccountSession;
+  /** 平台模型网关的模型清单（免令牌，运行时拉取并缓存） */
+  readonly platform: PlatformCatalog;
   /** 开发用 Mock 云的设备码会话；生产模式下只作为可选的生成网关客户端 */
   readonly session: CloudSession;
   readonly cloud: CloudProvider;
@@ -84,6 +87,7 @@ export class Core {
     fs.mkdirSync(this.uploadsDir, { recursive: true });
 
     this.accounts = new AccountSession(this.store, this.secrets, this.events, () => this.store.settings.account);
+    this.platform = new PlatformCatalog(() => this.store.settings.account);
     this.session = new CloudSession(this.store, this.secrets, this.events, () => this.store.settings.cloud.baseUrl);
     this.cloud = new CloudProvider(
       () => this.session,
@@ -217,7 +221,6 @@ export class Core {
         keyHint: s.direct.keyHint,
         lastCheck: s.direct.lastCheck,
       },
-      chat: { model: s.chat.model, available: this.store.directModels.chat },
       prices: s.prices,
       runtime: {
         mode: launch.mode || this.opts.mode,

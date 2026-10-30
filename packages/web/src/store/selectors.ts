@@ -1,4 +1,4 @@
-import type { AudioUse, Board, CanvasItem, CanvasLink, Job, MediaType, ModelInfo, Result } from '@aigc/shared';
+import type { AudioUse, Board, CanvasItem, CanvasLink, Job, MediaType, ModelInfo, PayChannel, Result, SessionInfo } from '@aigc/shared';
 import { round1 } from '@aigc/shared';
 import type { State } from './index';
 
@@ -84,5 +84,16 @@ export function sourcePrompt(s: State, rid?: string) {
   return { r, j };
 }
 
+/**
+ * 充值页实际展示的渠道：微信支付暂时隐藏；汇付聚合正扫默认走支付宝，
+ * 和 alipay 同时出现时只保留一个，避免两个同名「支付宝」。
+ */
+export function payChannels(session?: SessionInfo | null): PayChannel[] {
+  const list = (session?.payChannels || []).filter((c) => c !== 'wechat');
+  if (list.includes('huifu') && list.includes('alipay')) return list.filter((c) => c !== 'alipay');
+  return list;
+}
+
 /** 云端是否开放充值：明确返回空渠道才算未开放，未知时按开放处理（避免探测失败误藏入口） */
-export const topupOpen = (s: State) => !s.session || s.session.payChannels === undefined || s.session.payChannels.length > 0;
+export const topupOpen = (s: State) =>
+  !s.session || s.session.payChannels === undefined || payChannels(s.session).length > 0;

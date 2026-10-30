@@ -77,7 +77,6 @@ export interface SettingsPatch {
   cloud?: { baseUrl?: string };
   runner?: { concurrency?: number };
   direct?: { enabled?: boolean; baseUrl?: string; apiKey?: string; clearKey?: boolean };
-  chat?: { model?: string };
   prices?: Record<string, number | null>;
   runtime?: { mode?: RunMode; host?: string; port?: number; lan?: boolean; token?: string; clearToken?: boolean };
 }

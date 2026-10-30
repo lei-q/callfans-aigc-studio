@@ -3,11 +3,10 @@ import type { MediaType, ModelInfo, UsageRequest, UsageSummary } from '@aigc/sha
 import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, round1, timeLabel } from '@aigc/shared';
 import { Empty, Icon, TaskIc, jobIconCls } from '../components/common';
 import { setState, useStore } from '../store';
-import { aestheticAddFile, apiCreateKey, apiDelete, apiToggle, logout, openDrawer, patchSettings, removeAesthetic } from '../store/actions';
+import { aestheticAddFile, logout, openDrawer, patchSettings, removeAesthetic } from '../store/actions';
 import { balance, channelReady, modelOf } from '../store/selectors';
 import { toast } from '../store/toast';
 import { api } from '../lib/api';
-import { copyText } from '../lib/util';
 
 declare global {
   interface Window {
@@ -123,38 +122,6 @@ export function AestheticPage() {
 
 /* ---------------- API 接入 ---------------- */
 
-const snippets = (origin: string): Record<'curl' | 'python' | 'node', string> => ({
-  curl: `curl ${origin}/openapi/v1/images/generations \\
-  -H "Authorization: Bearer $AIGC_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "prompt": "暖橙主色背景，哑光纸杯居中，顶部柔光，留出标题安全区",
-    "size": "1024x1024",
-    "n": 2
-  }'`,
-  python: `import os, requests
-
-res = requests.post(
-    "${origin}/openapi/v1/images/generations",
-    headers={"Authorization": f"Bearer {os.environ['AIGC_API_KEY']}"},
-    json={"prompt": "暖橙主色背景，哑光纸杯居中，顶部柔光", "n": 2},
-    timeout=600,
-)
-res.raise_for_status()
-for img in res.json()["data"]:
-    print(img["url"])`,
-  node: `const res = await fetch("${origin}/openapi/v1/images/generations", {
-  method: "POST",
-  headers: {
-    Authorization: \`Bearer \${process.env.AIGC_API_KEY}\`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ prompt: "暖橙主色背景，哑光纸杯居中，顶部柔光", n: 2 }),
-});
-const { data } = await res.json();
-console.log(data.map((d) => d.url));`,
-});
-
 export function ApiPage() {
   const s = useStore();
   const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -170,16 +137,14 @@ export function ApiPage() {
       .get<{ items: UsageRequest[] }>('/api/usage/requests')
       .then((r) => setReqs(r.items))
       .catch(() => setReqs([]));
-  }, [loggedIn, s.apiKeys.length]);
-  const origin = window.location.origin;
-  const code = snippets(origin)[s.apiLang];
+  }, [loggedIn]);
   const chName = (id: string) => s.channels.find((c) => c.id === id)?.name || id;
   return (
     <div className="page">
       <div className="toolbar">
         <div className="page-title-block">
           <span className="page-title">API 接入</span>
-          <span className="page-sub">用同一份点数按量计费，不额外收费 · 适合接进 agent、脚本或批量工具</span>
+          <span className="page-sub">同一份点数，按量计费 · 这里查看可用模型、用量与账单</span>
         </div>
         <span className="grow" />
         <button className="btn primary" onClick={() => openDrawer('topup')}>
@@ -211,68 +176,6 @@ export function ApiPage() {
             去登录
           </button>
         )}
-      </div>
-
-      {s.newKeySecret && (
-        <div className="alert-bar key-once">
-          <Icon name="shield" />
-          <span>
-            <b>新 Key 只展示这一次：</b>
-            <code className="num">{s.newKeySecret}</code>
-          </span>
-          <span className="right">
-            <button
-              className="btn sm ghost"
-              onClick={() => {
-                copyText(s.newKeySecret!);
-                toast('success', '已复制 Key');
-              }}
-            >
-              <Icon name="copy" />
-              复制
-            </button>
-            <button className="btn sm ghost" onClick={() => setState((st) => void (st.newKeySecret = null))}>
-              我已保存
-            </button>
-          </span>
-        </div>
-      )}
-
-      <div className="catalog-sec">
-        <div className="catalog-sec-name">密钥</div>
-        <div className="card table-card">
-          <div className="key-head">
-            <span>名称</span>
-            <span>Key</span>
-            <span>创建时间</span>
-            <span>计费渠道</span>
-            <span className="th-right">操作</span>
-          </div>
-          {s.apiKeys.map((k) => (
-            <div key={k.id} className={`key-row ${k.on ? '' : 'off'}`}>
-              <span className="kr-name">{k.name}</span>
-              <span className="kr-key">{k.masked}</span>
-              <span className="tiny dim">{timeLabel(k.createdAt)}</span>
-              <span className="ch-chip">{chName(k.channel)}</span>
-              <div className="row-actions">
-                <button className="btn sm ghost" onClick={() => void apiToggle(k.id, !k.on)}>
-                  {k.on ? '停用' : '启用'}
-                </button>
-                <button className="btn sm ghost" onClick={() => void apiDelete(k.id)}>
-                  <Icon name="trash" />
-                  删除
-                </button>
-              </div>
-            </div>
-          ))}
-          <div className="key-row key-new">
-            <button className="btn sm primary" onClick={() => void apiCreateKey()}>
-              <Icon name="plus" />
-              创建新 Key
-            </button>
-            <span className="tiny dim">Key 只在创建时完整展示一次；调用按当前路由计费（平台网关扣点数 / 直连记用量）</span>
-          </div>
-        </div>
       </div>
 
       <div className="catalog-sec">
@@ -346,43 +249,6 @@ export function ApiPage() {
       </div>
 
       <div className="catalog-sec">
-        <div className="catalog-sec-name">快速开始</div>
-        <div className="card code-card">
-          <div className="code-head">
-            <span className="field-label">
-              <Icon name="cpu" />
-              示例代码
-            </span>
-            <span className="grow" />
-            <div className="mini-tabs">
-              {(['curl', 'python', 'node'] as const).map((l) => (
-                <button key={l} className={s.apiLang === l ? 'active' : ''} onClick={() => setState((st) => void (st.apiLang = l))}>
-                  {l}
-                </button>
-              ))}
-            </div>
-            <button
-              className="btn sm ghost"
-              onClick={() => {
-                copyText(code);
-                toast('success', '已复制示例代码', `当前语言：${s.apiLang}`);
-              }}
-            >
-              <Icon name="copy" />
-              复制
-            </button>
-          </div>
-          <pre className="code-block">{code}</pre>
-          <div className="code-foot">
-            <Icon name="link" />
-            <span>
-              把 Key 放进环境变量 <b>AIGC_API_KEY</b>，不要写死在代码里。异步任务用 <b>POST /openapi/v1/jobs</b> 提交、<b>GET /openapi/v1/jobs/:id</b> 轮询。
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div className="catalog-sec">
         <div className="catalog-sec-name">渠道</div>
         <div className="card table-card">
           <div className="key-head ch-head">
@@ -447,8 +313,8 @@ export function ModelsPage() {
         <ModelSection key={t} t={t} models={s.models.filter((m) => m.type === t && channelReady(s, m.channel))} />
       ))}
       <div className="table-note">
-        <Icon name="link" />
-        <span>要批量调用？到「API 接入」创建 Key，用同一份点数按量计费，不额外收费。</span>
+        <Icon name="shield" />
+        <span>点数不足时任务不会提交；生成失败的点数原路退回。实际扣费以平台账本为准。</span>
       </div>
     </div>
   );
@@ -546,12 +412,12 @@ export function SettingsPage() {
       <div className="toolbar">
         <div className="page-title-block">
           <span className="page-title">设置</span>
-          <span className="page-sub">账号与云端、直连 Key、预估单价与运行模式</span>
+          <span className="page-sub">账号、直连 Key、预估单价与运行模式</span>
         </div>
       </div>
 
       <div className="catalog-sec">
-        <div className="catalog-sec-name">账号与云端</div>
+        <div className="catalog-sec-name">账号</div>
         <div className="card set-card">
           <div className="set-account-row">
             {loggedIn ? (
@@ -588,14 +454,6 @@ export function SettingsPage() {
             <>
               <div className="d-card d-card-pad">
                 <div className="snap-row">
-                  <span className="sk">账号服务</span>
-                  <span className="sv num">{st.account.issuer}</span>
-                </div>
-                <div className="snap-row">
-                  <span className="sk">接口根</span>
-                  <span className="sv num">{st.account.apiBase}</span>
-                </div>
-                <div className="snap-row">
                   <span className="sk">客户端</span>
                   <span className="sv num">
                     {st.account.clientId}（公共客户端 · PKCE）
@@ -621,7 +479,7 @@ export function SettingsPage() {
                   测试连接
                 </button>
               </div>
-              <div className="tiny dim">注册、登录、找回密码与充值都由账号服务完成；生成仍走「直连 TreeCloud」，点数只用于平台生成网关接入后的消耗。</div>
+              <div className="tiny dim">注册、登录、找回密码与充值都由账号服务完成；登录后提示词助手与 Agent 用平台模型润色（按点数计费），图片、视频与语音生成走下面的直连 TreeCloud。</div>
             </>
           ) : (
             <>
@@ -677,17 +535,6 @@ export function SettingsPage() {
               onChange={(e) => setKey(e.target.value)}
               placeholder={d.hasKey ? `已保存 ${d.keyHint || ''}，留空则不修改` : 'sk-tc-…（在 TreeCloud 控制台创建）'}
             />
-          </div>
-          <div className="form-row">
-            <span className="form-label">对话模型</span>
-            <select className="form-select" value={st.chat.model} disabled={!st.chat.available.length} onChange={(e) => void patchSettings({ chat: { model: e.target.value } })}>
-              {!st.chat.available.length && <option value="">（连接后可选，用于提示词辅助）</option>}
-              {st.chat.available.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
           </div>
           <div className="set-actions">
             <button className="btn primary" disabled={busy || (!key.trim() && !d.hasKey)} onClick={() => void connectDirect()}>

@@ -7,6 +7,7 @@ import {
   addRefItem,
   adoptResult,
   cancelJob,
+  cancelOrder,
   closeActiveOrder,
   closeDrawer,
   copyPromptOf,
@@ -49,7 +50,7 @@ import {
 } from '../store/actions';
 import { addResultToCanvas } from '../canvas/ops';
 import { togglePlay } from '../store/player';
-import { balance, dailyFreeLeft, jobById, libResults, modelOf, queueJobs, resultById, topupOpen } from '../store/selectors';
+import { balance, dailyFreeLeft, jobById, libResults, modelOf, payChannels, queueJobs, resultById, topupOpen } from '../store/selectors';
 import { cssOfEdit } from '../lib/util';
 import { Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, TypeChip, Wave } from '../components/common';
 
@@ -586,7 +587,8 @@ function RefAddDrawer() {
 
 /* ---------------- 账号：登录 / 注册 / 找回 ---------------- */
 
-const CHANNEL_LABEL: Record<string, string> = { huifu: '汇付聚合', wechat: '微信支付', alipay: '支付宝' };
+/* 汇付聚合正扫当前固定走支付宝，界面按用户看到的支付方式命名 */
+const CHANNEL_LABEL: Record<string, string> = { huifu: '支付宝', wechat: '微信支付', alipay: '支付宝' };
 const channelName = (c: string) => CHANNEL_LABEL[c] || c;
 
 function Qr({ content, size = 168 }: { content: string; size?: number }) {
@@ -989,7 +991,7 @@ function AccountDrawer() {
                   账号与点数
                 </div>
                 <ul>
-                  <li>充值走汇付聚合 / 微信支付 / 支付宝，点数实时到账，不过期。</li>
+                  <li>充值走支付宝，点数实时到账，不过期。</li>
                   <li>生成失败或取消，冻结的点数自动退回。</li>
                   <li>本机的项目、画板与素材仍留在这台电脑上；账号负责点数与订单归属。</li>
                 </ul>
@@ -1057,7 +1059,7 @@ function OrderList() {
   );
 }
 
-/* ---------------- 充值：积分档位 / 汇付 / 微信 / 支付宝 ---------------- */
+/* ---------------- 充值：积分档位 / 支付宝 ---------------- */
 
 function TopupDrawer() {
   const s = useStore();
@@ -1073,7 +1075,26 @@ function TopupDrawer() {
   }, [loggedIn]);
   const paying = order && (order.status === 'created' || order.status === 'paying');
   /* 渠道以账号服务返回为准；undefined 表示还没读到，不展示选择 */
-  const chans = s.session?.payChannels;
+  const chans = payChannels(s.session);
+  /* 临时的自定义测试金额：只接受整数元，且必须是上游已开通的档位 */
+  const [customYuan, setCustomYuan] = useState('');
+  const [customErr, setCustomErr] = useState('');
+  const submitCustom = () => {
+    const raw = customYuan.trim();
+    const n = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < 1) {
+      setCustomErr('请输入整数金额，最低 ¥1');
+      return;
+    }
+    const pack = s.packs.find((p) => p.points === n);
+    if (!pack) {
+      const have = s.packs.map((p) => `¥${p.amountCny}`).join(' / ') || '暂无';
+      setCustomErr(`账号服务没有 ¥${n} 的档位；当前可用：${have}`);
+      return;
+    }
+    setCustomErr('');
+    void createOrder(pack.id, s.payChannel);
+  };
   return (
     <>
       <Head
@@ -1118,6 +1139,31 @@ function TopupDrawer() {
                 </div>
                 {s.packsLoading && <div className="tiny dim">正在读取档位…</div>}
                 {!s.packsLoading && !s.packs.length && <div className="tiny dim">账号服务暂无可用档位。</div>}
+                {/* 临时测试入口：整数元自定义金额，确认可用后删除 */}
+                <div className="pack-custom">
+                  <span className="pack-tag">自定义金额</span>
+                  <div className="pack-custom-row">
+                    <span className="num">¥</span>
+                    <input
+                      className="form-input num"
+                      inputMode="numeric"
+                      placeholder="整数，最低 1"
+                      value={customYuan}
+                      onChange={(e) => {
+                        setCustomYuan(e.target.value);
+                        setCustomErr('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') submitCustom();
+                      }}
+                    />
+                    <button className="btn primary sm" disabled={!customYuan.trim()} onClick={submitCustom}>
+                      去支付
+                    </button>
+                  </div>
+                  {customErr ? <div className="tiny pack-custom-err">{customErr}</div> : null}
+                  <div className="field-hint">临时测试入口：金额需与账号服务已开通的档位一致（1 点 = ¥1）。</div>
+                </div>
               </div>
               {chans && chans.length > 0 && (
                 <div className="d-section">
@@ -1187,7 +1233,7 @@ function TopupDrawer() {
       <div className="drawer-foot">
         <span className="tiny dim">
           <Icon name="shield" />
-          支付由汇付 / 微信 / 支付宝完成，本平台不接触你的支付密码
+          支付由支付宝完成，本平台不接触你的支付密码
         </span>
         <span className="grow" />
         <button className="btn ghost" onClick={closeDrawer}>
@@ -1202,6 +1248,7 @@ function PayPanel({ order }: { order: OrderDto }) {
   const left = Math.max(0, Math.round((order.expireAt - Date.now()) / 1000));
   const [sec, setSec] = useState(left);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   useEffect(() => {
     const t = setInterval(() => setSec(Math.max(0, Math.round((order.expireAt - Date.now()) / 1000))), 1000);
     return () => clearInterval(t);
@@ -1248,8 +1295,20 @@ function PayPanel({ order }: { order: OrderDto }) {
         )}
       </div>
       <div className="pay-actions">
-        <button className="btn ghost" onClick={closeActiveOrder}>
-          {paid ? '完成' : '取消这笔订单'}
+        <button
+          className="btn ghost"
+          disabled={cancelling}
+          onClick={async () => {
+            if (paid) {
+              closeActiveOrder();
+              return;
+            }
+            setCancelling(true);
+            await cancelOrder(order.id);
+            setCancelling(false);
+          }}
+        >
+          {paid ? '完成' : cancelling ? '正在取消…' : '取消这笔订单'}
         </button>
       </div>
     </div>

@@ -39,6 +39,9 @@ async function topup(page: Page, channel: '微信支付' | '支付宝' = '微信
   await page.locator('.mini-tabs button', { hasText: channel }).click();
   await page.locator('.pack-card').first().click();
   await expect(page.locator('.pay-qr canvas, .pay-qr img').first()).toBeVisible();
+  /* 轮询会刷新订单；二维码不能因为一次订单查询就变空白 */
+  await page.waitForTimeout(2_600);
+  await expect(page.locator('.pay-qr canvas, .pay-qr img').first()).toBeVisible();
   const href = await page.locator('.pay-tip a', { hasText: '打开收银台' }).getAttribute('href');
   const tab = await page.context().newPage();
   await tab.goto(href!);
@@ -68,16 +71,16 @@ test('首启是干净的：没有示例数据，生成入口引导登录', async
   await expect(page.locator('.gen-btn', { hasText: '登录后生成' })).toBeVisible();
 });
 
-test('登录 → 微信扫码充值 → 余额到账', async ({ page }) => {
+test('登录 → 支付宝扫码充值 → 余额到账', async ({ page }) => {
   await open(page);
   await ensureLogin(page);
   await expect(page.locator('.gen-btn', { hasText: '登录后生成' })).toHaveCount(0);
-  await topup(page, '微信支付');
+  await topup(page, '支付宝');
   /* 余额芯片显示数字（登录赠送 1 点 + 首充档位） */
   await expect(page.locator('.balance-chip:not(.login)')).toContainText(/\d/);
   /* 订单记录里能看到这一笔 */
   await page.locator('.balance-chip').click();
-  await expect(page.locator('.drawer-body', { hasText: '微信' })).toBeVisible();
+  await expect(page.locator('.drawer-body', { hasText: '支付宝' })).toBeVisible();
   await closeDrawer(page);
 });
 
@@ -217,4 +220,16 @@ test('设置页：直连模式未填 Key 时不能启用', async ({ page }) => {
   await page.locator('.side-item', { hasText: '设置' }).click();
   await page.locator('.set-choice', { hasText: /直连|启用/ }).first().click();
   await expect(page.locator('.toast', { hasText: /Key/ })).toBeVisible();
+});
+
+test('导航：API 接入不再展示本地密钥，设置页改叫「账号」', async ({ page }) => {
+  await open(page);
+  await page.locator('.side-item', { hasText: 'API 接入' }).click();
+  await expect(page.locator('.page-title')).toHaveText('API 接入');
+  await expect(page.locator('.catalog-sec-name', { hasText: '密钥' })).toHaveCount(0);
+  await expect(page.locator('.catalog-sec-name', { hasText: '快速开始' })).toHaveCount(0);
+  await page.locator('.side-item', { hasText: '设置' }).click();
+  await expect(page.locator('.catalog-sec-name').first()).toHaveText('账号');
+  await expect(page.locator('.snap-row', { hasText: '账号服务' })).toHaveCount(0);
+  await expect(page.locator('.snap-row', { hasText: '接口根' })).toHaveCount(0);
 });

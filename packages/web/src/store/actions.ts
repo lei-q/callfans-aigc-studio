@@ -36,7 +36,7 @@ import { api } from '../lib/api';
 import { copyText, downloadText, downloadUrl, pickFiles, renderEditedImage, resultDownloadUrl, thumbOf } from '../lib/util';
 import { cloneEditDefaults, getState, setState, type DrawerType, type Page, type State } from './index';
 import { fixParams } from './data';
-import { boardOf, canvasItems, inScope, jobById, libResults, modelOf, resultById, wsShort } from './selectors';
+import { boardOf, canvasItems, inScope, jobById, libResults, modelOf, payChannels, resultById, wsShort } from './selectors';
 import { toast, toastError } from './toast';
 
 /* ============================================================================
@@ -91,7 +91,6 @@ export function openDrawer(type: DrawerType, id?: string) {
 export function closeDrawer() {
   setState((s) => {
     s.drawer = null;
-    s.newKeySecret = null;
   });
 }
 
@@ -855,7 +854,7 @@ export async function loadPacks() {
     const { packs } = await api.get<{ packs: PackDto[] }>('/api/billing/packs');
     setState((st) => {
       st.packs = packs;
-      const chans = st.session?.payChannels || [];
+      const chans = payChannels(st.session);
       if (chans.length && !chans.includes(st.payChannel)) st.payChannel = chans[0]!;
     });
   } catch (e) {
@@ -921,10 +920,12 @@ export function pollOrder(id: string) {
     try {
       const { order } = await api.get<{ order: OrderDto }>(`/api/billing/orders/${encodeURIComponent(id)}`);
       setState((st) => {
-        st.activeOrder = order;
-        const i = st.orders.findIndex((x) => x.id === order.id);
-        if (i >= 0) st.orders[i] = order;
-        else st.orders.unshift(order);
+        /* 订单查询不一定带二维码；轮询时保留 prepay 拿到的内容，避免收款码一闪就空 */
+        const merged: OrderDto = { ...order, qrContent: order.qrContent || cur.qrContent, cashierUrl: order.cashierUrl || cur.cashierUrl };
+        st.activeOrder = merged;
+        const i = st.orders.findIndex((x) => x.id === merged.id);
+        if (i >= 0) st.orders[i] = merged;
+        else st.orders.unshift(merged);
       });
       if (order.status === 'paid') {
         toast('success', '充值到账', `${order.points} 点 · ${order.packName}`);
@@ -943,6 +944,28 @@ export function closeActiveOrder() {
   if (orderTimer) clearTimeout(orderTimer);
   orderTimer = null;
   setState((st) => void (st.activeOrder = null));
+}
+
+/** 关闭待支付订单；上游 close 成功后停止轮询，订单记录显示已关闭 */
+export async function cancelOrder(id: string) {
+  try {
+    const { order } = await api.post<{ order: OrderDto }>(`/api/billing/orders/${encodeURIComponent(id)}/cancel`, {});
+    if (orderTimer) {
+      clearTimeout(orderTimer);
+      orderTimer = null;
+    }
+    setState((st) => {
+      st.activeOrder = null;
+      const i = st.orders.findIndex((x) => x.id === order.id);
+      if (i >= 0) st.orders[i] = order;
+      else st.orders.unshift(order);
+    });
+    toast('info', '订单已取消', '这笔订单不会再继续等待支付，二维码已关闭。');
+    return order;
+  } catch (e) {
+    toastError(e, '取消订单失败');
+    return null;
+  }
 }
 
 export async function loadOrders() {
@@ -988,35 +1011,6 @@ export async function deleteProject(id: string) {
   }
 }
 
-/* ---------------- API Key ---------------- */
-
-export async function apiCreateKey() {
-  try {
-    const { secret } = await api.post<{ secret: string }>('/api/keys', {});
-    setState((s) => void (s.newKeySecret = secret));
-    copyText(secret);
-    toast('success', '已创建新 Key，并复制到剪贴板', '完整 Key 只在这一次展示，请妥善保存');
-  } catch (e) {
-    toastError(e);
-  }
-}
-export async function apiToggle(id: string, on: boolean) {
-  try {
-    await api.patch(`/api/keys/${id}`, { on });
-    toast('info', on ? '已启用' : '已停用', on ? '可以继续调用' : '使用该 Key 的调用会立即失败');
-  } catch (e) {
-    toastError(e);
-  }
-}
-export async function apiDelete(id: string) {
-  try {
-    await api.del(`/api/keys/${id}`);
-    toast('info', '已删除 Key', '不可恢复');
-  } catch (e) {
-    toastError(e);
-  }
-}
-
 /* ---------------- 设置 ---------------- */
 
 export async function patchSettings(patch: SettingsPatch, okMsg?: string) {
@@ -1036,7 +1030,7 @@ export async function patchSettings(patch: SettingsPatch, okMsg?: string) {
 
 export async function refreshModels() {
   try {
-    const { settings } = await api.post<{ settings: State['settings'] }>('/api/settings/treecloud/refresh');
+    const { settings } = await api.post<{ settings: State['settings'] }>('/api/settings/direct/refresh');
     setState((s) => {
       s.settings = settings;
       fixParams(s);

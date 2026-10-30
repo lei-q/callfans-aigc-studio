@@ -996,7 +996,7 @@ export async function agentOpen() {
   const s = getState();
   const result = computeAgent(s);
   const seq = ++agentSeq;
-  const llm = !!s.session?.loggedIn || !!(s.settings?.direct.enabled && s.settings.direct.hasKey && s.settings.chat.model);
+  const llm = !!s.session?.loggedIn;
   setState((st) => void (st.agent = { open: true, result, loading: llm && !!result.draft }));
   if (!llm || !result.draft) return;
   try {

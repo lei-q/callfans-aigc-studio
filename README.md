@@ -44,8 +44,8 @@
 
 首次启动是一个干净的空项目：没有示例素材，也没有假数据。生成有两条路，在「设置」里可以看到当前走哪条：
 
-- **平台账号（Fast-SSO）**：注册、登录、找回密码与充值都由账号中心完成，点数跟着账号走，换设备也不丢。本轮只接入账号与充值；平台生成网关还在接入，生成暂时仍走直连。
-- **直连 TreeCloud（高级）**：在「设置 · 直连」填自己的 `sk-tc-` Key，请求直接发给 TreeCloud，**不扣平台点数**，费用由 TreeCloud 结算。
+- **平台账号（Fast-SSO）**：注册、登录、找回密码与充值都由账号中心完成，点数跟着账号走，换设备也不丢。登录后，提示词助手与 Agent 直接调用平台模型（按点数计费），不需要任何配置。
+- **直连 TreeCloud（高级）**：在「设置 · 直连」填自己的 `sk-tc-` Key，请求直接发给 TreeCloud，**不扣平台点数**，费用由 TreeCloud 结算。图片、视频与配音的分发目前只走这条路（平台生成网关还没有接入媒体模型）。
 
 没有登录、也没有启用直连时，生成按钮会变成「登录后生成」。
 
@@ -60,6 +60,17 @@
 
 > 使用 Fast-SSO 前需要在控制台把 `http://127.0.0.1:5781/auth/callback` 加进该应用的 `redirectUris`（逐字符一致），并确认应用 `realm=consumer`、`trust=一方`、`status=active`、`clientType=public`。
 
+### 平台模型（对话）
+
+「帮我写详细」和 Agent 的「需求理解 / 建议提示词」由平台模型生成，走 LiteLLM 网关 `https://api.callfansai.com`：
+
+1. 模型清单 `GET /models` 免令牌，运行时拉取并缓存 60 秒；选择顺序为 `AIGC_CHAT_MODEL` → 内置偏好（`deepseek-v4.1-flash-1017` 等，清单里没有就跳过）→ 最便宜的 openai 协议对话模型。模型名不写死在客户端。
+2. 模型密钥由本机服务用该账号的 consumer token 换一次（`POST /consumer/llm-keys`，每个用户每个应用一把、默认不过期），**加密存在本机**，之后一直复用；前端、日志里都不会出现 `sk-`。
+3. 调用 `POST /v1/chat/completions`，扣的是该账号在这个应用池里的点数。网关 422 = 积分不足（充值后再试），401 = key 被吊销（丢本地副本后只重换一次）。
+4. 换 key 返回 409 `litellm_key_exists` 时不重试：说明平台已签发过、本机没有副本，需要先在平台吊销。
+
+可用环境变量 `AIGC_GATEWAY_URL` 覆盖网关地址（默认 `https://api.callfansai.com`）。
+
 ### 直连 TreeCloud
 
 1. 在 [TreeCloud 控制台](https://console.jtreecloud.com) 创建一个 `sk-tc-` 开头的 API Key；
@@ -71,15 +82,17 @@
 | 图像 | `POST /v1/images/generations`；有参考图时 `POST /v1/images/edits` | 比例 + 分辨率换算成模型支持的 `size`；返回的 `b64_json` / `url` 立即保存到本机。**不自动重试**，避免重复计费 |
 | 视频 | `POST /api/v3/contents/generations/tasks` → 轮询 `GET …/{id}` | 参考图作为首帧或参考图传入；运镜写进提示词；取消时调用 `DELETE`；应用重启后接着查询 |
 | 配音 | `POST /v1/audio/speech` | 音色映射到网关公开音色。TreeCloud 暂不提供音乐与音效，所以这两类直连不可用 |
-| 对话 | `POST /v1/chat/completions` | 「帮我写详细」和 Agent 的「需求理解 / 建议提示词」由对话模型生成；失败时回退到规则推断，并在界面上标明 |
 
 错误会翻译成「原因 + 修复建议」，并带上响应头里的 `X-Request-Id`，方便到 TreeCloud 控制台核对。Key 用本机密钥加密保存，只会发给你填写的 Base URL。
 
 ### 本地 OpenAPI
 
-「API 接入」页可以创建 `sk-local-` Key，把本机服务接进脚本或 agent，和网页共用同一个账号与点数（需要先登录云端账号，或启用直连）：
+本机服务仍暴露 `sk-local-` Key 鉴权的本地 OpenAPI，方便脚本接入（界面里不再提供创建入口）。Key 只在本机创建与校验，和网页共用同一份模型与账号：
 
 ```bash
+# 创建一把本地 Key（完整 Key 只在响应里出现一次）
+curl -X POST http://127.0.0.1:5780/api/keys
+
 curl http://127.0.0.1:5780/openapi/v1/images/generations \
   -H "Authorization: Bearer $AIGC_API_KEY" \
   -H "Content-Type: application/json" \
@@ -134,7 +147,7 @@ e2e/                 Playwright 端到端测试
 推送 `v*` 标签即触发 [Release 工作流](.github/workflows/release.yml)：在 macOS（arm64 runner，同时产出 arm64 与 x64）、Windows、Linux 上并行打包，产物与 `SHA256SUMS.txt` 一起上传到 GitHub Release。
 
 ```bash
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 配置 `CSC_LINK` / `CSC_KEY_PASSWORD`（以及 macOS 的 `APPLE_INSTALLER_IDENTITY`）secrets 后会自动启用代码签名。

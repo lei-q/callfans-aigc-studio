@@ -68,7 +68,6 @@ export interface SettingsInternal {
     keyHint?: string;
     lastCheck?: { ok: boolean; at: number; message: string };
   };
-  chat: { model: string };
   prices: Record<string, number>;
   runtime: { tokenHash?: string };
 }
@@ -81,6 +80,7 @@ export const DEFAULT_ACCOUNT: AccountConfig = {
   provider: (process.env.AIGC_ACCOUNT_PROVIDER === 'mock' ? 'mock' : 'fastsso') as AccountProvider,
   issuer: process.env.AIGC_SSO_ISSUER || 'https://sso.callfansai.com/realms/consumer',
   apiBase: process.env.AIGC_ACCOUNT_API || 'https://account.callfansai.com/api/v1',
+  gatewayBase: process.env.AIGC_GATEWAY_URL || 'https://api.callfansai.com',
   clientId: process.env.AIGC_SSO_CLIENT_ID || 'aigc-callfans',
   redirectUri: process.env.AIGC_SSO_REDIRECT || 'http://127.0.0.1:5781/auth/callback',
 };
@@ -90,7 +90,6 @@ export const DEFAULT_SETTINGS: SettingsInternal = {
   cloud: { baseUrl: process.env.AIGC_CLOUD_URL || '' },
   runner: { concurrency: 2 },
   direct: { enabled: false, baseUrl: TREECLOUD_BASE_URL },
-  chat: { model: '' },
   prices: {},
   runtime: {},
 };
@@ -123,7 +122,6 @@ export class Store {
       cloud: { ...DEFAULT_SETTINGS.cloud, ...s?.cloud },
       runner: { ...DEFAULT_SETTINGS.runner, ...s?.runner },
       direct: { ...DEFAULT_SETTINGS.direct, ...s?.direct },
-      chat: { ...DEFAULT_SETTINGS.chat, ...s?.chat },
       prices: { ...s?.prices },
       runtime: { ...s?.runtime },
     };
@@ -148,6 +146,17 @@ export class Store {
   set accountSession(v: string | null) {
     if (v == null) this.db.del('kv', 'account_session');
     else this.db.kvSet('account_session', v);
+  }
+
+  /** 平台模型密钥：账号 id → 加密后的 sk-…；只在后端，永不进前端 */
+  llmKeyOf(accountId: string): string | null {
+    return this.db.kvGet<Record<string, string>>('llm_keys')?.[accountId] || null;
+  }
+  setLlmKey(accountId: string, enc: string | null) {
+    const all = { ...(this.db.kvGet<Record<string, string>>('llm_keys') || {}) };
+    if (enc) all[accountId] = enc;
+    else delete all[accountId];
+    this.db.kvSet('llm_keys', all);
   }
 
   /** 设备指纹：注册 / 签到风控用，只在本机生成一次 */
