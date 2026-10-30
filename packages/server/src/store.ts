@@ -68,6 +68,7 @@ export interface SettingsInternal {
     keyHint?: string;
     lastCheck?: { ok: boolean; at: number; message: string };
   };
+  platform: { chatModel: string };
   prices: Record<string, number>;
   runtime: { tokenHash?: string };
 }
@@ -90,6 +91,7 @@ export const DEFAULT_SETTINGS: SettingsInternal = {
   cloud: { baseUrl: process.env.AIGC_CLOUD_URL || '' },
   runner: { concurrency: 2 },
   direct: { enabled: false, baseUrl: TREECLOUD_BASE_URL },
+  platform: { chatModel: '' },
   prices: {},
   runtime: {},
 };
@@ -122,6 +124,7 @@ export class Store {
       cloud: { ...DEFAULT_SETTINGS.cloud, ...s?.cloud },
       runner: { ...DEFAULT_SETTINGS.runner, ...s?.runner },
       direct: { ...DEFAULT_SETTINGS.direct, ...s?.direct },
+      platform: { ...DEFAULT_SETTINGS.platform, ...s?.platform },
       prices: { ...s?.prices },
       runtime: { ...s?.runtime },
     };

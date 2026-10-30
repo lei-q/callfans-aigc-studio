@@ -360,7 +360,7 @@ function HelpDrawer() {
           <div className="ai-note">
             <div className="ai-note-head">
               <Icon name="shield" />
-              {loggedIn ? '当前走云端网关' : directOn ? '当前为直连模式' : '还没有接入生成能力'}
+              {loggedIn ? '当前走云端网关' : directOn ? '当前走自定义渠道' : '还没有接入生成能力'}
             </div>
             <ul>
               {loggedIn ? (
@@ -370,11 +370,11 @@ function HelpDrawer() {
                 </>
               ) : directOn ? (
                 <>
-                  <li>用你自己的 TreeCloud Key 直连上游，费用在 TreeCloud 结算，不扣平台点数。</li>
+                  <li>用你自己的 TreeCloud Key 走自定义渠道，费用在你自己的上游结算，不扣平台点数。</li>
                   <li>登录云端账号后也可以改走平台点数。</li>
                 </>
               ) : (
-                <li>先登录账号（微信 / 支付宝充值点数），或在「设置 · 直连」填自己的 TreeCloud Key，才能开始生成。</li>
+                <li>先登录账号（微信 / 支付宝充值点数），或在「模型与价格 · 自定义渠道」填自己的 TreeCloud Key，才能开始生成。</li>
               )}
               <li>图片请求不会自动重试：超时不代表没执行，重提可能再次计费。</li>
               <li>失败触发规则：所选分辨率超过模型上限，或视频时长超出模型上限。</li>
@@ -933,8 +933,8 @@ function AccountDrawer() {
                 desc={
                   s.loginError ||
                   (s.settings?.account.provider === 'fastsso'
-                    ? '登录后可以查看余额、充值与订单；生成请在「设置 · 直连 TreeCloud」填自己的 Key。'
-                    : '登录后才能用平台点数生成；也可以在「设置 · 直连」里填自己的 TreeCloud Key。')
+                    ? '登录后可以查看余额、充值与订单；生成请在「模型与价格 · 自定义渠道」填自己的 Key。'
+                    : '登录后才能用平台点数生成；也可以填自己的 TreeCloud Key 走自定义渠道。')
                 }
               >
                 <div className="auth-actions">

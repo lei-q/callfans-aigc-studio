@@ -1,4 +1,4 @@
-import type { AccountConfig } from '@aigc/shared';
+import type { AccountConfig, PlatformModelsReply } from '@aigc/shared';
 import type { ChatMessage } from '../providers/types';
 
 /* ============================================================================
@@ -38,11 +38,10 @@ function costOf(m: PlatformModel) {
   return (m.pricing?.input_per_million ?? 0) + (m.pricing?.output_per_million ?? 0);
 }
 
-export function pickChatModel(models: PlatformModel[], preferred: string[] = PREFERRED): string | null {
+export function pickChatModel(models: PlatformModel[], selected = '', preferred: string[] = PREFERRED): string | null {
   const chat = models.filter((m) => m.mode === 'chat' && m.protocol === 'openai');
   if (!chat.length) return null;
-  const forced = process.env.AIGC_CHAT_MODEL;
-  for (const id of [forced, ...preferred]) {
+  for (const id of [process.env.AIGC_CHAT_MODEL, selected, ...preferred]) {
     if (!id) continue;
     const hit = chat.find((m) => m.id === id);
     if (hit) return hit.id;
@@ -104,9 +103,29 @@ export class PlatformCatalog {
     }
   }
 
-  /** 当前该用哪个对话模型；清单里没有可用的 openai 协议对话模型时返回 null */
-  async chatModel(): Promise<string | null> {
-    return pickChatModel(await this.models());
+  /** 当前该用哪个对话模型；selected 是用户在界面上选的（空 = 自动） */
+  async chatModel(selected = ''): Promise<string | null> {
+    return pickChatModel(await this.models(), selected);
+  }
+
+  /** 「模型与价格」用：清单 + 当前选中的辅助模型 */
+  async summary(selected: string, force = false): Promise<PlatformModelsReply> {
+    const models = await this.models(force);
+    return {
+      gatewayBase: this.base(),
+      models: models.map((m) => ({
+        id: m.id,
+        protocol: m.protocol,
+        mode: m.mode,
+        contextWindow: m.context_window ?? null,
+        maxOutputTokens: m.max_output_tokens ?? null,
+        inputPerMillion: m.pricing?.input_per_million ?? null,
+        outputPerMillion: m.pricing?.output_per_million ?? null,
+      })),
+      selected,
+      chatModel: pickChatModel(models, selected),
+      at: Date.now(),
+    };
   }
 }
 

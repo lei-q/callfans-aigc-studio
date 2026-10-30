@@ -188,12 +188,12 @@ export class Core {
   routeError(model: ModelInfo): string | null {
     if (model.channel === 'direct') {
       const d = this.store.settings.direct;
-      if (!d.enabled) return '直连模式没有启用：到「设置 · 直连 TreeCloud」里启用';
-      if (!d.keyEnc) return '直连模式还没有配置 Key：到「设置 · 直连 TreeCloud」里填入你自己的 Key';
+      if (!d.keyEnc) return '还没有配置自定义渠道：到「模型与价格 · 自定义渠道」填入 Base URL 与 API Key';
+      if (!d.enabled) return '自定义渠道没有启用：到「模型与价格 · 自定义渠道」重新保存一次';
       return null;
     }
-    if (this.provider !== 'mock') return '平台生成网关还没有接入：当前版本请到「设置 · 直连」填自己的 TreeCloud Key 生成';
-    if (!this.session.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「设置」里启用直连模式';
+    if (this.provider !== 'mock') return '平台网关还没有接入媒体模型：到「模型与价格 · 自定义渠道」配置后生成';
+    if (!this.session.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「模型与价格 · 自定义渠道」填自己的 Key';
     return null;
   }
 
@@ -221,6 +221,7 @@ export class Core {
         keyHint: s.direct.keyHint,
         lastCheck: s.direct.lastCheck,
       },
+      platform: { chatModel: s.platform.chatModel },
       prices: s.prices,
       runtime: {
         mode: launch.mode || this.opts.mode,

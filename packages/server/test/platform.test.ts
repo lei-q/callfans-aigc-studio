@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pickChatModel, PlatformCatalog, platformChat } from '../src/account/platform';
+import { buildApp } from '../src/app';
 import { Core } from '../src/core';
 
 /* 平台模型接入的契约测试：模型清单 → 换 key → 调网关。
@@ -68,6 +69,52 @@ describe('模型清单与选择', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await cat.models(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('用户选的辅助模型优先于默认偏好；summary 翻成界面用的字段', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonRes(200, CATALOG)));
+    const cat = new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test/' }) as never);
+    const sum = await cat.summary('glm-cheap');
+    expect(sum).toMatchObject({ gatewayBase: 'http://gw.test', selected: 'glm-cheap', chatModel: 'glm-cheap' });
+    expect(sum.models.find((m) => m.id === 'glm-cheap')).toMatchObject({
+      protocol: 'openai',
+      mode: 'chat',
+      inputPerMillion: 0.1,
+      outputPerMillion: 0.2,
+    });
+    /* 选了个清单里没有的模型：退回自动挑 */
+    expect((await cat.summary('gone-model')).chatModel).toBe('deepseek-v4.1-flash-1017');
+  });
+});
+
+describe('「模型与价格」的渠道设置', () => {
+  it('保存辅助模型；只填 Key 就自动启用自定义渠道；清单接口返回平台模型', async () => {
+    const core = await makeFssCore();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => (String(url).startsWith('http://gw.test/models') ? jsonRes(200, CATALOG) : jsonRes(200, { data: [] }))),
+    );
+    const app = await buildApp(core);
+    const h = { host: 'localhost', 'x-aigc-client': '1' };
+
+    const patch = await app.inject({ method: 'PATCH', url: '/api/settings', headers: h, payload: { platform: { chatModel: ' glm-cheap ' } } });
+    expect(patch.statusCode).toBe(200);
+    expect(core.store.settings.platform.chatModel).toBe('glm-cheap');
+
+    const cat = await app.inject({ method: 'GET', url: '/api/platform/models', headers: h });
+    expect(cat.statusCode).toBe(200);
+    expect(cat.json()).toMatchObject({ gatewayBase: 'http://gw.test', selected: 'glm-cheap', chatModel: 'glm-cheap' });
+    expect(cat.json().models).toHaveLength(CATALOG.data.length);
+
+    /* 没有单独的开关：存了 Key 就是启用 */
+    const key = await app.inject({ method: 'PATCH', url: '/api/settings', headers: h, payload: { direct: { apiKey: 'sk-tc-test' } } });
+    expect(key.statusCode).toBe(200);
+    expect(core.store.settings.direct.enabled).toBe(true);
+    expect(key.json().settings.direct).toMatchObject({ enabled: true, hasKey: true });
+
+    /* 清掉 Key 同时关闭自定义渠道 */
+    const clear = await app.inject({ method: 'PATCH', url: '/api/settings', headers: h, payload: { direct: { clearKey: true } } });
+    expect(clear.json().settings.direct).toMatchObject({ enabled: false, hasKey: false });
   });
 });
 

@@ -60,12 +60,12 @@ export class JobRunner {
     const model = this.core.modelById(body.model);
     if (!model) {
       if (body.model.startsWith('cloud:') && this.core.provider !== 'mock') {
-        throw new HttpError(400, '平台生成网关还没有接入', '当前版本请到「设置 · 直连」填自己的 TreeCloud Key 生成');
+        throw new HttpError(400, '平台渠道还没有接入媒体模型', '当前版本请到「模型与价格 · 自定义渠道」填自己的 TreeCloud Key 生成');
       }
       if (body.model.startsWith('cloud:') && !this.core.loggedIn) {
-        throw new HttpError(403, '还没有登录账号', '登录后才能用平台点数生成；也可以在「设置」里启用直连模式');
+        throw new HttpError(403, '还没有登录账号', '登录后才能用平台点数生成；也可以在「模型与价格 · 自定义渠道」填自己的 Key');
       }
-      throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');
+      throw new HttpError(400, '模型不存在', '到「模型与价格」里刷新模型列表');
     }
     if (model.type !== body.type) throw new HttpError(400, `${model.name} 不是${TYPES[body.type].name}模型`);
     if (model.status !== 'on') throw new HttpError(400, `${model.name} 当前不可用`);

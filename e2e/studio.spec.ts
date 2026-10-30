@@ -215,11 +215,18 @@ test('素材库打包成帖并导出 Markdown', async ({ page }) => {
   await expect(page.locator('.post-card')).toHaveCount(1);
 });
 
-test('设置页：直连模式未填 Key 时不能启用', async ({ page }) => {
+test('模型与价格：自定义渠道搬到这里，设置页不再有直连', async ({ page }) => {
   await open(page);
+  await page.locator('.side-item', { hasText: '模型与价格' }).click();
+  await expect(page.locator('.page-title')).toHaveText('模型与价格');
+  await expect(page.locator('.catalog-sec-name', { hasText: '渠道' })).toBeVisible();
+  const card = page.locator('.set-choice', { hasText: '自定义渠道' });
+  await expect(card).toContainText('未配置');
+  /* 没有单独的开关：填好 Base URL 与 Key 保存即自动启用 */
+  await expect(page.locator('.set-choice', { hasText: '启用直连' })).toHaveCount(0);
+  await expect(page.locator('.set-card .form-label', { hasText: 'API Key' })).toBeVisible();
   await page.locator('.side-item', { hasText: '设置' }).click();
-  await page.locator('.set-choice', { hasText: /直连|启用/ }).first().click();
-  await expect(page.locator('.toast', { hasText: /Key/ })).toBeVisible();
+  await expect(page.locator('.catalog-sec-name', { hasText: '直连' })).toHaveCount(0);
 });
 
 test('导航：API 接入不再展示本地密钥，设置页改叫「账号」', async ({ page }) => {

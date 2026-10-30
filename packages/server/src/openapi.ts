@@ -82,7 +82,7 @@ export function registerOpenApi(app: FastifyInstance, core: Core) {
     const key = auth(req);
     const models = core.models().filter((m) => m.channel === key.channel && m.status === 'on');
     if (!models.length) {
-      throw new HttpError(400, key.channel === 'cloud' ? '还没有登录云端账号，没有可用模型' : '直连模式没有启用或没有可用模型');
+      throw new HttpError(400, key.channel === 'cloud' ? '还没有登录云端账号，没有可用模型' : '自定义渠道还没有配置，或没有可用模型');
     }
     return { object: 'list', data: models.map((m) => ({ id: m.id, name: m.name, type: m.type, price: m.price, basis: m.basis })) };
   });

@@ -20,6 +20,30 @@ export interface AccountConfig {
   redirectUri: string;
 }
 
+/* ---------------- 平台模型清单（api.callfansai.com/models） ---------------- */
+
+export interface PlatformModelInfo {
+  id: string;
+  /** openai = /v1/chat/completions；anthropic = /v1/messages */
+  protocol?: string;
+  mode?: string;
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+  /** 上游标价（USD / 百万 tokens，折扣前）；null = 该路由没配价 */
+  inputPerMillion?: number | null;
+  outputPerMillion?: number | null;
+}
+
+export interface PlatformModelsReply {
+  gatewayBase: string;
+  models: PlatformModelInfo[];
+  /** 用户选定的辅助模型；空串 = 自动 */
+  selected: string;
+  /** 实际会用的模型（自动选或已选）；null = 清单里没有可用的对话模型 */
+  chatModel: string | null;
+  at: number;
+}
+
 /* ---------------- 注册 / 找回 ---------------- */
 
 export interface AccountDocuments {

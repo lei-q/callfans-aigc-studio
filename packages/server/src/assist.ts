@@ -32,7 +32,7 @@ export async function chatRoute(core: Core): Promise<ChatRoute> {
     return { kind: 'none', reason: '还没有登录账号：登录后提示词助手与 Agent 会用平台模型，按点数计费' };
   }
   try {
-    const model = await core.platform.chatModel();
+    const model = await core.platform.chatModel(core.store.settings.platform.chatModel);
     if (model) return { kind: 'platform', model };
     return { kind: 'none', reason: '平台模型清单里没有可用的对话模型，稍后再试' };
   } catch (e) {

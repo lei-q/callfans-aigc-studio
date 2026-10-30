@@ -147,6 +147,7 @@ export const settingsSchema = z.object({
       clearKey: z.boolean().optional(),
     })
     .optional(),
+  platform: z.object({ chatModel: z.string().max(200).optional() }).optional(),
   prices: z.record(z.string(), z.number().min(0).max(1000).nullable()).optional(),
   runtime: z
     .object({

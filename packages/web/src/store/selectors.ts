@@ -24,7 +24,7 @@ export const modelOf = (s: State, id: string): ModelInfo =>
     limit: '',
   };
 
-/** 渠道是否可用：云端要登录，直连要启用且配了 Key */
+/** 渠道是否可用：平台网关要登录，自定义渠道要配了 Key（保存 Key 即自动启用） */
 export const channelReady = (s: State, ch: 'cloud' | 'direct') =>
   ch === 'cloud' ? !!s.session?.loggedIn : !!(s.settings?.direct.enabled && s.settings.direct.hasKey);
 
@@ -33,20 +33,20 @@ export function modelsFor(s: State, type: MediaType, use?: AudioUse) {
   return s.models.filter((m) => m.type === type && channelReady(s, m.channel) && (type !== 'audio' || !use || !m.uses || m.uses.includes(use)));
 }
 
-/** 当前生成走哪条路：云端网关扣点数；直连由 TreeCloud 结算 */
+/** 当前生成走哪条路：平台网关扣点数；自定义渠道由用户自己的上游结算 */
 export function routeInfo(s: State, type: MediaType, use?: AudioUse): { kind: 'cloud' | 'direct'; model?: ModelInfo } | { kind: null; reason: string } {
   const ready = modelsFor(s, type, use);
   const cloud = ready.find((m) => m.channel === 'cloud');
   if (cloud) return { kind: 'cloud', model: cloud };
   const direct = ready.find((m) => m.channel === 'direct');
   if (direct) return { kind: 'direct', model: direct };
-  /* Fast-SSO 账号只有积分 / 充值，没有平台生成网关：生成只能走直连 */
+  /* 平台网关只有对话模型，没有媒体生成：图片 / 视频 / 语音只能走自定义渠道 */
   if (s.settings?.account.provider === 'fastsso') {
-    if (!s.settings.direct.enabled || !s.settings.direct.hasKey) return { kind: null, reason: '平台生成网关还没有接入：到「设置 · 直连 TreeCloud」填好自己的 Key 后生成' };
-    return { kind: null, reason: '直连模式下没有该类型的可用模型，到「设置」里刷新模型列表' };
+    if (!s.settings.direct.hasKey) return { kind: null, reason: '平台渠道还没有接入媒体模型：到「模型与价格 · 自定义渠道」填好自己的 Key 后生成' };
+    return { kind: null, reason: '自定义渠道里没有该类型的可用模型，到「模型与价格」里刷新模型列表' };
   }
-  if (!s.session?.loggedIn && s.settings?.direct.enabled && s.settings.direct.hasKey) return { kind: null, reason: '直连模式下没有该类型的可用模型，到「设置」里刷新模型列表' };
-  if (!s.session?.loggedIn) return { kind: null, reason: s.session?.cloudReachable ? '登录后才能用平台点数生成' : '还没有配置云端地址：到「设置 · 云端连接」填写，或启用直连模式' };
+  if (!s.session?.loggedIn && s.settings?.direct.enabled && s.settings.direct.hasKey) return { kind: null, reason: '自定义渠道里没有该类型的可用模型，到「模型与价格」里刷新模型列表' };
+  if (!s.session?.loggedIn) return { kind: null, reason: s.session?.cloudReachable ? '登录后才能用平台点数生成' : '还没有配置云端地址：到「设置 · 云端连接」填写，或配置自定义渠道' };
   return { kind: null, reason: '当前账号下没有该类型的可用模型' };
 }
 

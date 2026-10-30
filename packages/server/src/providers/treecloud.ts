@@ -161,8 +161,8 @@ export class TreeCloudProvider implements Provider {
     const ready = !!this.cfg().apiKey;
     return {
       id: 'direct',
-      name: '直连 TreeCloud',
-      note: ready ? '高级选项：用你自己的 Key 直连上游，费用在 TreeCloud 结算，不扣平台点数' : '在「设置 · 直连」里填入自己的 API Key 后可用',
+      name: '自定义渠道',
+      note: ready ? '你自己填写的上游渠道（TreeCloud 兼容），费用在上游结算，不扣平台点数' : '在「模型与价格 · 自定义渠道」填入 Base URL 与 API Key 后自动启用',
       kind: 'direct',
       ready,
     };

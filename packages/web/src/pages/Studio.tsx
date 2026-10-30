@@ -385,7 +385,7 @@ function Composer() {
           <span className="grow" />
           <span className="tiny dim">
             {route.kind === 'direct'
-              ? '直连模式：费用由 TreeCloud 结算，不扣平台点数'
+              ? '自定义渠道：费用由你自己的上游结算，不扣平台点数'
               : free > 0
                 ? `今日免费 ${free} 点优先抵扣`
                 : '1 点 = ¥1 · 生成失败自动退回'}
@@ -403,7 +403,7 @@ function Composer() {
             onClick={() => (fastsso ? switchPage('settings') : openDrawer(s.session?.loggedIn ? 'topup' : 'account'))}
           >
             <Icon name={fastsso ? 'gear' : s.session?.loggedIn ? 'coins' : 'user'} />
-            {fastsso ? '配置直连后生成' : s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
+            {fastsso ? '配置自定义渠道后生成' : s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
           </button>
         ) : enough ? (
           <button className="btn primary gen-btn" onClick={() => void gen()}>

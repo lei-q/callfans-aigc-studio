@@ -42,12 +42,12 @@
 
 ## 账号、点数与生成
 
-首次启动是一个干净的空项目：没有示例素材，也没有假数据。生成有两条路，在「设置」里可以看到当前走哪条：
+首次启动是一个干净的空项目：没有示例素材，也没有假数据。生成与对话有两条渠道，在「模型与价格」里可以看到当前走哪条：
 
-- **平台账号（Fast-SSO）**：注册、登录、找回密码与充值都由账号中心完成，点数跟着账号走，换设备也不丢。登录后，提示词助手与 Agent 直接调用平台模型（按点数计费），不需要任何配置。
-- **直连 TreeCloud（高级）**：在「设置 · 直连」填自己的 `sk-tc-` Key，请求直接发给 TreeCloud，**不扣平台点数**，费用由 TreeCloud 结算。图片、视频与配音的分发目前只走这条路（平台生成网关还没有接入媒体模型）。
+- **平台渠道（默认，`api.callfansai.com`）**：注册、登录、找回密码与充值都由账号中心完成，点数跟着账号走，换设备也不丢。登录后，提示词助手与 Agent 直接调用平台模型（按点数计费），不需要任何配置；模型清单与「辅助模型」选择都在「模型与价格」里。
+- **自定义渠道（TreeCloud 兼容）**：在「模型与价格 · 自定义渠道」填自己的 Base URL 与 `sk-tc-` Key，点「保存并启用」就切换到自己的上游，**不扣平台点数**，费用由上游结算。图片、视频与配音目前只走这条渠道（平台网关还没有接入媒体模型）。
 
-没有登录、也没有启用直连时，生成按钮会变成「登录后生成」。
+没有登录、也没有配置自定义渠道时，生成按钮会变成「登录后生成」。
 
 ### 登录、注册与充值
 
@@ -64,24 +64,24 @@
 
 「帮我写详细」和 Agent 的「需求理解 / 建议提示词」由平台模型生成，走 LiteLLM 网关 `https://api.callfansai.com`：
 
-1. 模型清单 `GET /models` 免令牌，运行时拉取并缓存 60 秒；选择顺序为 `AIGC_CHAT_MODEL` → 内置偏好（`deepseek-v4.1-flash-1017` 等，清单里没有就跳过）→ 最便宜的 openai 协议对话模型。模型名不写死在客户端。
+1. 模型清单 `GET /models` 免令牌，运行时拉取并缓存 60 秒，「模型与价格」页会列出来；选择顺序为 `AIGC_CHAT_MODEL` → 你在「辅助模型」里选的 → 内置偏好（`deepseek-v4.1-flash-1017` 等，清单里没有就跳过）→ 最便宜的 openai 协议对话模型。模型名不写死在客户端。
 2. 模型密钥由本机服务用该账号的 consumer token 换一次（`POST /consumer/llm-keys`，每个用户每个应用一把、默认不过期），**加密存在本机**，之后一直复用；前端、日志里都不会出现 `sk-`。
 3. 调用 `POST /v1/chat/completions`，扣的是该账号在这个应用池里的点数。网关 422 = 积分不足（充值后再试），401 = key 被吊销（丢本地副本后只重换一次）。
 4. 换 key 返回 409 `litellm_key_exists` 时不重试：说明平台已签发过、本机没有副本，需要先在平台吊销。
 
 可用环境变量 `AIGC_GATEWAY_URL` 覆盖网关地址（默认 `https://api.callfansai.com`）。
 
-### 直连 TreeCloud
+### 自定义渠道（TreeCloud 兼容）
 
 1. 在 [TreeCloud 控制台](https://console.jtreecloud.com) 创建一个 `sk-tc-` 开头的 API Key；
-2. 打开应用「设置 · 直连」，填入 Key，点「保存并连接」，再启用直连；
-3. 连接成功后会按 `GET /v1/models` 返回的结果列出当前 Key 可用的模型。
+2. 打开应用「模型与价格 · 自定义渠道」，填 Base URL 与 Key，点「保存并启用」——没有单独的开关，存下 Key 就是启用；
+3. 连接成功后会按 `GET /v1/models` 返回的结果列出当前 Key 可用的模型，生成改用这个渠道；「清除 Key」会同时关闭它，生成回到平台渠道。
 
 | 能力 | TreeCloud 接口 | 说明 |
 | --- | --- | --- |
 | 图像 | `POST /v1/images/generations`；有参考图时 `POST /v1/images/edits` | 比例 + 分辨率换算成模型支持的 `size`；返回的 `b64_json` / `url` 立即保存到本机。**不自动重试**，避免重复计费 |
 | 视频 | `POST /api/v3/contents/generations/tasks` → 轮询 `GET …/{id}` | 参考图作为首帧或参考图传入；运镜写进提示词；取消时调用 `DELETE`；应用重启后接着查询 |
-| 配音 | `POST /v1/audio/speech` | 音色映射到网关公开音色。TreeCloud 暂不提供音乐与音效，所以这两类直连不可用 |
+| 配音 | `POST /v1/audio/speech` | 音色映射到网关公开音色。TreeCloud 暂不提供音乐与音效，所以这两类在自定义渠道里不可用 |
 
 错误会翻译成「原因 + 修复建议」，并带上响应头里的 `X-Request-Id`，方便到 TreeCloud 控制台核对。Key 用本机密钥加密保存，只会发给你填写的 Base URL。
 
@@ -129,7 +129,7 @@ pnpm dist           # 打当前平台的安装包，产物在 packages/desktop/r
 ```
 packages/
   shared/    领域类型、常量、计价与参数校验、云端合同类型、Agent 规则推断（前后端共用）
-  server/    Fastify 本机服务：sql.js 存储、任务调度、云端会话、Provider（云端网关 / 直连 TreeCloud）、SSE、本地 OpenAPI
+  server/    Fastify 本机服务：sql.js 存储、任务调度、云端会话、Provider（平台网关 / 自定义渠道）、SSE、本地 OpenAPI
   web/       React + Zustand 前端：生成表单、无限画布、Agent、素材库、审美库、设置…
   cloud-mock/ 开发 / 演示 / CI 用的 Mock 云，实现云端合同（不打包进安装包）
   desktop/   Electron 外壳：桌面 / Web 双模式、首次启动选择、托盘、安装器定制
@@ -140,7 +140,7 @@ e2e/                 Playwright 端到端测试
 
 - **一个服务，两种外壳**：前端只和本机 HTTP 服务通信。桌面模式由 Electron 内嵌服务并加载窗口；Web 模式由同一程序起服务、托盘常驻；无界面时以 `ELECTRON_RUN_AS_NODE=1` 直接运行服务包。
 - **零原生依赖**：数据库用 sql.js（WASM），macOS 双架构可以在一台机器上交叉打包。
-- **Provider 层**：`packages/server/src/providers/` 下每个渠道（云端网关、直连 TreeCloud）实现同一套接口（模型目录、图像、视频创建与轮询、配音、对话）。新增渠道只需再实现一个 Provider。
+- **Provider 层**：`packages/server/src/providers/` 下每个渠道（平台网关、自定义渠道）实现同一套接口（模型目录、图像、视频创建与轮询、配音、对话）。新增渠道只需再实现一个 Provider。
 
 ### 发布
 

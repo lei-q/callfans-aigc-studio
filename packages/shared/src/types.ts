@@ -312,6 +312,11 @@ export interface Settings {
     keyHint?: string;
     lastCheck?: CheckInfo;
   };
+  /** 平台渠道（api.callfansai.com）：默认渠道，提供对话模型 */
+  platform: {
+    /** 辅助模型（提示词助手 / Agent）；空串 = 自动挑最合适的 */
+    chatModel: string;
+  };
   /** 按模型覆盖预估单价（点），仅用于展示预估 */
   prices: Record<string, number>;
   runtime: {

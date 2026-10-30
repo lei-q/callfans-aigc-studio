@@ -579,6 +579,8 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
         const key = d.apiKey.trim();
         s.direct.keyEnc = core.secrets.encrypt(key);
         s.direct.keyHint = `${key.slice(0, 6)}…${key.slice(-4)}`;
+        /* 自定义渠道：配置好 Key 就自动启用，不再单独开关 */
+        s.direct.enabled = true;
         needDirect = true;
       }
       if (d.enabled !== undefined) {
@@ -586,6 +588,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
         s.direct.enabled = d.enabled;
       }
     }
+    if (body.platform?.chatModel !== undefined) s.platform.chatModel = body.platform.chatModel.trim();
     if (body.prices) {
       for (const [k, v] of Object.entries(body.prices)) {
         if (v == null) delete s.prices[k];
@@ -620,6 +623,16 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.post('/api/settings/direct/refresh', async () => {
     if (!core.store.settings.direct.keyEnc) throw new HttpError(400, '先填入你自己的 TreeCloud API Key');
     return { settings: await refreshDirect() };
+  });
+
+  /** 平台渠道的模型清单（免令牌），供「模型与价格」展示与选择辅助模型 */
+  app.get('/api/platform/models', async (req) => {
+    const force = String((req.query as { refresh?: string }).refresh || '') === '1';
+    try {
+      return await core.platform.summary(core.store.settings.platform.chatModel, force);
+    } catch (e) {
+      throw new HttpError(502, (e as Error).message || '平台模型清单暂时不可用');
+    }
   });
 
   const probeAccount = async () => {

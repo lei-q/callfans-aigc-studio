@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { MediaType, ModelInfo, UsageRequest, UsageSummary } from '@aigc/shared';
+import type { MediaType, ModelInfo, PlatformModelsReply, Settings, UsageRequest, UsageSummary } from '@aigc/shared';
 import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, round1, timeLabel } from '@aigc/shared';
 import { Empty, Icon, TaskIc, jobIconCls } from '../components/common';
 import { setState, useStore } from '../store';
@@ -202,7 +202,7 @@ export function ApiPage() {
           ))}
           {!s.models.length && (
             <div className="key-row">
-              <span className="tiny dim">还没有可用模型：登录账号，或在「设置 · 直连」里配置 Key。</span>
+              <span className="tiny dim">还没有可用模型：登录账号，或在「模型与价格 · 自定义渠道」里配置 Key。</span>
             </div>
           )}
         </div>
@@ -274,8 +274,36 @@ export function ApiPage() {
 
 /* ---------------- 模型与价格 ---------------- */
 
+const usd = (n: number | null | undefined) =>
+  n == null ? '—' : `$${n >= 10 ? Math.round(n) : n >= 0.1 ? Number(n.toFixed(2)) : Number(n.toPrecision(2))}`;
+
+const ctxLabel = (n: number | null | undefined) => (n == null ? '—' : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
+
 export function ModelsPage() {
   const s = useStore();
+  const st = s.settings;
+  const [directUrl, setDirectUrl] = useState(st?.direct.baseUrl || '');
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (st) setDirectUrl(st.direct.baseUrl);
+  }, [st?.direct.baseUrl]);
+  if (!st) return null;
+  const d = st.direct;
+  /* 平台渠道只在 Fast-SSO 账号下存在；Mock 云是开发用的本地实现，不展示 */
+  const hasPlatform = st.account.provider === 'fastsso';
+
+  const connectDirect = async () => {
+    setBusy(true);
+    const ok = await patchSettings({ direct: { baseUrl: directUrl.trim(), ...(key.trim() ? { apiKey: key.trim() } : {}) } });
+    setBusy(false);
+    if (!ok) return;
+    setKey('');
+    const c = useStore.getState().settings?.direct.lastCheck;
+    if (c?.ok) toast('success', '自定义渠道已启用', c.message);
+    else if (c) toast('warn', '连接失败', c.message);
+  };
+
   return (
     <div className="page">
       <div className="toolbar">
@@ -309,6 +337,94 @@ export function ModelsPage() {
           </div>
         ))}
       </div>
+      <div className="catalog-sec">
+        <div className="catalog-sec-name">渠道</div>
+        <div className="set-grid">
+          {hasPlatform && (
+            <div className="set-choice on static">
+              <TaskIc icon="cpu" cls="violet" />
+              <span>
+                <b>平台渠道（默认）</b>
+                <span>{st.account.gatewayBase || 'https://api.callfansai.com'} · 模型、提示词助手与 Agent 走这里，按点数计费</span>
+              </span>
+              <span className="chip success">
+                <span className="cdot" />
+                默认
+              </span>
+            </div>
+          )}
+          <div className={`set-choice static ${d.hasKey ? 'on' : ''}`}>
+            <TaskIc icon="globe" cls="blue" />
+            <span>
+              <b>自定义渠道</b>
+              <span>
+                {d.hasKey
+                  ? `${d.baseUrl} · 生成用这个渠道的模型，费用在你自己的上游结算`
+                  : 'TreeCloud 兼容接口：填入 Base URL 与 API Key 后自动启用，生成改走你自己的上游'}
+              </span>
+            </span>
+            <span className={`chip ${d.hasKey ? 'success' : 'neutral'}`}>
+              <span className="cdot" />
+              {d.hasKey ? '已启用' : '未配置'}
+            </span>
+          </div>
+        </div>
+        <div className="card set-card">
+          <div className="form-row">
+            <span className="form-label">Base URL</span>
+            <input className="form-input" value={directUrl} onChange={(e) => setDirectUrl(e.target.value)} placeholder="https://api.jtreecloud.com" />
+          </div>
+          <div className="form-row">
+            <span className="form-label">API Key</span>
+            <input
+              className="form-input"
+              type="password"
+              autoComplete="off"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder={d.hasKey ? `已保存 ${d.keyHint || ''}，留空则不修改` : 'sk-tc-…（在 TreeCloud 控制台创建）'}
+            />
+          </div>
+          <div className="set-actions">
+            <button className="btn primary" disabled={busy || (!key.trim() && !d.hasKey && !directUrl.trim())} onClick={() => void connectDirect()}>
+              <Icon name="link" />
+              {busy ? '连接中…' : d.hasKey ? '保存并测试连接' : '保存并启用'}
+            </button>
+            {d.hasKey && (
+              <button
+                className="btn ghost"
+                onClick={async () => {
+                  const r = await api.post<{ settings: unknown }>('/api/settings/direct/refresh').catch(() => null);
+                  toast(r ? 'success' : 'warn', r ? '模型列表已刷新' : '刷新失败');
+                }}
+              >
+                <Icon name="refresh" />
+                刷新模型列表
+              </button>
+            )}
+            {d.hasKey && (
+              <button
+                className="btn ghost"
+                onClick={() => void patchSettings({ direct: { clearKey: true } }, '已清除自定义渠道，生成改回平台渠道')}
+              >
+                <Icon name="trash" />
+                清除 Key
+              </button>
+            )}
+            <span className="grow" />
+            {d.lastCheck && (
+              <span className={`chip ${d.lastCheck.ok ? 'success' : 'danger'}`}>
+                <span className="cdot" />
+                {d.lastCheck.message} · {timeLabel(d.lastCheck.at)}
+              </span>
+            )}
+          </div>
+          <div className="tiny dim">
+            Key 加密保存在本机，只会发给你填写的 Base URL。图片请求不会自动重试——超时不代表没执行，重提可能再次计费。TreeCloud 暂不提供音乐与音效生成。
+          </div>
+        </div>
+      </div>
+      {hasPlatform && <PlatformChannel st={st} />}
       {TYPE_KEYS.map((t) => (
         <ModelSection key={t} t={t} models={s.models.filter((m) => m.type === t && channelReady(s, m.channel))} />
       ))}
@@ -320,7 +436,118 @@ export function ModelsPage() {
   );
 }
 
+/** 平台渠道的模型清单：免令牌接口，运行时拉取；顺手配一个辅助模型 */
+function PlatformChannel({ st }: { st: Settings }) {
+  const [cat, setCat] = useState<PlatformModelsReply | null>(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState('');
+  const selected = st.platform.chatModel;
+
+  const load = async (force = false) => {
+    setBusy(true);
+    setErr('');
+    try {
+      setCat(await api.get<PlatformModelsReply>(`/api/platform/models${force ? '?refresh=1' : ''}`));
+    } catch (e) {
+      setErr((e as Error).message || '模型清单读取失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const models = cat?.models || [];
+  /* 辅助模型必须是 openai 协议的对话模型：管线只实现了 /v1/chat/completions */
+  const chat = models.filter((m) => m.mode === 'chat' && m.protocol === 'openai');
+  const kw = q.trim().toLowerCase();
+  const list = kw ? models.filter((m) => m.id.toLowerCase().includes(kw)) : models;
+  const effective = cat?.chatModel || '';
+
+  return (
+    <div className="catalog-sec">
+      <div className="catalog-sec-name">平台模型</div>
+      <div className="card set-card">
+        <div className="form-row">
+          <span className="form-label">辅助模型</span>
+          <select
+            className="form-select"
+            value={selected}
+            disabled={!chat.length}
+            onChange={(e) => void patchSettings({ platform: { chatModel: e.target.value } }, e.target.value ? '辅助模型已切换' : '已改为自动选择')}
+          >
+            <option value="">自动选择{effective ? `（${effective}）` : ''}</option>
+            {chat.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.id}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="set-actions">
+          <button className="btn ghost" disabled={busy} onClick={() => void load(true)}>
+            <Icon name="refresh" />
+            {busy ? '读取中…' : '刷新清单'}
+          </button>
+          {models.length > 12 && (
+            <input className="form-input plat-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索模型…" />
+          )}
+          <span className="grow" />
+          {err ? (
+            <span className="chip danger">
+              <span className="cdot" />
+              {err}
+            </span>
+          ) : cat ? (
+            <span className="chip success">
+              <span className="cdot" />
+              {models.length} 个模型 · {timeLabel(cat.at)}
+            </span>
+          ) : (
+            <span className="chip neutral">
+              <span className="cdot" />
+              读取中…
+            </span>
+          )}
+        </div>
+        <div className="tiny dim">
+          提示词助手与 Agent 用这个模型。清单来自 {cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1
+          分钟；「自动选择」会挑一个便宜的对话模型，价格是上游标价（每百万 tokens），实际扣费以平台账本为准。
+        </div>
+      </div>
+      <div className="card table-card plat-table">
+        <div className="key-head">
+          <span>模型</span>
+          <span>上下文</span>
+          <span>输入 / 百万</span>
+          <span>输出 / 百万</span>
+        </div>
+        {list.map((m) => (
+          <div key={m.id} className={`key-row ${m.id === effective ? 'on' : ''}`}>
+            <span className="kr-name">
+              {m.id}
+              {m.protocol && <span className="cap-chip">{m.protocol}</span>}
+            </span>
+            <span className="t2">{ctxLabel(m.contextWindow)}</span>
+            <span className="t2">{usd(m.inputPerMillion)}</span>
+            <span className="t2">{usd(m.outputPerMillion)}</span>
+          </div>
+        ))}
+        {!list.length && (
+          <div className="key-row">
+            <span className="tiny dim">{err ? '模型清单暂时读不到，稍后点「刷新清单」重试。' : '没有匹配的模型。'}</span>
+          </div>
+        )}
+      </div>
+      {!!kw && <div className="table-note"><Icon name="search" /><span>共 {models.length} 个模型，匹配 {list.length} 个。</span></div>}
+    </div>
+  );
+}
+
 function ModelSection({ t, models }: { t: MediaType; models: ModelInfo[] }) {
+  const provider = useStore((s) => s.settings?.account.provider);
   return (
     <div className="catalog-sec">
       <div className="catalog-sec-name">{TYPES[t].name}模型</div>
@@ -358,7 +585,7 @@ function ModelSection({ t, models }: { t: MediaType; models: ModelInfo[] }) {
                   可用
                 </span>
                 <span className="grow" />
-                <span className="tiny dim">{m.channel === 'cloud' ? '云端网关' : '直连'}</span>
+                <span className="tiny dim">{m.channel === 'cloud' ? '平台网关' : '自定义渠道'}</span>
               </div>
             </div>
           ))}
@@ -366,7 +593,12 @@ function ModelSection({ t, models }: { t: MediaType; models: ModelInfo[] }) {
       ) : (
         <div className="table-note">
           <Icon name="alert" />
-          <span>当前没有可用的{TYPES[t].name}模型：登录账号，或在「设置 · 直连」里配置 Key。</span>
+          <span>
+            当前没有可用的{TYPES[t].name}模型：
+            {provider === 'fastsso'
+              ? '完善「自定义渠道」后，用你自己的上游生成。'
+              : '登录账号，或在「模型与价格 · 自定义渠道」里配置 Key。'}
+          </span>
         </div>
       )}
     </div>
@@ -379,40 +611,24 @@ export function SettingsPage() {
   const s = useStore();
   const st = s.settings;
   const [cloudUrl, setCloudUrl] = useState(st?.cloud.baseUrl || '');
-  const [directUrl, setDirectUrl] = useState(st?.direct.baseUrl || '');
-  const [key, setKey] = useState('');
-  const [busy, setBusy] = useState(false);
   const [port, setPort] = useState(String(st?.runtime.port || DEFAULT_PORT));
   const [token, setToken] = useState('');
   useEffect(() => {
     if (st) {
       setCloudUrl(st.cloud.baseUrl);
-      setDirectUrl(st.direct.baseUrl);
       setPort(String(st.runtime.port));
     }
-  }, [st?.cloud.baseUrl, st?.direct.baseUrl, st?.runtime.port]);
+  }, [st?.cloud.baseUrl, st?.runtime.port]);
   if (!st) return null;
-  const d = st.direct;
   const loggedIn = !!s.session?.loggedIn;
   const desktop = !!window.aigcDesktop;
-
-  const connectDirect = async () => {
-    setBusy(true);
-    const ok = await patchSettings({ direct: { baseUrl: directUrl.trim(), ...(key.trim() ? { apiKey: key.trim() } : {}) } });
-    setBusy(false);
-    if (!ok) return;
-    setKey('');
-    const c = useStore.getState().settings?.direct.lastCheck;
-    if (c?.ok) toast('success', '直连已就绪', c.message);
-    else if (c) toast('warn', '连接失败', c.message);
-  };
 
   return (
     <div className="page settings-page">
       <div className="toolbar">
         <div className="page-title-block">
           <span className="page-title">设置</span>
-          <span className="page-sub">账号、直连 Key、预估单价与运行模式</span>
+          <span className="page-sub">账号、预估单价与运行模式</span>
         </div>
       </div>
 
@@ -479,7 +695,7 @@ export function SettingsPage() {
                   测试连接
                 </button>
               </div>
-              <div className="tiny dim">注册、登录、找回密码与充值都由账号服务完成；登录后提示词助手与 Agent 用平台模型润色（按点数计费），图片、视频与语音生成走下面的直连 TreeCloud。</div>
+              <div className="tiny dim">注册、登录、找回密码与充值都由账号服务完成；登录后提示词助手与 Agent 用平台模型润色（按点数计费），图片、视频与语音生成走「模型与价格」里的自定义渠道。</div>
             </>
           ) : (
             <>
@@ -502,72 +718,6 @@ export function SettingsPage() {
               <div className="tiny dim">开发用 Mock 云：登录、充值与模型目录都来自本地 Mock（pnpm --filter @aigc/cloud-mock dev），用于联调和 e2e。</div>
             </>
           )}
-        </div>
-      </div>
-
-      <div className="catalog-sec">
-        <div className="catalog-sec-name">直连 TreeCloud（高级）</div>
-        <div className="set-grid">
-          <button
-            className={`set-choice ${d.enabled ? 'on' : ''}`}
-            onClick={() => void patchSettings({ direct: { enabled: !d.enabled } }, d.enabled ? '已关闭直连，生成走平台网关' : '已启用直连')}
-          >
-            <TaskIc icon="globe" cls="violet" />
-            <span>
-              <b>启用直连模式</b>
-              <span>用你自己的 TreeCloud Key 直接生成：费用在 TreeCloud 结算，不扣平台点数。适合有自己的上游合同或要跑批量的用户。</span>
-            </span>
-            {d.enabled && <Icon name="check" />}
-          </button>
-        </div>
-        <div className="card set-card">
-          <div className="form-row">
-            <span className="form-label">Base URL</span>
-            <input className="form-input" value={directUrl} onChange={(e) => setDirectUrl(e.target.value)} placeholder="https://api.jtreecloud.com" />
-          </div>
-          <div className="form-row">
-            <span className="form-label">API Key</span>
-            <input
-              className="form-input"
-              type="password"
-              autoComplete="off"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder={d.hasKey ? `已保存 ${d.keyHint || ''}，留空则不修改` : 'sk-tc-…（在 TreeCloud 控制台创建）'}
-            />
-          </div>
-          <div className="set-actions">
-            <button className="btn primary" disabled={busy || (!key.trim() && !d.hasKey)} onClick={() => void connectDirect()}>
-              <Icon name="link" />
-              {busy ? '连接中…' : d.hasKey ? '保存并测试连接' : '保存并连接'}
-            </button>
-            {d.hasKey && (
-              <button
-                className="btn ghost"
-                onClick={async () => {
-                  const r = await api.post<{ settings: unknown }>('/api/settings/direct/refresh').catch(() => null);
-                  toast(r ? 'success' : 'warn', r ? '模型列表已刷新' : '刷新失败');
-                }}
-              >
-                <Icon name="refresh" />
-                刷新模型列表
-              </button>
-            )}
-            {d.hasKey && (
-              <button className="btn ghost" onClick={() => void patchSettings({ direct: { clearKey: true } }, '已清除 Key 并关闭直连')}>
-                <Icon name="trash" />
-                清除 Key
-              </button>
-            )}
-            <span className="grow" />
-            {d.lastCheck && (
-              <span className={`chip ${d.lastCheck.ok ? 'success' : 'danger'}`}>
-                <span className="cdot" />
-                {d.lastCheck.message} · {timeLabel(d.lastCheck.at)}
-              </span>
-            )}
-          </div>
-          <div className="tiny dim">Key 加密保存在本机，只会发给你填写的 Base URL。图片请求不会自动重试——超时不代表没执行，重提可能再次计费。TreeCloud 暂不提供音乐与音效生成。</div>
         </div>
       </div>
 

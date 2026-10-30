@@ -1,6 +1,6 @@
 # Fast-SSO 账号与充值接入
 
-AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费）。**平台生成网关还没有接入媒体模型**，图片、视频与配音生成仍走「直连 TreeCloud」。
+AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费）。**平台生成网关还没有接入媒体模型**，图片、视频与配音生成仍走「模型与价格 · 自定义渠道」（用户自填 TreeCloud 兼容 Key，自动启用）。
 
 ## 架构
 
@@ -103,5 +103,5 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 
 ## 尚未接入
 
-- 平台生成网关的**媒体**能力（图片 / 视频 / 语音）：登录后的点数目前只用于对话与订单；生成需要在「设置 · 直连 TreeCloud」填自己的 Key。平台上线媒体路由后，`Provider` 层可直接复用账号会话。
+- 平台生成网关的**媒体**能力（图片 / 视频 / 语音）：登录后的点数目前只用于对话与订单；生成需要在「模型与价格 · 自定义渠道」填自己的 Key。平台上线媒体路由后，`Provider` 层可直接复用账号会话。
 - 站内支付渠道以外的退款/对账界面：以账号中心后台为准。
