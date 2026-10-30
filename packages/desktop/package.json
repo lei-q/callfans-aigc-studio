@@ -1,6 +1,6 @@
 {
   "name": "@aigc/desktop",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "AIGC 创作台：按次付费、说一句就能出片",
   "author": "lei-q",
