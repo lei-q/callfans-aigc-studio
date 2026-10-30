@@ -400,10 +400,10 @@ function Composer() {
         ) : route.kind === null ? (
           <button
             className="btn primary gen-btn"
-            onClick={() => (fastsso ? switchPage('settings') : openDrawer(s.session?.loggedIn ? 'topup' : 'account'))}
+            onClick={() => (fastsso ? switchPage('models') : openDrawer(s.session?.loggedIn ? 'topup' : 'account'))}
           >
-            <Icon name={fastsso ? 'gear' : s.session?.loggedIn ? 'coins' : 'user'} />
-            {fastsso ? '配置自定义渠道后生成' : s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
+            <Icon name={fastsso ? 'coins' : s.session?.loggedIn ? 'coins' : 'user'} />
+            {fastsso ? '选择模型 · 进入模型与价格' : s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
           </button>
         ) : enough ? (
           <button className="btn primary gen-btn" onClick={() => void gen()}>

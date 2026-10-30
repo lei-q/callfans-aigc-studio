@@ -108,8 +108,8 @@ export class PlatformCatalog {
     return pickChatModel(await this.models(), selected);
   }
 
-  /** 「模型与价格」用：清单 + 当前选中的辅助模型 */
-  async summary(selected: string, force = false): Promise<PlatformModelsReply> {
+  /** 「模型与价格」用：清单（按 mode 分组交给界面） */
+  async summary(force = false): Promise<PlatformModelsReply> {
     const models = await this.models(force);
     return {
       gatewayBase: this.base(),
@@ -122,8 +122,6 @@ export class PlatformCatalog {
         inputPerMillion: m.pricing?.input_per_million ?? null,
         outputPerMillion: m.pricing?.output_per_million ?? null,
       })),
-      selected,
-      chatModel: pickChatModel(models, selected),
       at: Date.now(),
     };
   }

@@ -588,7 +588,16 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
         s.direct.enabled = d.enabled;
       }
     }
-    if (body.platform?.chatModel !== undefined) s.platform.chatModel = body.platform.chatModel.trim();
+    if (body.channel) s.channel = body.channel;
+    if (body.models) {
+      for (const ch of ['cloud', 'direct'] as const) {
+        const patch = body.models[ch];
+        if (!patch) continue;
+        for (const k of ['text', 'image', 'video', 'audio'] as const) {
+          if (patch[k] !== undefined) s.models[ch][k] = (patch[k] || '').trim();
+        }
+      }
+    }
     if (body.prices) {
       for (const [k, v] of Object.entries(body.prices)) {
         if (v == null) delete s.prices[k];
@@ -629,7 +638,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.get('/api/platform/models', async (req) => {
     const force = String((req.query as { refresh?: string }).refresh || '') === '1';
     try {
-      return await core.platform.summary(core.store.settings.platform.chatModel, force);
+      return await core.platform.summary(force);
     } catch (e) {
       throw new HttpError(502, (e as Error).message || '平台模型清单暂时不可用');
     }

@@ -137,7 +137,11 @@ export function Topbar() {
           )}
         </div>
         {s.session?.loggedIn ? (
-          <button className={`balance-chip ${low ? 'low' : ''}`} onClick={() => openDrawer(canTopup ? 'topup' : 'account')} title={canTopup ? '点数余额：点击充值' : '点数余额：充值暂未开放'}>
+          <button
+            className={`balance-chip ${low ? 'low' : ''}`}
+            onClick={() => openDrawer(canTopup ? 'topup' : 'account')}
+            title={`${canTopup ? '点数余额：点击充值' : '点数余额：充值暂未开放'} · 每 10 秒自动刷新`}
+          >
             <Icon name="coins" />
             <span className="bc-num num">{bal}</span>
             <span className="bc-unit">点</span>
@@ -165,7 +169,7 @@ export function Sidebar() {
   const lib = libResults(s);
   const open = openJobs(s).length;
   const loggedIn = s.session?.loggedIn;
-  const directOn = !!(s.settings?.direct.enabled && s.settings.direct.hasKey);
+  const custom = s.settings?.channel === 'direct';
   return (
     <aside className="sidebar">
       <div className="side-sec">
@@ -202,10 +206,6 @@ export function Sidebar() {
       </div>
       <div className="side-sec">
         <div className="side-sec-title">开发与计费</div>
-        <button className={`side-item ${s.page === 'api' ? 'active' : ''}`} onClick={() => switchPage('api')}>
-          <Icon name="cpu" />
-          <span className="side-label">API 接入</span>
-        </button>
         <button className={`side-item ${s.page === 'models' ? 'active' : ''}`} onClick={() => switchPage('models')}>
           <Icon name="coins" />
           <span className="side-label">模型与价格</span>
@@ -213,7 +213,7 @@ export function Sidebar() {
         <button className={`side-item ${s.page === 'settings' ? 'active' : ''}`} onClick={() => switchPage('settings')}>
           <Icon name="gear" />
           <span className="side-label">设置</span>
-          {!loggedIn && !directOn && <span className="side-badge num">未接入</span>}
+          {!loggedIn && !custom && <span className="side-badge num">未登录</span>}
         </button>
       </div>
       <div className="side-spacer" />
@@ -221,15 +221,13 @@ export function Sidebar() {
         <Icon name="coins" />
         <span>
           1 点 = ¥1 · 按次扣费 · 点数不过期。
-          {s.settings?.account.provider === 'fastsso'
-            ? directOn
-              ? '当前走自定义渠道：用你自己的 TreeCloud Key 生成，费用在你自己的上游结算。'
-              : '登录后提示词助手与 Agent 用平台模型（扣点数）；图片 / 视频生成请在「模型与价格 · 自定义渠道」填自己的 Key。'
-            : loggedIn
-              ? '生成走云端网关，按真实用量扣点数；失败自动退回。'
-              : directOn
-                ? '当前走自定义渠道：用你自己的 TreeCloud Key 生成，费用在你自己的上游结算。'
-                : '登录后用微信 / 支付宝充值点数即可生成；也可以填自己的 TreeCloud Key 走自定义渠道。'}
+          {custom
+            ? '当前走自定义渠道：用你自己的 Key 生成，费用在你自己的上游结算。'
+            : s.settings?.account.provider === 'fastsso'
+              ? '当前走平台渠道：登录后按点数计费；图片 / 视频 / 音频生成可切到自定义渠道。'
+              : loggedIn
+                ? '生成走平台网关，按真实用量扣点数；失败自动退回。'
+                : '登录后用微信 / 支付宝充值点数即可生成；也可以切到自定义渠道填自己的 Key。'}
         </span>
       </div>
     </aside>

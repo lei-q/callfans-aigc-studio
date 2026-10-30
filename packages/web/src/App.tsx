@@ -8,14 +8,13 @@ import { isTyping } from './lib/util';
 import * as op from './canvas/ops';
 import { Studio } from './pages/Studio';
 import { JobsPage, LibraryPage } from './pages/Lists';
-import { AestheticPage, ApiPage, ModelsPage, SettingsPage } from './pages/Other';
+import { AestheticPage, ModelsPage, SettingsPage } from './pages/Other';
 
 function Main() {
   const page = useStore((s) => s.page);
   if (page === 'jobs') return <JobsPage />;
   if (page === 'library') return <LibraryPage />;
   if (page === 'aesthetic') return <AestheticPage />;
-  if (page === 'api') return <ApiPage />;
   if (page === 'models') return <ModelsPage />;
   if (page === 'settings') return <SettingsPage />;
   return <Studio />;

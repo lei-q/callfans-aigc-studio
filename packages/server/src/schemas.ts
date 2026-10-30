@@ -136,6 +136,15 @@ export const resetPasswordSchema = z.object({
   newPassword: z.string().min(10).max(128),
 });
 
+const modelPicksSchema = z
+  .object({
+    text: z.string().max(200).optional(),
+    image: z.string().max(200).optional(),
+    video: z.string().max(200).optional(),
+    audio: z.string().max(200).optional(),
+  })
+  .optional();
+
 export const settingsSchema = z.object({
   cloud: z.object({ baseUrl: z.union([z.string().url().max(200), z.literal('')]) }).optional(),
   runner: z.object({ concurrency: z.number().int().min(1).max(8) }).optional(),
@@ -147,7 +156,13 @@ export const settingsSchema = z.object({
       clearKey: z.boolean().optional(),
     })
     .optional(),
-  platform: z.object({ chatModel: z.string().max(200).optional() }).optional(),
+  channel: z.enum(['cloud', 'direct']).optional(),
+  models: z
+    .object({
+      cloud: modelPicksSchema.optional(),
+      direct: modelPicksSchema.optional(),
+    })
+    .optional(),
   prices: z.record(z.string(), z.number().min(0).max(1000).nullable()).optional(),
   runtime: z
     .object({

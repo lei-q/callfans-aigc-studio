@@ -4,9 +4,11 @@ import type {
   AestheticItem,
   ApiKey,
   Board,
+  ChannelId,
   GatewayModel,
   Job,
   ModelInfo,
+  ModelPicks,
   Post,
   Project,
   Result,
@@ -68,7 +70,8 @@ export interface SettingsInternal {
     keyHint?: string;
     lastCheck?: { ok: boolean; at: number; message: string };
   };
-  platform: { chatModel: string };
+  channel: ChannelId;
+  models: Record<ChannelId, ModelPicks>;
   prices: Record<string, number>;
   runtime: { tokenHash?: string };
 }
@@ -91,7 +94,8 @@ export const DEFAULT_SETTINGS: SettingsInternal = {
   cloud: { baseUrl: process.env.AIGC_CLOUD_URL || '' },
   runner: { concurrency: 2 },
   direct: { enabled: false, baseUrl: TREECLOUD_BASE_URL },
-  platform: { chatModel: '' },
+  channel: 'cloud',
+  models: { cloud: { text: '', image: '', video: '', audio: '' }, direct: { text: '', image: '', video: '', audio: '' } },
   prices: {},
   runtime: {},
 };
@@ -117,6 +121,7 @@ export class Store {
 
   get settings(): SettingsInternal {
     const s = this.db.kvGet<SettingsInternal>('settings');
+    const legacy = (s as { platform?: { chatModel?: string } } | undefined)?.platform?.chatModel || '';
     return {
       ...DEFAULT_SETTINGS,
       ...s,
@@ -124,7 +129,11 @@ export class Store {
       cloud: { ...DEFAULT_SETTINGS.cloud, ...s?.cloud },
       runner: { ...DEFAULT_SETTINGS.runner, ...s?.runner },
       direct: { ...DEFAULT_SETTINGS.direct, ...s?.direct },
-      platform: { ...DEFAULT_SETTINGS.platform, ...s?.platform },
+      channel: s?.channel === 'direct' ? 'direct' : 'cloud',
+      models: {
+        cloud: { ...DEFAULT_SETTINGS.models.cloud, ...s?.models?.cloud, ...(s?.models?.cloud?.text ? {} : { text: legacy }) },
+        direct: { ...DEFAULT_SETTINGS.models.direct, ...s?.models?.direct },
+      },
       prices: { ...s?.prices },
       runtime: { ...s?.runtime },
     };

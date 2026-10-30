@@ -27,7 +27,7 @@ import type {
 } from '@aigc/shared';
 import { EDIT_DEF, PEN_COLORS, SEED_PROMPTS } from '@aigc/shared';
 
-export type Page = 'studio' | 'jobs' | 'library' | 'models' | 'aesthetic' | 'api' | 'settings';
+export type Page = 'studio' | 'jobs' | 'library' | 'models' | 'aesthetic' | 'settings';
 export type DrawerType = 'result' | 'help' | 'queue' | 'ref-add' | 'topup' | 'edit' | 'post' | 'project' | 'account';
 
 export interface Toast {

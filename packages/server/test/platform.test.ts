@@ -71,19 +71,20 @@ describe('模型清单与选择', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('用户选的辅助模型优先于默认偏好；summary 翻成界面用的字段', async () => {
+  it('用户选的文本模型优先于默认偏好；summary 翻成界面用的字段', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonRes(200, CATALOG)));
     const cat = new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test/' }) as never);
-    const sum = await cat.summary('glm-cheap');
-    expect(sum).toMatchObject({ gatewayBase: 'http://gw.test', selected: 'glm-cheap', chatModel: 'glm-cheap' });
+    const sum = await cat.summary();
+    expect(sum.gatewayBase).toBe('http://gw.test');
     expect(sum.models.find((m) => m.id === 'glm-cheap')).toMatchObject({
       protocol: 'openai',
       mode: 'chat',
       inputPerMillion: 0.1,
       outputPerMillion: 0.2,
     });
+    expect(pickChatModel(sum.models as never, 'glm-cheap')).toBe('glm-cheap');
     /* 选了个清单里没有的模型：退回自动挑 */
-    expect((await cat.summary('gone-model')).chatModel).toBe('deepseek-v4.1-flash-1017');
+    expect(pickChatModel(sum.models as never, 'gone-model')).toBe('deepseek-v4.1-flash-1017');
   });
 });
 
@@ -97,13 +98,13 @@ describe('「模型与价格」的渠道设置', () => {
     const app = await buildApp(core);
     const h = { host: 'localhost', 'x-aigc-client': '1' };
 
-    const patch = await app.inject({ method: 'PATCH', url: '/api/settings', headers: h, payload: { platform: { chatModel: ' glm-cheap ' } } });
+    const patch = await app.inject({ method: 'PATCH', url: '/api/settings', headers: h, payload: { models: { cloud: { text: ' glm-cheap ' } } } });
     expect(patch.statusCode).toBe(200);
-    expect(core.store.settings.platform.chatModel).toBe('glm-cheap');
+    expect(core.store.settings.models.cloud.text).toBe('glm-cheap');
 
     const cat = await app.inject({ method: 'GET', url: '/api/platform/models', headers: h });
     expect(cat.statusCode).toBe(200);
-    expect(cat.json()).toMatchObject({ gatewayBase: 'http://gw.test', selected: 'glm-cheap', chatModel: 'glm-cheap' });
+    expect(cat.json()).toMatchObject({ gatewayBase: 'http://gw.test' });
     expect(cat.json().models).toHaveLength(CATALOG.data.length);
 
     /* 没有单独的开关：存了 Key 就是启用 */

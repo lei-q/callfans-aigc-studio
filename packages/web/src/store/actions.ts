@@ -117,7 +117,7 @@ export function helpJump(act: string) {
       s.page = 'jobs';
       s.jobFilter = 'failed';
     } else if (act === 'quota') s.drawer = { type: 'topup' };
-    else if (act === 'api') s.page = 'api';
+    else if (act === 'models') s.page = 'models';
     else if (act === 'jobs') {
       s.page = 'jobs';
       s.jobFilter = 'all';

@@ -292,6 +292,18 @@ export interface ApiKey {
 
 export type RunMode = 'desktop' | 'web';
 
+/** 生成渠道：平台渠道（cloud）/ 自定义渠道（direct） */
+export type ChannelId = 'cloud' | 'direct';
+
+/** 某条渠道下按类型记住的默认模型 */
+export interface ModelPicks {
+  /** 文本模型：提示词助手与 Agent */
+  text: string;
+  image: string;
+  video: string;
+  audio: string;
+}
+
 export interface CheckInfo {
   ok: boolean;
   at: number;
@@ -311,12 +323,13 @@ export interface Settings {
     hasKey: boolean;
     keyHint?: string;
     lastCheck?: CheckInfo;
+    /** 该渠道可用的文本模型（来自 GET /v1/models 里的对话模型） */
+    chatModels: string[];
   };
-  /** 平台渠道（api.callfansai.com）：默认渠道，提供对话模型 */
-  platform: {
-    /** 辅助模型（提示词助手 / Agent）；空串 = 自动挑最合适的 */
-    chatModel: string;
-  };
+  /** 当前生成渠道：cloud = 平台渠道（默认）；direct = 自定义渠道 */
+  channel: ChannelId;
+  /** 两个渠道各自记住的默认模型；空串 = 自动挑第一个可用模型 */
+  models: Record<ChannelId, ModelPicks>;
   /** 按模型覆盖预估单价（点），仅用于展示预估 */
   prices: Record<string, number>;
   runtime: {

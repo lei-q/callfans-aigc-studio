@@ -1,4 +1,4 @@
-import type { Board, Bootstrap, MediaType, ServerEvent } from '@aigc/shared';
+import type { Board, Bootstrap, MediaType, ServerEvent, WalletDto } from '@aigc/shared';
 import { TYPE_KEYS } from '@aigc/shared';
 import { api, subscribe } from '../lib/api';
 import { getState, setState, useStore, type State } from './index';
@@ -21,12 +21,16 @@ function upsert<T extends { id: string }>(list: T[], item: T, sort?: (a: T, b: T
   }
 }
 
-/** 当前参数里的模型不属于当前渠道时，换成这个渠道的第一个可用模型 */
+/** 当前参数里的模型不属于当前渠道时，换成这个渠道里选定的模型，没选就是第一个可用模型 */
 export function fixParams(s: State) {
+  const picks = s.settings ? s.settings.models[s.settings.channel] : { text: '', image: '', video: '', audio: '' };
   for (const t of TYPE_KEYS as MediaType[]) {
     const p = s.params[t];
     const list = modelsFor(s, t, t === 'audio' ? p.use : undefined).filter((m) => m.status === 'on');
-    if (!list.some((m) => m.id === p.model) && list.length) p.model = list[0].id;
+    if (!list.some((m) => m.id === p.model) && list.length) {
+      const want = picks[t];
+      p.model = list.some((m) => m.id === want) ? want : list[0].id;
+    }
     const m = s.models.find((x) => x.id === p.model);
     if (t === 'video' && m?.durs?.length && p.dur && !m.durs.includes(p.dur) && m.maxDur && p.dur > m.maxDur) p.dur = m.durs[m.durs.length - 1];
   }
@@ -35,6 +39,34 @@ export function fixParams(s: State) {
 const UI_KEYS = ['formOpen', 'agentDock', 'canvasOpen', 'ws', 'type'] as const;
 
 let subscribed = false;
+let walletPoll: ReturnType<typeof setInterval> | null = null;
+let walletBusy = false;
+
+/** 账户积分：主动向账号服务查一次，结果走同一份 store（顶栏、充值抽屉、设置页都会跟着变） */
+export async function refreshWallet() {
+  if (walletBusy || !getState().session?.loggedIn) return;
+  walletBusy = true;
+  try {
+    const { wallet } = await api.post<{ wallet: WalletDto | null }>('/api/billing/wallet/refresh');
+    if (wallet) setState((s) => void (s.wallet = wallet));
+  } catch {
+    /* 查询失败不打扰用户：积分以服务端账本为准，下一轮再试 */
+  } finally {
+    walletBusy = false;
+  }
+}
+
+/** 每 10 秒刷新一次积分；页面在后台时跳过，切回前台立刻补一次 */
+const WALLET_POLL_MS = 10_000;
+function startWalletPoll() {
+  if (walletPoll) return;
+  walletPoll = setInterval(() => {
+    if (!document.hidden) void refreshWallet();
+  }, WALLET_POLL_MS);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void refreshWallet();
+  });
+}
 
 export async function boot() {
   try {
@@ -68,6 +100,7 @@ export async function boot() {
       lastSaved.set(ws, board);
       lastSnap.set(ws, snapOf(board));
     }
+    startWalletPoll();
     if (!subscribed) {
       subscribed = true;
       subscribe(applyEvent, (ok) => {

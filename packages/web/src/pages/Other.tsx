@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { MediaType, ModelInfo, PlatformModelsReply, Settings, UsageRequest, UsageSummary } from '@aigc/shared';
+import type { MediaType, ModelInfo, PlatformModelInfo, PlatformModelsReply, UsageRequest, UsageSummary } from '@aigc/shared';
 import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, round1, timeLabel } from '@aigc/shared';
 import { Empty, Icon, TaskIc, jobIconCls } from '../components/common';
 import { setState, useStore } from '../store';
 import { aestheticAddFile, logout, openDrawer, patchSettings, removeAesthetic } from '../store/actions';
-import { balance, channelReady, modelOf } from '../store/selectors';
+import { balance, modelOf } from '../store/selectors';
 import { toast } from '../store/toast';
 import { api } from '../lib/api';
 
@@ -120,13 +120,12 @@ export function AestheticPage() {
   );
 }
 
-/* ---------------- API 接入 ---------------- */
+/* ---------------- 用量与账单 ---------------- */
 
-export function ApiPage() {
+function UsageSection({ loggedIn }: { loggedIn: boolean }) {
   const s = useStore();
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [reqs, setReqs] = useState<UsageRequest[]>([]);
-  const loggedIn = !!s.session?.loggedIn;
   useEffect(() => {
     if (!loggedIn) return;
     api
@@ -138,135 +137,44 @@ export function ApiPage() {
       .then((r) => setReqs(r.items))
       .catch(() => setReqs([]));
   }, [loggedIn]);
-  const chName = (id: string) => s.channels.find((c) => c.id === id)?.name || id;
   return (
-    <div className="page">
-      <div className="toolbar">
-        <div className="page-title-block">
-          <span className="page-title">API 接入</span>
-          <span className="page-sub">同一份点数，按量计费 · 这里查看可用模型、用量与账单</span>
+    <div className="catalog-sec">
+      <div className="catalog-sec-name">用量与账单</div>
+      <div className="card table-card">
+        <div className="key-head">
+          <span>时间</span>
+          <span>模型</span>
+          <span>用量</span>
+          <span className="th-right">消耗</span>
         </div>
-        <span className="grow" />
-        <button className="btn primary" onClick={() => openDrawer('topup')}>
-          <Icon name="coins" />
-          充值点数
-        </button>
-      </div>
-      <div className="api-wallet">
-        <Icon name="coins" />
-        <div>
-          <div className="aw-balance">
-            {loggedIn ? balance(s) : '—'}
-            <span>点</span>
-          </div>
-          <div className="tiny dim">
-            {loggedIn
-              ? `网页与 API 共用这一份余额 · 近 7 天调用 ${usage?.requests ?? 0} 次，消耗 ${usage?.points ?? 0} 点`
-              : '登录后才能用 API 计费：点数跟着账号走'}
-          </div>
-        </div>
-        <span className="grow" />
         {loggedIn ? (
-          <span className="chip success">
-            <Icon name="check" />
-            计费互通
-          </span>
+          reqs.slice(0, 30).map((u) => (
+            <div key={u.id} className="key-row">
+              <span className="num">{timeLabel(u.at)}</span>
+              <span>{modelOf(s, `cloud:${u.model}`).name || u.model}</span>
+              <span className="tiny dim">
+                {u.tokens?.image ? `${u.tokens.image} 张` : u.videoSeconds ? `${u.videoSeconds} 秒` : u.ttsChars ? `${u.ttsChars} 字` : u.tokens ? `${u.tokens.input || 0}/${u.tokens.output || 0} tokens` : '—'}
+              </span>
+              <span className="right num">{u.points} 点</span>
+            </div>
+          ))
         ) : (
-          <button className="btn sm primary" onClick={() => openDrawer('account')}>
-            去登录
-          </button>
+          <div className="key-row">
+            <span className="tiny dim">登录后查看调用日志与 token 用量（由云端记录）。</span>
+          </div>
+        )}
+        {loggedIn && (
+          <div className="key-row key-sum">
+            <span className="tiny dim">近 7 天合计</span>
+            <span />
+            <span className="num tiny dim">{usage?.requests ?? 0} 次</span>
+            <span className="right num">{usage?.points ?? 0} 点</span>
+          </div>
         )}
       </div>
-
-      <div className="catalog-sec">
-        <div className="catalog-sec-name">按量价格</div>
-        <div className="card table-card price-table">
-          <div className="key-head">
-            <span>模型</span>
-            <span>单价</span>
-            <span>常见用法</span>
-            <span className="th-right">约合</span>
-          </div>
-          {s.models.map((m) => (
-            <div key={m.id} className="key-row">
-              <span className="kr-name">
-                {m.name}
-                <span className="ch-chip">{chName(m.channel)}</span>
-              </span>
-              <span>
-                {m.price} 点 / {m.basis}
-              </span>
-              <span className="tiny dim">{m.sample || m.note}</span>
-              <span className="right tiny dim">¥{m.price}</span>
-            </div>
-          ))}
-          {!s.models.length && (
-            <div className="key-row">
-              <span className="tiny dim">还没有可用模型：登录账号，或在「模型与价格 · 自定义渠道」里配置 Key。</span>
-            </div>
-          )}
-        </div>
-        <div className="table-note">
-          <Icon name="shield" />
-          <span>调用失败不扣费；同时排队与生成中的 API 任务超过 8 个返回 429；按量计费，没有月费与最低消费。</span>
-        </div>
-      </div>
-
-      <div className="catalog-sec">
-        <div className="catalog-sec-name">用量与账单</div>
-        <div className="card table-card">
-          <div className="key-head">
-            <span>时间</span>
-            <span>模型</span>
-            <span>用量</span>
-            <span className="th-right">消耗</span>
-          </div>
-          {loggedIn ? (
-            reqs.slice(0, 30).map((u) => (
-              <div key={u.id} className="key-row">
-                <span className="num">{timeLabel(u.at)}</span>
-                <span>{modelOf(s, `cloud:${u.model}`).name || u.model}</span>
-                <span className="tiny dim">
-                  {u.tokens?.image ? `${u.tokens.image} 张` : u.videoSeconds ? `${u.videoSeconds} 秒` : u.ttsChars ? `${u.ttsChars} 字` : u.tokens ? `${u.tokens.input || 0}/${u.tokens.output || 0} tokens` : '—'}
-                </span>
-                <span className="right num">{u.points} 点</span>
-              </div>
-            ))
-          ) : (
-            <div className="key-row">
-              <span className="tiny dim">登录后查看调用日志与 token 用量（由云端记录）。</span>
-            </div>
-          )}
-          {loggedIn && (
-            <div className="key-row key-sum">
-              <span className="tiny dim">近 7 天合计</span>
-              <span />
-              <span className="num tiny dim">{usage?.requests ?? 0} 次</span>
-              <span className="right num">{usage?.points ?? 0} 点</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="catalog-sec">
-        <div className="catalog-sec-name">渠道</div>
-        <div className="card table-card">
-          <div className="key-head ch-head">
-            <span>渠道</span>
-            <span>说明</span>
-            <span className="th-right">覆盖模型</span>
-          </div>
-          {s.channels.map((c) => (
-            <div key={c.id} className="key-row ch-row">
-              <span className="kr-name">
-                {c.name}
-                {!c.ready && <span className="ch-chip">未就绪</span>}
-              </span>
-              <span className="tiny dim">{c.note}</span>
-              <span className="right num">{s.models.filter((m) => m.channel === c.id).length} 个</span>
-            </div>
-          ))}
-        </div>
+      <div className="table-note">
+        <Icon name="shield" />
+        <span>网页与 API 共用这一份点数；调用失败不扣费；同时排队与生成中的 API 任务超过 8 个返回 429。按量计费，没有月费与最低消费。</span>
       </div>
     </div>
   );
@@ -279,171 +187,14 @@ const usd = (n: number | null | undefined) =>
 
 const ctxLabel = (n: number | null | undefined) => (n == null ? '—' : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
 
-export function ModelsPage() {
-  const s = useStore();
-  const st = s.settings;
-  const [directUrl, setDirectUrl] = useState(st?.direct.baseUrl || '');
-  const [key, setKey] = useState('');
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (st) setDirectUrl(st.direct.baseUrl);
-  }, [st?.direct.baseUrl]);
-  if (!st) return null;
-  const d = st.direct;
-  /* 平台渠道只在 Fast-SSO 账号下存在；Mock 云是开发用的本地实现，不展示 */
-  const hasPlatform = st.account.provider === 'fastsso';
+/** 平台清单的 mode → 界面里的类型 */
+const MODE_TYPE: Record<string, MediaType> = { chat: 'image', image: 'image', video: 'video', audio: 'audio' };
 
-  const connectDirect = async () => {
-    setBusy(true);
-    const ok = await patchSettings({ direct: { baseUrl: directUrl.trim(), ...(key.trim() ? { apiKey: key.trim() } : {}) } });
-    setBusy(false);
-    if (!ok) return;
-    setKey('');
-    const c = useStore.getState().settings?.direct.lastCheck;
-    if (c?.ok) toast('success', '自定义渠道已启用', c.message);
-    else if (c) toast('warn', '连接失败', c.message);
-  };
-
-  return (
-    <div className="page">
-      <div className="toolbar">
-        <div className="page-title-block">
-          <span className="page-title">模型与价格</span>
-          <span className="page-sub">
-            按次计费，没有订阅 · 1 点 = ¥1 · {s.session?.loggedIn ? `当前余额 ${balance(s)} 点` : '登录后显示余额'}
-          </span>
-        </div>
-        <span className="grow" />
-        <button className="btn primary" onClick={() => openDrawer('topup')}>
-          <Icon name="coins" />
-          充值点数
-        </button>
-      </div>
-      <div className="promise-row">
-        {(
-          [
-            ['check', '不订阅', '用多少扣多少，没有月费'],
-            ['refresh', '失败自动退回', '生成失败的点数原路退回'],
-            ['clock', '点数不过期', '不会每月清零'],
-            ['shield', '可商用', '产出可直接商用'],
-          ] as const
-        ).map(([ic, b, d]) => (
-          <div key={b} className="promise">
-            <span className="pm-ic">
-              <Icon name={ic} />
-            </span>
-            <b>{b}</b>
-            <span>{d}</span>
-          </div>
-        ))}
-      </div>
-      <div className="catalog-sec">
-        <div className="catalog-sec-name">渠道</div>
-        <div className="set-grid">
-          {hasPlatform && (
-            <div className="set-choice on static">
-              <TaskIc icon="cpu" cls="violet" />
-              <span>
-                <b>平台渠道（默认）</b>
-                <span>{st.account.gatewayBase || 'https://api.callfansai.com'} · 模型、提示词助手与 Agent 走这里，按点数计费</span>
-              </span>
-              <span className="chip success">
-                <span className="cdot" />
-                默认
-              </span>
-            </div>
-          )}
-          <div className={`set-choice static ${d.hasKey ? 'on' : ''}`}>
-            <TaskIc icon="globe" cls="blue" />
-            <span>
-              <b>自定义渠道</b>
-              <span>
-                {d.hasKey
-                  ? `${d.baseUrl} · 生成用这个渠道的模型，费用在你自己的上游结算`
-                  : 'TreeCloud 兼容接口：填入 Base URL 与 API Key 后自动启用，生成改走你自己的上游'}
-              </span>
-            </span>
-            <span className={`chip ${d.hasKey ? 'success' : 'neutral'}`}>
-              <span className="cdot" />
-              {d.hasKey ? '已启用' : '未配置'}
-            </span>
-          </div>
-        </div>
-        <div className="card set-card">
-          <div className="form-row">
-            <span className="form-label">Base URL</span>
-            <input className="form-input" value={directUrl} onChange={(e) => setDirectUrl(e.target.value)} placeholder="https://api.jtreecloud.com" />
-          </div>
-          <div className="form-row">
-            <span className="form-label">API Key</span>
-            <input
-              className="form-input"
-              type="password"
-              autoComplete="off"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder={d.hasKey ? `已保存 ${d.keyHint || ''}，留空则不修改` : 'sk-tc-…（在 TreeCloud 控制台创建）'}
-            />
-          </div>
-          <div className="set-actions">
-            <button className="btn primary" disabled={busy || (!key.trim() && !d.hasKey && !directUrl.trim())} onClick={() => void connectDirect()}>
-              <Icon name="link" />
-              {busy ? '连接中…' : d.hasKey ? '保存并测试连接' : '保存并启用'}
-            </button>
-            {d.hasKey && (
-              <button
-                className="btn ghost"
-                onClick={async () => {
-                  const r = await api.post<{ settings: unknown }>('/api/settings/direct/refresh').catch(() => null);
-                  toast(r ? 'success' : 'warn', r ? '模型列表已刷新' : '刷新失败');
-                }}
-              >
-                <Icon name="refresh" />
-                刷新模型列表
-              </button>
-            )}
-            {d.hasKey && (
-              <button
-                className="btn ghost"
-                onClick={() => void patchSettings({ direct: { clearKey: true } }, '已清除自定义渠道，生成改回平台渠道')}
-              >
-                <Icon name="trash" />
-                清除 Key
-              </button>
-            )}
-            <span className="grow" />
-            {d.lastCheck && (
-              <span className={`chip ${d.lastCheck.ok ? 'success' : 'danger'}`}>
-                <span className="cdot" />
-                {d.lastCheck.message} · {timeLabel(d.lastCheck.at)}
-              </span>
-            )}
-          </div>
-          <div className="tiny dim">
-            Key 加密保存在本机，只会发给你填写的 Base URL。图片请求不会自动重试——超时不代表没执行，重提可能再次计费。TreeCloud 暂不提供音乐与音效生成。
-          </div>
-        </div>
-      </div>
-      {hasPlatform && <PlatformChannel st={st} />}
-      {TYPE_KEYS.map((t) => (
-        <ModelSection key={t} t={t} models={s.models.filter((m) => m.type === t && channelReady(s, m.channel))} />
-      ))}
-      <div className="table-note">
-        <Icon name="shield" />
-        <span>点数不足时任务不会提交；生成失败的点数原路退回。实际扣费以平台账本为准。</span>
-      </div>
-    </div>
-  );
-}
-
-/** 平台渠道的模型清单：免令牌接口，运行时拉取；顺手配一个辅助模型 */
-function PlatformChannel({ st }: { st: Settings }) {
+/** 平台渠道的模型清单（免令牌接口，运行时拉取） */
+function usePlatformCatalog() {
   const [cat, setCat] = useState<PlatformModelsReply | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
-  const [q, setQ] = useState('');
-  const selected = st.platform.chatModel;
-
   const load = async (force = false) => {
     setBusy(true);
     setErr('');
@@ -458,146 +209,380 @@ function PlatformChannel({ st }: { st: Settings }) {
   useEffect(() => {
     void load();
   }, []);
+  return { cat, err, busy, reload: load };
+}
 
-  const models = cat?.models || [];
-  /* 辅助模型必须是 openai 协议的对话模型：管线只实现了 /v1/chat/completions */
-  const chat = models.filter((m) => m.mode === 'chat' && m.protocol === 'openai');
+export function ModelsPage() {
+  const s = useStore();
+  const st = s.settings;
+  const [directUrl, setDirectUrl] = useState(st?.direct.baseUrl || '');
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    if (st) setDirectUrl(st.direct.baseUrl);
+  }, [st?.direct.baseUrl]);
+  const { cat, err: catErr, busy: catBusy, reload } = usePlatformCatalog();
+  if (!st) return null;
+  const d = st.direct;
+  const loggedIn = !!s.session?.loggedIn;
+  const custom = st.channel === 'direct';
+
+  const pick = (channel: 'cloud' | 'direct') =>
+    void patchSettings({ channel }, channel === 'cloud' ? '已切换到平台渠道' : '已切换到自定义渠道');
+
+  const setModel = (ch: 'cloud' | 'direct', t: 'text' | MediaType, id: string) =>
+    void patchSettings({ models: { [ch]: { [t]: id } } }, id ? '默认模型已更新' : '已改为自动选择');
+
+  const connectDirect = async () => {
+    setBusy(true);
+    const ok = await patchSettings({ direct: { baseUrl: directUrl.trim(), ...(key.trim() ? { apiKey: key.trim() } : {}) } });
+    setBusy(false);
+    if (!ok) return;
+    setKey('');
+    const c = useStore.getState().settings?.direct.lastCheck;
+    if (c?.ok) toast('success', '自定义渠道已就绪', c.message);
+    else if (c) toast('warn', '连接失败', c.message);
+  };
+
+  const refreshDirect = async () => {
+    const r = await api.post<{ settings: unknown }>('/api/settings/direct/refresh').catch(() => null);
+    toast(r ? 'success' : 'warn', r ? '模型列表已刷新' : '刷新失败');
+  };
+
+  /* 平台清单按 mode 分组：chat 是文本模型，其余是各类型的生成模型 */
+  const platOf = (t: 'chat' | MediaType) => (cat?.models || []).filter((m) => (t === 'chat' ? m.mode === 'chat' : MODE_TYPE[m.mode || ''] === t && m.mode !== 'chat'));
   const kw = q.trim().toLowerCase();
-  const list = kw ? models.filter((m) => m.id.toLowerCase().includes(kw)) : models;
-  const effective = cat?.chatModel || '';
+  const platList = (cat?.models || []).filter((m) => !kw || m.id.toLowerCase().includes(kw));
+  /* 文本模型的可选项跟着渠道走 */
+  const textOptions = custom ? d.chatModels.map((id) => ({ id })) : platOf('chat');
+  const textPick = custom ? st.models.direct.text : st.models.cloud.text;
 
   return (
-    <div className="catalog-sec">
-      <div className="catalog-sec-name">平台模型</div>
-      <div className="card set-card">
-        <div className="form-row">
-          <span className="form-label">辅助模型</span>
-          <select
-            className="form-select"
-            value={selected}
-            disabled={!chat.length}
-            onChange={(e) => void patchSettings({ platform: { chatModel: e.target.value } }, e.target.value ? '辅助模型已切换' : '已改为自动选择')}
-          >
-            <option value="">自动选择{effective ? `（${effective}）` : ''}</option>
-            {chat.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.id}
-              </option>
-            ))}
-          </select>
+    <div className="page">
+      <div className="toolbar">
+        <div className="page-title-block">
+          <span className="page-title">模型与价格</span>
+          <span className="page-sub">
+            按次计费，没有订阅 · 1 点 = ¥1 · {loggedIn ? `当前余额 ${balance(s)} 点` : '登录后显示余额'}
+          </span>
         </div>
-        <div className="set-actions">
-          <button className="btn ghost" disabled={busy} onClick={() => void load(true)}>
-            <Icon name="refresh" />
-            {busy ? '读取中…' : '刷新清单'}
-          </button>
-          {models.length > 12 && (
-            <input className="form-input plat-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索模型…" />
-          )}
-          <span className="grow" />
-          {err ? (
-            <span className="chip danger">
-              <span className="cdot" />
-              {err}
-            </span>
-          ) : cat ? (
-            <span className="chip success">
-              <span className="cdot" />
-              {models.length} 个模型 · {timeLabel(cat.at)}
-            </span>
-          ) : (
-            <span className="chip neutral">
-              <span className="cdot" />
-              读取中…
-            </span>
-          )}
-        </div>
-        <div className="tiny dim">
-          提示词助手与 Agent 用这个模型。清单来自 {cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1
-          分钟；「自动选择」会挑一个便宜的对话模型，价格是上游标价（每百万 tokens），实际扣费以平台账本为准。
-        </div>
+        <span className="grow" />
+        <button className="btn primary" onClick={() => openDrawer('topup')}>
+          <Icon name="coins" />
+          充值点数
+        </button>
       </div>
-      <div className="card table-card plat-table">
-        <div className="key-head">
-          <span>模型</span>
-          <span>上下文</span>
-          <span>输入 / 百万</span>
-          <span>输出 / 百万</span>
-        </div>
-        {list.map((m) => (
-          <div key={m.id} className={`key-row ${m.id === effective ? 'on' : ''}`}>
-            <span className="kr-name">
-              {m.id}
-              {m.protocol && <span className="cap-chip">{m.protocol}</span>}
+
+      <div className="catalog-sec">
+        <div className="catalog-sec-name">渠道</div>
+        <div className="set-grid">
+          <button className={`set-choice ${custom ? '' : 'on'}`} onClick={() => pick('cloud')}>
+            <TaskIc icon="cpu" cls="violet" />
+            <span>
+              <b>平台渠道</b>
+              <span>{st.account.gatewayBase || 'https://api.callfansai.com'} · 用账号点数，模型与价格由平台提供</span>
             </span>
-            <span className="t2">{ctxLabel(m.contextWindow)}</span>
-            <span className="t2">{usd(m.inputPerMillion)}</span>
-            <span className="t2">{usd(m.outputPerMillion)}</span>
-          </div>
-        ))}
-        {!list.length && (
-          <div className="key-row">
-            <span className="tiny dim">{err ? '模型清单暂时读不到，稍后点「刷新清单」重试。' : '没有匹配的模型。'}</span>
+            {!custom ? <span className="chip success"><span className="cdot" />使用中</span> : null}
+          </button>
+          <button className={`set-choice ${custom ? 'on' : ''}`} onClick={() => pick('direct')}>
+            <TaskIc icon="globe" cls="blue" />
+            <span>
+              <b>自定义渠道</b>
+              <span>{d.hasKey ? `${d.baseUrl} · 费用在你自己的上游结算` : 'TreeCloud 兼容接口：填可用的 Base URL 与 API Key，费用自己结算'}</span>
+            </span>
+            {custom ? <span className={`chip ${d.hasKey ? 'success' : 'warn'}`}><span className="cdot" />{d.hasKey ? '使用中' : '待配置'}</span> : null}
+          </button>
+        </div>
+
+        {custom && (
+          <div className="card set-card">
+            <div className="form-row">
+              <span className="form-label">Base URL</span>
+              <input className="form-input" value={directUrl} onChange={(e) => setDirectUrl(e.target.value)} placeholder="https://api.jtreecloud.com" />
+            </div>
+            <div className="form-row">
+              <span className="form-label">API Key</span>
+              <input
+                className="form-input"
+                type="password"
+                autoComplete="off"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                placeholder={d.hasKey ? `已保存 ${d.keyHint || ''}，留空则不修改` : 'sk-tc-…（在 TreeCloud 控制台创建）'}
+              />
+            </div>
+            <div className="set-actions">
+              <button className="btn primary" disabled={busy || (!key.trim() && !d.hasKey)} onClick={() => void connectDirect()}>
+                <Icon name="link" />
+                {busy ? '连接中…' : d.hasKey ? '保存并测试连接' : '保存并连接'}
+              </button>
+              {d.hasKey && (
+                <button className="btn ghost" onClick={() => void refreshDirect()}>
+                  <Icon name="refresh" />
+                  刷新模型列表
+                </button>
+              )}
+              {d.hasKey && (
+                <button className="btn ghost" onClick={() => void patchSettings({ direct: { clearKey: true } }, '已清除自定义渠道的 Key')}>
+                  <Icon name="trash" />
+                  清除 Key
+                </button>
+              )}
+              <span className="grow" />
+              {d.lastCheck && (
+                <span className={`chip ${d.lastCheck.ok ? 'success' : 'danger'}`}>
+                  <span className="cdot" />
+                  {d.lastCheck.message} · {timeLabel(d.lastCheck.at)}
+                </span>
+              )}
+            </div>
+            <div className="tiny dim">
+              Key 加密保存在本机，只会发给你填写的 Base URL。图片请求不会自动重试——超时不代表没执行，重提可能再次计费。
+            </div>
           </div>
         )}
       </div>
-      {!!kw && <div className="table-note"><Icon name="search" /><span>共 {models.length} 个模型，匹配 {list.length} 个。</span></div>}
+
+      {/* 文本模型：跟着渠道切换 */}
+      <div className="catalog-sec">
+        <div className="catalog-sec-name">文本模型</div>
+        <div className="card set-card">
+          <div className="form-row">
+            <span className="form-label">提示词助手</span>
+            <select
+              className="form-select"
+              value={textOptions.some((m) => m.id === textPick) ? textPick : ''}
+              onChange={(e) => setModel(custom ? 'direct' : 'cloud', 'text', e.target.value)}
+              disabled={!textOptions.length}
+            >
+              <option value="">自动选择</option>
+              {textOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="set-actions">
+            <button className="btn ghost" disabled={catBusy} onClick={() => (custom ? void refreshDirect() : void reload(true))}>
+              <Icon name="refresh" />
+              {catBusy ? '读取中…' : '刷新清单'}
+            </button>
+            {!custom && platOf('chat').length > 12 && (
+              <input className="form-input plat-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索模型…" />
+            )}
+            <span className="grow" />
+            {custom ? (
+              <span className={`chip ${d.hasKey ? 'success' : 'warn'}`}>
+                <span className="cdot" />
+                {d.hasKey ? `${d.chatModels.length} 个对话模型` : '配置 Key 后读取'}
+              </span>
+            ) : catErr ? (
+              <span className="chip danger">
+                <span className="cdot" />
+                {catErr}
+              </span>
+            ) : cat ? (
+              <span className="chip success">
+                <span className="cdot" />
+                {cat.models.length} 个模型 · {timeLabel(cat.at)}
+              </span>
+            ) : (
+              <span className="chip neutral">
+                <span className="cdot" />
+                读取中…
+              </span>
+            )}
+          </div>
+          <div className="tiny dim">
+            {custom
+              ? '提示词助手与 Agent 用自定义渠道的对话模型，费用在你自己的上游结算。'
+              : `提示词助手与 Agent 用平台对话模型，按点数计费。清单来自 ${cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1 分钟。`}
+          </div>
+        </div>
+        {!custom && !!platList.length && (
+          <div className="card table-card plat-table">
+            <div className="key-head">
+              <span>模型</span>
+              <span>上下文</span>
+              <span>输入 / 百万</span>
+              <span>输出 / 百万</span>
+            </div>
+            {platList.map((m) => (
+              <div key={m.id} className={`key-row ${m.id === st.models.cloud.text ? 'on' : ''}`}>
+                <span className="kr-name">
+                  {m.id}
+                  {m.protocol && <span className="cap-chip">{m.protocol}</span>}
+                </span>
+                <span className="t2">{ctxLabel(m.contextWindow)}</span>
+                <span className="t2">{usd(m.inputPerMillion)}</span>
+                <span className="t2">{usd(m.outputPerMillion)}</span>
+              </div>
+            ))}
+            {!platList.length && (
+              <div className="key-row">
+                <span className="tiny dim">{catErr ? '模型清单暂时读不到，稍后点「刷新清单」重试。' : '没有匹配的模型。'}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {TYPE_KEYS.map((t) => (
+        <ModelSection
+          key={t}
+          t={t}
+          custom={custom}
+          models={custom ? s.models.filter((m) => m.type === t) : []}
+          platform={custom ? [] : platOf(t)}
+          platformErr={catErr}
+          picked={(custom ? st.models.direct : st.models.cloud)[t]}
+          onPick={(id) => setModel(custom ? 'direct' : 'cloud', t, id)}
+        />
+      ))}
+
+      <UsageSection loggedIn={loggedIn} />
+
+      <div className="table-note">
+        <Icon name="shield" />
+        <span>点数不足时任务不会提交；生成失败的点数原路退回。实际扣费以平台账本为准。</span>
+      </div>
     </div>
   );
 }
 
-function ModelSection({ t, models }: { t: MediaType; models: ModelInfo[] }) {
-  const provider = useStore((s) => s.settings?.account.provider);
+function ModelSection({
+  t,
+  custom,
+  models,
+  platform,
+  platformErr,
+  picked,
+  onPick,
+}: {
+  t: MediaType;
+  custom: boolean;
+  models: ModelInfo[];
+  platform: PlatformModelInfo[];
+  platformErr: string;
+  picked: string;
+  onPick: (id: string) => void;
+}) {
+  const st = useStore((s) => s.settings);
+  /* 自定义渠道的默认模型只能从它自己的模型里挑；平台渠道用平台清单 */
+  const options = custom ? models.map((m) => m.id) : platform.map((m) => m.id);
+  const typeName = TYPES[t].name;
+
   return (
     <div className="catalog-sec">
-      <div className="catalog-sec-name">{TYPES[t].name}模型</div>
-      {models.length ? (
-        <div className="model-grid">
-          {models.map((m) => (
-            <div key={m.id} className="card model-card">
-              <div className="model-top">
-                <span className={`task-ic ${jobIconCls(t)}`}>
-                  <Icon name="cpu" />
-                </span>
-                <div>
-                  <div className="model-name">{m.name}</div>
-                  <div className="model-id">
-                    约 ¥{m.price} / {m.basis}
+      <div className="catalog-sec-name">{typeName}模型</div>
+      {/* 没有可选清单时不留空下拉框，下面的空状态说明已经讲清楚了 */}
+      {!!options.length && (
+        <div className="card set-card">
+          <div className="form-row">
+            <span className="form-label">默认模型</span>
+            <select className="form-select" value={options.includes(picked) ? picked : ''} onChange={(e) => onPick(e.target.value)}>
+              <option value="">自动选择{`（${options[0]}）`}</option>
+              {options.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="tiny dim">
+            {custom
+              ? '生成时默认用这个模型；换回平台渠道会自动切到平台渠道的模型。'
+              : '平台渠道的模型由平台提供；平台还没上线的类型，可以切到自定义渠道生成。'}
+          </div>
+        </div>
+      )}
+
+      {custom ? (
+        models.length ? (
+          <div className="model-grid">
+            {models.map((m) => (
+              <div key={m.id} className={`card model-card ${picked === m.id ? 'picked' : ''}`}>
+                <div className="model-top">
+                  <span className={`task-ic ${jobIconCls(t)}`}>
+                    <Icon name="cpu" />
+                  </span>
+                  <div>
+                    <div className="model-name">{m.name}</div>
+                    <div className="model-id">
+                      约 ¥{m.price} / {m.basis}
+                    </div>
+                  </div>
+                  <div className="model-price">
+                    <div className="p num">{m.price}</div>
+                    <div className="u">点 / {m.basis}</div>
                   </div>
                 </div>
-                <div className="model-price">
-                  <div className="p num">{m.price}</div>
-                  <div className="u">点 / {m.basis}</div>
+                <div className="small t2">{m.note}</div>
+                <div className="model-caps">
+                  {m.caps.map((c) => (
+                    <span key={c} className="cap-chip">
+                      {c}
+                    </span>
+                  ))}
+                </div>
+                {m.limit && <div className="tiny dim">限制：{m.limit}</div>}
+                <div className="model-foot">
+                  <span className="chip success">
+                    <span className="cdot" />
+                    可用
+                  </span>
+                  <span className="grow" />
+                  <button className={`btn sm ${picked === m.id ? 'ghost' : 'primary'}`} disabled={picked === m.id} onClick={() => onPick(m.id)}>
+                    {picked === m.id ? '使用中' : '设为默认'}
+                  </button>
                 </div>
               </div>
-              <div className="small t2">{m.note}</div>
-              <div className="model-caps">
-                {m.caps.map((c) => (
-                  <span key={c} className="cap-chip">
-                    {c}
-                  </span>
-                ))}
-              </div>
-              {m.limit && <div className="tiny dim">限制：{m.limit}</div>}
-              <div className="model-foot">
-                <span className="chip success">
-                  <span className="cdot" />
-                  可用
-                </span>
-                <span className="grow" />
-                <span className="tiny dim">{m.channel === 'cloud' ? '平台网关' : '自定义渠道'}</span>
-              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="table-note">
+            <Icon name="alert" />
+            <span>
+              {st?.direct.hasKey
+                ? `自定义渠道里没有可用的${typeName}模型：点上面的「刷新模型列表」，或换一个提供${typeName}的上游 Key。`
+                : `自定义渠道还没有配置：在上面填好 Base URL 与 API Key 后，这里会列出可用的${typeName}模型。`}
+            </span>
+          </div>
+        )
+      ) : platform.length ? (
+        <div className="card table-card plat-table media-plat">
+          <div className="key-head">
+            <span>模型</span>
+            <span>状态</span>
+            <span>标价</span>
+          </div>
+          {platform.map((m) => (
+            <div key={m.id} className={`key-row ${picked === m.id ? 'on' : ''}`}>
+              <span className="kr-name">
+                {m.id}
+                {m.protocol && <span className="cap-chip">{m.protocol}</span>}
+              </span>
+              <span className="chip neutral">
+                <span className="cdot" />
+                接入中
+              </span>
+              <span className="tiny dim">
+                {m.inputPerMillion == null && m.outputPerMillion == null
+                  ? '—'
+                  : `${usd(m.inputPerMillion)} 输入 / ${usd(m.outputPerMillion)} 输出（每百万）`}
+              </span>
             </div>
           ))}
         </div>
       ) : (
         <div className="table-note">
-          <Icon name="alert" />
+          <Icon name="clock" />
           <span>
-            当前没有可用的{TYPES[t].name}模型：
-            {provider === 'fastsso'
-              ? '完善「自定义渠道」后，用你自己的上游生成。'
-              : '登录账号，或在「模型与价格 · 自定义渠道」里配置 Key。'}
+            {platformErr
+              ? '平台模型清单暂时读不到，稍后点「刷新清单」重试。'
+              : `平台渠道正在接入${typeName}模型，上线后会自动出现在这里；现在可以切到自定义渠道生成。`}
           </span>
         </div>
       )}

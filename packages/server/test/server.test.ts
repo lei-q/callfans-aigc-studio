@@ -189,6 +189,7 @@ describe('直连模式', () => {
       await login(core);
       const before = core.session.wallet!.balance;
       const s = core.store.settings;
+      s.channel = 'direct';
       s.direct.baseUrl = fake.url;
       s.direct.keyEnc = core.secrets.encrypt('sk-tc-good');
       s.direct.enabled = true;

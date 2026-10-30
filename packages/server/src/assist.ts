@@ -19,10 +19,19 @@ export function ruleOptimize(type: MediaType, prompt: string): OptimizeReply {
   return { mode: 'add', result: '', add: cfg.add, neg: cfg.neg, note: cfg.note, llm: false };
 }
 
-export type ChatRoute = { kind: 'platform'; model: string } | { kind: 'cloud' } | { kind: 'none'; reason: string };
+export type ChatRoute = { kind: 'platform'; model: string } | { kind: 'direct'; model: string } | { kind: 'cloud' } | { kind: 'none'; reason: string };
 
-/** 平台模型走账号的长期密钥；模型名每次从清单里选，不写死 */
+/** 文本模型跟着渠道走：自定义渠道用自己的对话模型，否则走平台网关（模型名每次从清单里选，不写死） */
 export async function chatRoute(core: Core): Promise<ChatRoute> {
+  const picks = core.store.settings.models;
+  if (core.channel === 'direct') {
+    if (!core.store.settings.direct.keyEnc) {
+      return { kind: 'none', reason: '自定义渠道还没有配置 Key：到「模型与价格」填入后，提示词助手与 Agent 会用它' };
+    }
+    const chat = core.store.directModels.chat;
+    if (!chat.length) return { kind: 'none', reason: '自定义渠道里没有可用的文本模型：到「模型与价格」刷新模型列表' };
+    return { kind: 'direct', model: chat.includes(picks.direct.text) ? picks.direct.text : chat[0] };
+  }
   if (core.provider === 'mock') {
     return core.session.loggedIn
       ? { kind: 'cloud' }
@@ -32,7 +41,7 @@ export async function chatRoute(core: Core): Promise<ChatRoute> {
     return { kind: 'none', reason: '还没有登录账号：登录后提示词助手与 Agent 会用平台模型，按点数计费' };
   }
   try {
-    const model = await core.platform.chatModel(core.store.settings.platform.chatModel);
+    const model = await core.platform.chatModel(picks.cloud.text);
     if (model) return { kind: 'platform', model };
     return { kind: 'none', reason: '平台模型清单里没有可用的对话模型，稍后再试' };
   } catch (e) {
@@ -42,7 +51,8 @@ export async function chatRoute(core: Core): Promise<ChatRoute> {
 
 export function chatRouteLabel(route: ChatRoute) {
   if (route.kind === 'none') return route.reason;
-  return route.kind === 'cloud' ? '云端网关' : `平台模型 ${route.model}`;
+  if (route.kind === 'cloud') return '云端网关';
+  return `${route.kind === 'direct' ? '自定义渠道' : '平台模型'} ${route.model}`;
 }
 
 /** 从模型回复里抠出第一个 JSON 对象 */
@@ -61,6 +71,7 @@ async function ask(core: Core, route: Exclude<ChatRoute, { kind: 'none' }>, mess
   const t = setTimeout(() => ac.abort(), 45_000);
   try {
     if (route.kind === 'platform') return await core.accounts.chat(route.model, messages, ac.signal);
+    if (route.kind === 'direct') return await core.direct.chat(route.model, messages, ac.signal);
     return await core.cloud.chat('', messages, ac.signal);
   } finally {
     clearTimeout(t);

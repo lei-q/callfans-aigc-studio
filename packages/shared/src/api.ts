@@ -1,4 +1,4 @@
-import type { AudioUse, JobParams, MediaType, RefInput, ResultHome, ResultStatus, RunMode } from './types';
+import type { AudioUse, ChannelId, JobParams, MediaType, ModelPicks, RefInput, ResultHome, ResultStatus, RunMode } from './types';
 
 /* 前后端之间的请求体合同 */
 
@@ -77,7 +77,8 @@ export interface SettingsPatch {
   cloud?: { baseUrl?: string };
   runner?: { concurrency?: number };
   direct?: { enabled?: boolean; baseUrl?: string; apiKey?: string; clearKey?: boolean };
-  platform?: { chatModel?: string };
+  channel?: ChannelId;
+  models?: Partial<Record<ChannelId, Partial<ModelPicks>>>;
   prices?: Record<string, number | null>;
   runtime?: { mode?: RunMode; host?: string; port?: number; lan?: boolean; token?: string; clearToken?: boolean };
 }

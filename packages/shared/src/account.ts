@@ -36,11 +36,8 @@ export interface PlatformModelInfo {
 
 export interface PlatformModelsReply {
   gatewayBase: string;
+  /** 清单里的全部模型；按 mode 分组（chat / image / video / audio） */
   models: PlatformModelInfo[];
-  /** 用户选定的辅助模型；空串 = 自动 */
-  selected: string;
-  /** 实际会用的模型（自动选或已选）；null = 清单里没有可用的对话模型 */
-  chatModel: string | null;
   at: number;
 }
 

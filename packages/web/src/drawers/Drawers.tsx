@@ -308,7 +308,7 @@ function DangerButton({ label, confirmLabel, onConfirm }: { label: string; confi
 
 function HelpDrawer() {
   const loggedIn = useStore((s) => !!s.session?.loggedIn);
-  const directOn = useStore((s) => !!(s.settings?.direct.enabled && s.settings.direct.hasKey));
+  const custom = useStore((s) => s.settings?.channel === 'direct');
   return (
     <>
       <Head ic="compass" title="使用地图" sub="四步走完一次生成，以及常见异常的处理入口" />
@@ -360,21 +360,21 @@ function HelpDrawer() {
           <div className="ai-note">
             <div className="ai-note-head">
               <Icon name="shield" />
-              {loggedIn ? '当前走云端网关' : directOn ? '当前走自定义渠道' : '还没有接入生成能力'}
+              {custom ? '当前走自定义渠道' : loggedIn ? '当前走平台渠道' : '还没有接入生成能力'}
             </div>
             <ul>
-              {loggedIn ? (
+              {custom ? (
                 <>
-                  <li>图像、视频、配音经云端网关真实生成，按用量扣点数，结果保存在本机。</li>
+                  <li>用你自己的 Key 走自定义渠道，费用在你自己的上游结算，不扣平台点数。</li>
+                  <li>切回平台渠道后按平台点数计费。</li>
+                </>
+              ) : loggedIn ? (
+                <>
+                  <li>平台渠道的模型按用量扣点数，结果保存在本机。</li>
                   <li>生成失败或取消时，冻结的点数自动退回。</li>
                 </>
-              ) : directOn ? (
-                <>
-                  <li>用你自己的 TreeCloud Key 走自定义渠道，费用在你自己的上游结算，不扣平台点数。</li>
-                  <li>登录云端账号后也可以改走平台点数。</li>
-                </>
               ) : (
-                <li>先登录账号（微信 / 支付宝充值点数），或在「模型与价格 · 自定义渠道」填自己的 TreeCloud Key，才能开始生成。</li>
+                <li>先登录账号（微信 / 支付宝充值点数），或在「模型与价格」切到自定义渠道填自己的 Key，才能开始生成。</li>
               )}
               <li>图片请求不会自动重试：超时不代表没执行，重提可能再次计费。</li>
               <li>失败触发规则：所选分辨率超过模型上限，或视频时长超出模型上限。</li>
@@ -878,7 +878,7 @@ function AccountDrawer() {
           <div className="d-section">
             <div className="wallet-card">
               <div>
-                <div className="tiny dim">当前余额</div>
+                <div className="tiny dim">当前余额 · 每 10 秒自动刷新</div>
                 <div className="wc-balance num">
                   {balance(s)}
                   <span>点</span>

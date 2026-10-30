@@ -1,6 +1,6 @@
 # Fast-SSO 账号与充值接入
 
-AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费）。**平台生成网关还没有接入媒体模型**，图片、视频与配音生成仍走「模型与价格 · 自定义渠道」（用户自填 TreeCloud 兼容 Key，自动启用）。
+AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费）。「模型与价格」里平台渠道与自定义渠道**二选一**：选平台渠道不用填 Base URL / API Key；**平台生成网关还没有接入媒体模型**，图片、视频与配音生成目前要走「自定义渠道」（用户自填 TreeCloud 兼容 Key，存下即启用），文本模型也会跟着渠道一起切换。
 
 ## 架构
 
@@ -65,6 +65,7 @@ https://account.callfansai.com/api/v1
 | `POST /api/account/password/reset` | 重置密码 |
 | `GET /api/billing/packs` | 积分档位（5 分钟缓存） |
 | `GET /api/billing/wallet` | 余额与今日免费额度 |
+| `POST /api/billing/wallet/refresh` | 主动向账号中心查一次余额（页面每 10 秒调一次，结果同时走 SSE `wallet`） |
 | `POST /api/billing/orders` | 下单，**必须**带 `Idempotency-Key`（请求体 `idempotencyKey`） |
 | `POST /api/billing/orders/:id/prepay` | 获取 `codeUrl`（二维码内容） |
 | `POST /api/billing/orders/:id/cancel` | 关闭待支付订单（`/consumer/recharge/orders/{id}/close`） |
@@ -95,7 +96,7 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 ## 平台模型（对话）
 
 - 清单：`GET {gatewayBase}/models`，免令牌，缓存 60 秒；`gatewayBase` 默认 `https://api.callfansai.com`，可用 `AIGC_GATEWAY_URL` 覆盖。
-- 选模型：`AIGC_CHAT_MODEL` → 内置偏好（`deepseek-v4.1-flash-1017`、`claude-haiku-5-5`、`gpt-6-luna`）→ 最便宜的 openai 协议对话模型；不写死。
+- 选模型：`AIGC_CHAT_MODEL` →「模型与价格 · 文本模型」里选的（平台渠道）→ 内置偏好（`deepseek-v4.1-flash-1017`、`claude-haiku-5-5`、`gpt-6-luna`）→ 最便宜的 openai 协议对话模型；不写死。
 - 密钥：`POST /consumer/llm-keys` 用 consumer token 换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。
   - 409 `billing_account_provisioning` → 约 30 秒后重试；409 `litellm_key_exists` → 本地副本丢了，先让平台吊销再换，不重试。
 - 调用：`POST {gatewayBase}/v1/chat/completions`；401 丢本地副本重换一次，422 = 积分不足。
@@ -103,5 +104,5 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 
 ## 尚未接入
 
-- 平台生成网关的**媒体**能力（图片 / 视频 / 语音）：登录后的点数目前只用于对话与订单；生成需要在「模型与价格 · 自定义渠道」填自己的 Key。平台上线媒体路由后，`Provider` 层可直接复用账号会话。
+- 平台生成网关的**媒体**能力（图片 / 视频 / 语音）：登录后的点数目前只用于对话与订单；生成需要在「模型与价格」切到自定义渠道并填自己的 Key。平台上线媒体路由后，`Provider` 层可直接复用账号会话，渠道里的媒体清单也会自动出现。
 - 站内支付渠道以外的退款/对账界面：以账号中心后台为准。

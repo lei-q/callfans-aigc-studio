@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AppInfo, Bootstrap, Channel, ModelInfo, RunMode, SessionInfo, Settings } from '@aigc/shared';
+import type { AppInfo, Bootstrap, Channel, ChannelId, ModelInfo, RunMode, SessionInfo, Settings } from '@aigc/shared';
 import { DEFAULT_PORT, uid } from '@aigc/shared';
 import { AccountSession } from './account/session';
 import { PlatformCatalog } from './account/platform';
@@ -165,15 +165,21 @@ export class Core {
   /* ---------------- 模型与渠道 ---------------- */
 
   providers(): Provider[] {
-    /* 平台生成网关尚未接入时（Fast-SSO 只提供账号与充值），只保留直连渠道 */
-    return this.provider === 'mock' ? [this.cloud, this.direct] : [this.direct];
+    return [this.cloud, this.direct];
+  }
+
+  /** 当前生成渠道：cloud = 平台渠道，direct = 自定义渠道 */
+  get channel(): ChannelId {
+    return this.store.settings.channel;
   }
 
   models(): ModelInfo[] {
+    if (this.channel === 'direct') return this.store.settings.direct.keyEnc ? this.direct.models() : [];
+    /* 平台渠道：媒体模型还没上线，Mock 云另有一套自己的模型目录 */
+    if (this.provider !== 'mock') return [];
     const prices = this.store.settings.prices;
-    if (this.provider !== 'mock') return this.direct.models();
     const cloudCached = this.session.loggedIn ? this.session.models : this.store.cloudModelsCache;
-    return [...cloudCached.map((g) => gatewayModelToModelInfo(g, prices[`cloud:${g.id}`])), ...this.direct.models()];
+    return cloudCached.map((g) => gatewayModelToModelInfo(g, prices[`cloud:${g.id}`]));
   }
 
   modelById(id: string) {
@@ -184,16 +190,16 @@ export class Core {
     return model.channel === 'direct' ? this.direct : this.cloud;
   }
 
-  /** 模型所属渠道当前是否可用：云端要登录，直连要启用且配了 Key */
+  /** 当前渠道是否可用：平台渠道要登录，自定义渠道要配了 Key */
   routeError(model: ModelInfo): string | null {
     if (model.channel === 'direct') {
       const d = this.store.settings.direct;
-      if (!d.keyEnc) return '还没有配置自定义渠道：到「模型与价格 · 自定义渠道」填入 Base URL 与 API Key';
+      if (!d.keyEnc) return '还没有配置自定义渠道：到「模型与价格」选自定义渠道并填入 Base URL 与 API Key';
       if (!d.enabled) return '自定义渠道没有启用：到「模型与价格 · 自定义渠道」重新保存一次';
       return null;
     }
-    if (this.provider !== 'mock') return '平台网关还没有接入媒体模型：到「模型与价格 · 自定义渠道」配置后生成';
-    if (!this.session.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「模型与价格 · 自定义渠道」填自己的 Key';
+    if (this.provider !== 'mock') return '平台渠道还没有接入图像 / 视频 / 音频模型：到「模型与价格」切换到自定义渠道';
+    if (!this.session.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「模型与价格」切到自定义渠道';
     return null;
   }
 
@@ -220,8 +226,10 @@ export class Core {
         hasKey: !!s.direct.keyEnc,
         keyHint: s.direct.keyHint,
         lastCheck: s.direct.lastCheck,
+        chatModels: this.store.directModels.chat,
       },
-      platform: { chatModel: s.platform.chatModel },
+      channel: s.channel,
+      models: { cloud: { ...s.models.cloud }, direct: { ...s.models.direct } },
       prices: s.prices,
       runtime: {
         mode: launch.mode || this.opts.mode,

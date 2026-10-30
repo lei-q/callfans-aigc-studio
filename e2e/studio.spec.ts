@@ -74,6 +74,9 @@ test('首启是干净的：没有示例数据，生成入口引导登录', async
 test('登录 → 支付宝扫码充值 → 余额到账', async ({ page }) => {
   await open(page);
   await ensureLogin(page);
+  /* 余额每 10 秒自动向账号服务查一次 */
+  const refresh = await page.waitForResponse((r) => r.url().endsWith('/api/billing/wallet/refresh') && r.request().method() === 'POST', { timeout: 16_000 });
+  expect(refresh.ok()).toBeTruthy();
   await expect(page.locator('.gen-btn', { hasText: '登录后生成' })).toHaveCount(0);
   await topup(page, '支付宝');
   /* 余额芯片显示数字（登录赠送 1 点 + 首充档位） */
@@ -215,26 +218,36 @@ test('素材库打包成帖并导出 Markdown', async ({ page }) => {
   await expect(page.locator('.post-card')).toHaveCount(1);
 });
 
-test('模型与价格：自定义渠道搬到这里，设置页不再有直连', async ({ page }) => {
+test('模型与价格：渠道二选一，平台渠道不填 Key', async ({ page }) => {
   await open(page);
   await page.locator('.side-item', { hasText: '模型与价格' }).click();
   await expect(page.locator('.page-title')).toHaveText('模型与价格');
   await expect(page.locator('.catalog-sec-name', { hasText: '渠道' })).toBeVisible();
-  const card = page.locator('.set-choice', { hasText: '自定义渠道' });
-  await expect(card).toContainText('未配置');
-  /* 没有单独的开关：填好 Base URL 与 Key 保存即自动启用 */
-  await expect(page.locator('.set-choice', { hasText: '启用直连' })).toHaveCount(0);
+  const plat = page.locator('.set-choice', { hasText: '平台渠道' });
+  const custom = page.locator('.set-choice', { hasText: '自定义渠道' });
+  /* 默认平台渠道：没有 Base URL / API Key 要填 */
+  await expect(plat).toContainText('使用中');
+  await expect(page.locator('.set-card .form-label', { hasText: 'API Key' })).toHaveCount(0);
+  await custom.click();
+  await expect(custom).toContainText('待配置');
   await expect(page.locator('.set-card .form-label', { hasText: 'API Key' })).toBeVisible();
+  /* 图像 / 视频 / 音频模型都跟着渠道走 */
+  await expect(page.locator('.catalog-sec-name', { hasText: '图像模型' })).toBeVisible();
+  await expect(page.locator('.catalog-sec-name', { hasText: '音频模型' })).toBeVisible();
+  await expect(page.locator('.catalog-sec-name', { hasText: '文本模型' })).toBeVisible();
+  await plat.click();
+  await expect(plat).toContainText('使用中');
+  await expect(page.locator('.set-card .form-label', { hasText: 'API Key' })).toHaveCount(0);
   await page.locator('.side-item', { hasText: '设置' }).click();
   await expect(page.locator('.catalog-sec-name', { hasText: '直连' })).toHaveCount(0);
 });
 
-test('导航：API 接入不再展示本地密钥，设置页改叫「账号」', async ({ page }) => {
+test('导航：API 接入并入模型与价格，设置页改叫「账号」', async ({ page }) => {
   await open(page);
-  await page.locator('.side-item', { hasText: 'API 接入' }).click();
-  await expect(page.locator('.page-title')).toHaveText('API 接入');
-  await expect(page.locator('.catalog-sec-name', { hasText: '密钥' })).toHaveCount(0);
-  await expect(page.locator('.catalog-sec-name', { hasText: '快速开始' })).toHaveCount(0);
+  await expect(page.locator('.side-item', { hasText: 'API 接入' })).toHaveCount(0);
+  await page.locator('.side-item', { hasText: '模型与价格' }).click();
+  await expect(page.locator('.page-title')).toHaveText('模型与价格');
+  await expect(page.locator('.catalog-sec-name', { hasText: '用量与账单' })).toBeVisible();
   await page.locator('.side-item', { hasText: '设置' }).click();
   await expect(page.locator('.catalog-sec-name').first()).toHaveText('账号');
   await expect(page.locator('.snap-row', { hasText: '账号服务' })).toHaveCount(0);
