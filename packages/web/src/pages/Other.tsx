@@ -187,8 +187,15 @@ const usd = (n: number | null | undefined) =>
 
 const ctxLabel = (n: number | null | undefined) => (n == null ? '—' : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
 
-/** 平台清单的 mode → 界面里的类型 */
-const MODE_TYPE: Record<string, MediaType> = { chat: 'image', image: 'image', video: 'video', audio: 'audio' };
+/** 平台清单的 mode → 界面里的类型；平台用的是 image_generation / video_generation 这类写法 */
+function modeType(mode?: string): 'chat' | MediaType | null {
+  const m = (mode || '').toLowerCase();
+  if (m === 'chat' || m === 'text' || m === 'llm') return 'chat';
+  if (m.startsWith('image')) return 'image';
+  if (m.startsWith('video')) return 'video';
+  if (m.startsWith('audio') || m === 'tts' || m === 'speech') return 'audio';
+  return null;
+}
 
 /** 平台渠道的模型清单（免令牌接口，运行时拉取） */
 function usePlatformCatalog() {
@@ -250,8 +257,8 @@ export function ModelsPage() {
     toast(r ? 'success' : 'warn', r ? '模型列表已刷新' : '刷新失败');
   };
 
-  /* 平台清单按 mode 分组：chat 是文本模型，其余是各类型的生成模型 */
-  const platOf = (t: 'chat' | MediaType) => (cat?.models || []).filter((m) => (t === 'chat' ? m.mode === 'chat' : MODE_TYPE[m.mode || ''] === t && m.mode !== 'chat'));
+  /* 平台清单按 mode 分组：chat 是文本模型，image_generation 等是各类型的生成模型 */
+  const platOf = (t: 'chat' | MediaType) => (cat?.models || []).filter((m) => modeType(m.mode) === t);
   const kw = q.trim().toLowerCase();
   const platList = (cat?.models || []).filter((m) => !kw || m.id.toLowerCase().includes(kw));
   /* 文本模型的可选项跟着渠道走 */
@@ -365,10 +372,6 @@ export function ModelsPage() {
             </select>
           </div>
           <div className="set-actions">
-            <button className="btn ghost" disabled={catBusy} onClick={() => (custom ? void refreshDirect() : void reload(true))}>
-              <Icon name="refresh" />
-              {catBusy ? '读取中…' : '刷新清单'}
-            </button>
             <span className="grow" />
             {custom ? (
               <span className={`chip ${d.hasKey ? 'success' : 'warn'}`}>
@@ -383,7 +386,7 @@ export function ModelsPage() {
             ) : cat ? (
               <span className="chip success">
                 <span className="cdot" />
-                {cat.models.length} 个模型 · {timeLabel(cat.at)}
+                {platOf('chat').length} 个文本模型 · {timeLabel(cat.at)}
               </span>
             ) : (
               <span className="chip neutral">
@@ -421,6 +424,10 @@ export function ModelsPage() {
           <div className="catalog-sec-name">模型价格</div>
           <div className="card set-card">
             <div className="set-actions">
+              <button className="btn ghost" disabled={catBusy} onClick={() => void reload(true)}>
+                <Icon name="refresh" />
+                {catBusy ? '读取中…' : '刷新清单'}
+              </button>
               <input className="form-input plat-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索模型…" />
               <span className="grow" />
               {catErr ? (
