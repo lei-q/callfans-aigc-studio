@@ -187,14 +187,15 @@ export class PlatformMediaProvider implements Provider {
     else if (job.cam === '固定') prompt += '，固定机位';
     if (job.loop) prompt += '，首尾可无缝循环';
     if (job.negative?.trim()) prompt += `。避免：${job.negative.trim()}`;
-    const seconds = Math.max(1, Math.round(job.dur || 5));
+    const seconds = String(Math.max(1, Math.round(job.dur || 5)));
     const size = videoSize(job.ratio, job.vres);
     ctx.progress(3, '提交到平台…');
     const created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
       method: 'POST',
       json: { model: upstream, prompt, seconds, size },
       signal: ctx.signal,
-      timeoutMs: 60_000,
+      /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
+      timeoutMs: 130_000,
     });
     const id = created?.id;
     if (!id) throw new ProviderError('E-UPS-52', '平台没有返回视频任务 ID', '稍后重试；如果已被计费请联系支持');

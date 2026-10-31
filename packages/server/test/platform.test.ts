@@ -232,7 +232,7 @@ describe('平台媒体模型与生成', () => {
     expect(out).toHaveLength(1);
     expect(out[0].mime).toBe('video/mp4');
     const create = calls.find((c) => c.url.endsWith('/v1/videos') && c.body)!;
-    expect(create.body).toMatchObject({ model: 'veo-4-preview', seconds: 5, size: '1280x720' });
+    expect(create.body).toMatchObject({ model: 'veo-4-preview', seconds: '5', size: '1280x720' });
     expect(create.body).not.toHaveProperty('resolution');
     expect(calls.some((c) => c.url.endsWith('/v1/videos/vid1/content'))).toBe(true);
   });
