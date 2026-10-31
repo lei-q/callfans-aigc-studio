@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CanvasItem, CanvasView } from '@aigc/shared';
 import { DIVERGE_AXES, PEN_COLORS, PLATFORMS, TYPES, TYPE_KEYS, clamp, paramsBrief, round1, singleUnitCost, timeLabel } from '@aigc/shared';
 import { Icon } from '../components/common';
@@ -873,11 +873,25 @@ function CanvasFoot({ zoomRef }: { zoomRef: React.RefObject<HTMLSpanElement | nu
   const s = useStore();
   const sel = canvasItems(s).filter((i) => s.canvasSel.includes(i.id));
   const k = boardOf(s).view.k;
-  const zoom = (
-    <span className="cvs-zoom num" ref={zoomRef}>
-      {Math.round((op.live.ws === s.ws && op.live.view ? op.live.view.k : k) * 100)}%
-    </span>
+  const shown = Math.round((op.live.ws === s.ws && op.live.view ? op.live.view.k : k) * 100);
+  /* 百分比平时由 applyView 直接写 DOM（拖动缩放不触发重渲染）；这里负责挂载和常规重渲染后对齐。
+     span 本身不交给 React 任何子节点——否则我们写 textContent 会顶掉 React 记录的文本节点，
+     提交阶段再去 removeChild 就会报 NotFoundError。 */
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const attachZoom = useCallback(
+    (n: HTMLSpanElement | null) => {
+      zoomRef.current = n;
+      /* 选中状态切换时 span 会换位置重挂，effect 的依赖没变、不会重跑，所以在这里补一次 */
+      if (n) n.textContent = `${shownRef.current}%`;
+    },
+    [zoomRef],
   );
+  useLayoutEffect(() => {
+    const n = zoomRef.current;
+    if (n && n.textContent !== `${shown}%`) n.textContent = `${shown}%`;
+  }, [shown, zoomRef]);
+  const zoom = <span className="cvs-zoom num" ref={attachZoom} />;
   if (!sel.length) {
     return (
       <div className="cvs-foot">

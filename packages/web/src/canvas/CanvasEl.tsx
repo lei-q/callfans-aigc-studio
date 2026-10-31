@@ -88,16 +88,7 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
       <div className={cls('group')} data-id={it.id} style={{ left: it.x, top: it.y, width: w, height: cvsItemH(it), zIndex: cvsLayer(it, idx) }}>
         <div className="cvs-group-head" data-group-head={it.id}>
           <Icon name="grid" />
-          <span
-            className="cvs-group-name"
-            contentEditable
-            suppressContentEditableWarning
-            spellCheck={false}
-            onBlur={(e) => setGroupName(it.id, e.currentTarget.textContent || '')}
-            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), (e.target as HTMLElement).blur())}
-          >
-            {it.t || '未命名分组'}
-          </span>
+          <GroupName id={it.id} text={it.t} />
           <span className="grow" />
           <span className="cvs-group-n num">{groupCount}</span>
           <button className="cvs-op cvs-del" title="移除分组框（组里的元素保留）" data-remove="1" onClick={() => removeOne(it.id)}>
@@ -274,6 +265,30 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
   );
 });
 
+/* 分组名可编辑：文本由我们自己写进 DOM，React 只认这个空 span。
+   可编辑节点里的文本节点会被浏览器（输入法、全选替换）整体换掉，若 React 也管着这些节点，
+   之后提交阶段按自己的记录去 removeChild 就会抛 NotFoundError。 */
+function GroupName({ id, text }: { id: string; text?: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const n = ref.current;
+    if (!n || document.activeElement === n) return;
+    const t = text || '未命名分组';
+    if (n.textContent !== t) n.textContent = t;
+  }, [text]);
+  return (
+    <span
+      ref={ref}
+      className="cvs-group-name"
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck={false}
+      onBlur={(e) => setGroupName(id, e.currentTarget.textContent || '')}
+      onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), (e.target as HTMLElement).blur())}
+    />
+  );
+}
+
 /* 节点：思维导图的构件。双击进编辑、失焦即保存，平时只读，单击拖动不会误触输入 */
 function NodeEl({ it, idx, sel, editing, ops }: { it: CanvasItem; idx: number; sel: boolean; editing: boolean; ops: React.ReactNode }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -316,6 +331,13 @@ function NodeEl({ it, idx, sel, editing, ops }: { it: CanvasItem; idx: number; s
 function TextEl({ it, idx, sel, editing, common }: { it: CanvasItem; idx: number; sel: boolean; editing: boolean; common: CSSProperties }) {
   const box = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  /* 同上：可编辑区域里的文字由我们自己写，React 不持有它的文本节点 */
+  useLayoutEffect(() => {
+    const b = body.current;
+    if (!b || editing) return;
+    const t = it.text || '';
+    if (b.textContent !== t) b.textContent = t;
+  }, [it.text, editing]);
   useLayoutEffect(() => {
     const n = box.current;
     if (!n) return;
@@ -347,7 +369,6 @@ function TextEl({ it, idx, sel, editing, common }: { it: CanvasItem; idx: number
       style={{ ...rest, maxWidth: TEXT_MAX_W, zIndex: cvsLayer(it, idx) }}
     >
       <div
-        key={`${it.id}:${it.text || ''}`}
         ref={body}
         className="cvs-text-body"
         data-text-id={it.id}
@@ -358,9 +379,7 @@ function TextEl({ it, idx, sel, editing, common }: { it: CanvasItem; idx: number
           setItemText(it.id, (e.currentTarget.textContent || '').trim(), n ? Math.ceil(n.offsetWidth) : undefined, n ? Math.ceil(n.offsetHeight) : undefined);
           endEdit(it.id);
         }}
-      >
-        {it.text || ''}
-      </div>
+      />
     </div>
   );
 }
