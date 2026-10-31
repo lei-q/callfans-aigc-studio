@@ -154,7 +154,7 @@ export function changeModel(id: string) {
   });
   const s = getState();
   const m = modelOf(s, id);
-  toast('info', `已切换模型：${m.name}`, `单价 ${m.price} 点 / ${m.basis}`);
+  toast('info', `已切换模型：${m.name}`, m.usageBilling ? '平台渠道按实际用量扣点' : `单价 ${m.price} 点 / ${m.basis}`);
 }
 
 export const setPrompt = (v: string) => setState((s) => void (s.prompt[s.type] = v));
@@ -376,7 +376,8 @@ export function copyPromptOf(rid: string) {
 export async function cancelJob(id: string) {
   try {
     const { job, refunded } = await api.post<{ job: Job; refunded: boolean }>(`/api/jobs/${id}/cancel`);
-    toast('info', '任务已取消', refunded ? `已退回 ${job.cost} 点` : '该任务未扣费，无需退回');
+    const usage = modelOf(getState(), job.model).usageBilling;
+    toast('info', '任务已取消', usage ? '平台已受理的任务按实际用量计费，取消不退回' : refunded ? `已退回 ${job.cost} 点` : '该任务未扣费，无需退回');
   } catch (e) {
     toastError(e);
   }
@@ -385,7 +386,8 @@ export async function cancelJob(id: string) {
 export async function retryJob(id: string) {
   try {
     const { job } = await api.post<{ job: Job }>(`/api/jobs/${id}/retry`);
-    toast('info', '已重新排队', `${job.name} · 参数不变，重新扣除 ${job.cost} 点`);
+    const usage = modelOf(getState(), job.model).usageBilling;
+    toast('info', '已重新排队', usage ? `${job.name} · 平台会按新的实际用量再次计费` : `${job.name} · 参数不变，重新扣除 ${job.cost} 点`);
   } catch (e) {
     toastError(e);
   }

@@ -59,6 +59,8 @@ export interface ModelInfo {
   maxInputImages?: number;
   /** 估算耗时：图像为秒/张，视频为秒/秒 */
   secPer?: number;
+  /** 平台网关按实际用量扣点：本地 price 只是占位，界面不展示预估点数 */
+  usageBilling?: boolean;
   note: string;
   caps: string[];
   limit: string;

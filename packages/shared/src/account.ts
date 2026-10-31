@@ -22,6 +22,16 @@ export interface AccountConfig {
 
 /* ---------------- 平台模型清单（api.callfansai.com/models） ---------------- */
 
+/** 平台清单的 mode → 界面里的类型；平台用的是 image_generation / video_generation 这类写法 */
+export function platformModeType(mode?: string): 'chat' | 'image' | 'video' | 'audio' | null {
+  const m = (mode || '').toLowerCase();
+  if (m === 'chat' || m === 'text' || m === 'llm') return 'chat';
+  if (m.startsWith('image')) return 'image';
+  if (m.startsWith('video')) return 'video';
+  if (m.startsWith('audio') || m === 'tts' || m === 'speech') return 'audio';
+  return null;
+}
+
 export interface PlatformModelInfo {
   id: string;
   /** openai = /v1/chat/completions；anthropic = /v1/messages */
@@ -32,6 +42,10 @@ export interface PlatformModelInfo {
   /** 上游标价（USD / 百万 tokens，折扣前）；null = 该路由没配价 */
   inputPerMillion?: number | null;
   outputPerMillion?: number | null;
+  /** 图像生成：每张多少美元；视频生成：按秒计价（可有分辨率档位） */
+  perImage?: number | null;
+  perVideoSecond?: number | null;
+  perVideoSecondByResolution?: Record<string, number> | null;
 }
 
 export interface PlatformModelsReply {

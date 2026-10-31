@@ -184,7 +184,7 @@ function JobRow({ j, open }: { j: Job; open: boolean }) {
             {j.status === 'failed' ? <span className="fail-link">{j.fail?.code}</span> : j.status === 'queued' ? j.queueNote || '排队中' : ''}
           </span>
         </div>
-        <div className="right num strong">{j.cost}</div>
+        <div className="right num strong">{m.usageBilling ? '按量' : j.cost}</div>
         <div className="row-actions" onClick={(e) => e.stopPropagation()}>
           {j.status === 'failed' && (
             <button className="btn sm ai" onClick={() => void fixJob(j.id)}>

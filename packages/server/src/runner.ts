@@ -59,9 +59,6 @@ export class JobRunner {
     if (!this.store.projects.get(body.ws)) throw new HttpError(400, '项目不存在');
     const model = this.core.modelById(body.model);
     if (!model) {
-      if (body.model.startsWith('cloud:') && this.core.provider !== 'mock') {
-        throw new HttpError(400, '平台渠道还没有接入媒体模型', '当前版本请到「模型与价格 · 自定义渠道」填自己的 TreeCloud Key 生成');
-      }
       if (body.model.startsWith('cloud:') && !this.core.loggedIn) {
         throw new HttpError(403, '还没有登录账号', '登录后才能用平台点数生成；也可以在「模型与价格 · 自定义渠道」填自己的 Key');
       }
@@ -294,7 +291,12 @@ export class JobRunner {
     delete job.queueNote;
     job.finishedAt = Date.now();
     this.save(job);
-    this.core.events.notice('warn', '生成失败', `${job.name} · ${fail.reason}${fail.code === 'E-BAL-02' ? '' : '（云端已退回本次点数）'}`);
+    const usage = this.core.modelById(job.model)?.usageBilling;
+    this.core.events.notice(
+      'warn',
+      '生成失败',
+      `${job.name} · ${fail.reason}${fail.code === 'E-BAL-02' ? '' : usage ? '（平台已受理的任务按实际用量计费，失败不退）' : '（云端已退回本次点数）'}`,
+    );
   }
 
   /** 新一批来了：上一批还在收件箱、没被拖进画布的，自动沉入草稿箱 */

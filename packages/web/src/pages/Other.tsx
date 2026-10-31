@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { MediaType, ModelInfo, PlatformModelInfo, PlatformModelsReply, UsageRequest, UsageSummary } from '@aigc/shared';
-import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, round1, timeLabel } from '@aigc/shared';
+import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, platformModeType, round1, timeLabel } from '@aigc/shared';
 import { Empty, Icon, TaskIc, jobIconCls } from '../components/common';
 import { setState, useStore } from '../store';
 import { aestheticAddFile, logout, openDrawer, patchSettings, removeAesthetic } from '../store/actions';
@@ -187,15 +187,38 @@ const usd = (n: number | null | undefined) =>
 
 const ctxLabel = (n: number | null | undefined) => (n == null ? '—' : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
 
-/** 平台清单的 mode → 界面里的类型；平台用的是 image_generation / video_generation 这类写法 */
-function modeType(mode?: string): 'chat' | MediaType | null {
-  const m = (mode || '').toLowerCase();
-  if (m === 'chat' || m === 'text' || m === 'llm') return 'chat';
-  if (m.startsWith('image')) return 'image';
-  if (m.startsWith('video')) return 'video';
-  if (m.startsWith('audio') || m === 'tts' || m === 'speech') return 'audio';
-  return null;
+/** 上游标价：对话按百万 token，图像按张，视频按秒（分辨率档位另起一行） */
+function priceOf(m: PlatformModelInfo) {
+  const t = modeType(m.mode);
+  if (t === 'image' && m.perImage != null) {
+    return (
+      <span className="plat-price">
+        <span>
+          {usd(m.perImage)} <i className="dim">/ 张</i>
+        </span>
+      </span>
+    );
+  }
+  if (t === 'video') {
+    const tiers = Object.entries(m.perVideoSecondByResolution || {});
+    return (
+      <span className="plat-price">
+        <span>{m.perVideoSecond != null ? `${usd(m.perVideoSecond)} / 秒` : '—'}</span>
+        {tiers.length > 0 && <span className="tiny dim">{tiers.map(([k, v]) => `${k} ${usd(v)}`).join(' · ')}</span>}
+      </span>
+    );
+  }
+  return (
+    <span className="plat-price">
+      <span>
+        输入 {usd(m.inputPerMillion)} · 输出 {usd(m.outputPerMillion)} <i className="dim">/ 百万</i>
+      </span>
+    </span>
+  );
 }
+
+/** 平台清单的 mode → 界面里的类型；平台用的是 image_generation / video_generation 这类写法 */
+const modeType = platformModeType;
 
 /** 平台渠道的模型清单（免令牌接口，运行时拉取） */
 function usePlatformCatalog() {
@@ -261,6 +284,18 @@ export function ModelsPage() {
   const platOf = (t: 'chat' | MediaType) => (cat?.models || []).filter((m) => modeType(m.mode) === t);
   const kw = q.trim().toLowerCase();
   const platList = (cat?.models || []).filter((m) => !kw || m.id.toLowerCase().includes(kw));
+  /* 底部清单里标出当前选中的默认模型（媒体模型按 cloud:<id> 存） */
+  const pickedOf = (m: PlatformModelInfo) => {
+    const t = modeType(m.mode);
+    if (t === 'chat') return st.models.cloud.text;
+    if (t) return st.models.cloud[t];
+    return '';
+  };
+  const isPicked = (m: PlatformModelInfo) => pickedOf(m) === m.id || pickedOf(m) === `cloud:${m.id}`;
+  const typeLabel = (m: PlatformModelInfo) => {
+    const t = modeType(m.mode);
+    return t === 'image' ? '图像' : t === 'video' ? '视频' : t === 'audio' ? '音频' : '';
+  };
   /* 文本模型的可选项跟着渠道走 */
   const textOptions = custom ? d.chatModels.map((id) => ({ id })) : platOf('chat');
   const textPick = custom ? st.models.direct.text : st.models.cloud.text;
@@ -448,25 +483,25 @@ export function ModelsPage() {
               )}
             </div>
             <div className="tiny dim">
-              平台模型的上下文与上游标价（美元 / 百万 token），清单来自 {cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1 分钟；实际扣费以平台账本为准。
+              上游标价：对话模型按美元 / 百万 token，图像按张、视频按秒列出（视频再按清晰度分档）；生成时按平台实际用量扣点。清单来自{' '}
+              {cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1 分钟；实际扣费以平台账本为准。
             </div>
           </div>
           <div className="card table-card plat-table">
             <div className="key-head">
               <span>模型</span>
               <span>上下文</span>
-              <span>输入 / 百万</span>
-              <span>输出 / 百万</span>
+              <span>上游标价</span>
             </div>
             {platList.map((m) => (
-              <div key={m.id} className={`key-row ${m.id === st.models.cloud.text ? 'on' : ''}`}>
+              <div key={m.id} className={`key-row ${isPicked(m) ? 'on' : ''}`}>
                 <span className="kr-name">
                   {m.id}
+                  {typeLabel(m) && <span className="cap-chip">{typeLabel(m)}</span>}
                   {m.protocol && <span className="cap-chip">{m.protocol}</span>}
                 </span>
                 <span className="t2">{ctxLabel(m.contextWindow)}</span>
-                <span className="t2">{usd(m.inputPerMillion)}</span>
-                <span className="t2">{usd(m.outputPerMillion)}</span>
+                {priceOf(m)}
               </div>
             ))}
             {!platList.length && (
@@ -504,23 +539,23 @@ function ModelSection({
   onPick: (id: string) => void;
 }) {
   const st = useStore((s) => s.settings);
-  /* 自定义渠道的默认模型只能从它自己的模型里挑；平台渠道用平台清单 */
-  const options = custom ? models.map((m) => m.id) : platform.map((m) => m.id);
+  /* 自定义渠道用上游模型 ID；平台渠道的生成模型按 cloud:<id> 路由 */
+  const options = custom ? models.map((m) => ({ value: m.id, label: m.id })) : platform.map((m) => ({ value: `cloud:${m.id}`, label: m.id }));
   const typeName = TYPES[t].name;
 
   return (
     <div className="catalog-sec">
       <div className="catalog-sec-name">{typeName}模型</div>
-      {/* 没有可选清单时不留空下拉框，下面的空状态说明已经讲清楚了 */}
+      {/* 只要一个下拉框选模型；完整模型列表统一放在页面最下方「模型价格」 */}
       {!!options.length && (
         <div className="card set-card">
           <div className="form-row">
             <span className="form-label">默认模型</span>
-            <select className="form-select" value={options.includes(picked) ? picked : ''} onChange={(e) => onPick(e.target.value)}>
-              <option value="">自动选择{`（${options[0]}）`}</option>
-              {options.map((id) => (
-                <option key={id} value={id}>
-                  {id}
+            <select className="form-select" value={options.some((o) => o.value === picked) ? picked : ''} onChange={(e) => onPick(e.target.value)}>
+              <option value="">自动选择{`（${options[0].label}）`}</option>
+              {options.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
                 </option>
               ))}
             </select>
@@ -528,7 +563,7 @@ function ModelSection({
           <div className="tiny dim">
             {custom
               ? '生成时默认用这个模型；换回平台渠道会自动切到平台渠道的模型。'
-              : '平台渠道的模型由平台提供；平台还没上线的类型，可以切到自定义渠道生成。'}
+              : '平台渠道的模型由平台提供，完整清单与标价见页面最下方「模型价格」。'}
           </div>
         </div>
       )}
@@ -585,41 +620,12 @@ function ModelSection({
             </span>
           </div>
         )
-      ) : platform.length ? (
-        <div className="card table-card plat-table media-plat">
-          <div className="key-head">
-            <span>模型</span>
-            <span>状态</span>
-            <span>标价</span>
-          </div>
-          {platform.map((m) => (
-            <div key={m.id} className={`key-row ${picked === m.id ? 'on' : ''}`}>
-              <span className="kr-name">
-                {m.id}
-                {m.protocol && <span className="cap-chip">{m.protocol}</span>}
-              </span>
-              <span className="chip neutral">
-                <span className="cdot" />
-                接入中
-              </span>
-              <span className="tiny dim">
-                {m.inputPerMillion == null && m.outputPerMillion == null
-                  ? '—'
-                  : `${usd(m.inputPerMillion)} 输入 / ${usd(m.outputPerMillion)} 输出（每百万）`}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : (
+      ) : !platform.length ? (
         <div className="table-note">
           <Icon name="clock" />
-          <span>
-            {platformErr
-              ? '平台模型清单暂时读不到，稍后点「刷新清单」重试。'
-              : `平台渠道正在接入${typeName}模型，上线后会自动出现在这里；现在可以切到自定义渠道生成。`}
-          </span>
+          <span>{platformErr ? '平台模型清单暂时读不到，稍后到页面最下方「模型价格」点「刷新清单」重试。' : `平台渠道暂未提供${typeName}模型，完整清单见页面最下方「模型价格」。`}</span>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -714,7 +720,7 @@ export function SettingsPage() {
                   测试连接
                 </button>
               </div>
-              <div className="tiny dim">注册、登录、找回密码与充值都由账号服务完成；登录后提示词助手与 Agent 用平台模型润色（按点数计费），图片、视频与语音生成走「模型与价格」里的自定义渠道。</div>
+              <div className="tiny dim">注册、登录、找回密码与充值都由账号服务完成；登录后提示词助手、Agent、图像与视频生成都能用平台模型（按点数 / 实际用量计费），也可以切到「模型与价格」里的自定义渠道。</div>
             </>
           ) : (
             <>

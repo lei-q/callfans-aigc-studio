@@ -218,6 +218,17 @@ test('素材库打包成帖并导出 Markdown', async ({ page }) => {
   await expect(page.locator('.post-card')).toHaveCount(1);
 });
 
+test('任务记录：打开不报错，能展开任务', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await page.locator('.side-item', { hasText: '任务记录' }).click();
+  await expect(page.locator('.page-title')).toHaveText('任务记录');
+  const row = page.locator('.jobs-table .t-row').first();
+  await expect(row).toBeVisible();
+  await row.click();
+  await expect(row).toHaveClass(/open/);
+});
+
 test('模型与价格：渠道二选一，平台渠道不填 Key', async ({ page }) => {
   await open(page);
   await page.locator('.side-item', { hasText: '模型与价格' }).click();

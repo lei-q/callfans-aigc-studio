@@ -737,7 +737,7 @@ function ParamsPop() {
     rows.push(['提示词', j.prompt, true]);
     rows.push(['参数', paramsBrief(j)]);
     if (j.refs.length) rows.push(['参考图', `${j.refs.length} 项`]);
-    rows.push(['消耗', `${j.cost} 点`]);
+    rows.push(['消耗', modelOf(s, r.model).usageBilling ? '按实际用量' : `${j.cost} 点`]);
     rows.push(['来源任务', j.name]);
     rows.push(['完成时间', timeLabel(j.finishedAt || j.createdAt)]);
   } else {

@@ -67,6 +67,14 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 80 * 1024 * 1024, trustProxy: false, forceCloseConnections: true });
   await app.register(multipart, { limits: { fileSize: 1024 * 1024 * 1024, files: 20 } });
 
+  /* 平台清单免令牌：启动时预热一次，生成页拿到的模型目录里直接带媒体模型 */
+  if (core.provider !== 'mock') {
+    void core.platform
+      .models()
+      .then(() => core.emitModels())
+      .catch(() => {});
+  }
+
   /* ---------------- 访问控制 ---------------- */
 
   const tokenOk = (req: FastifyRequest) => {
@@ -638,7 +646,10 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.get('/api/platform/models', async (req) => {
     const force = String((req.query as { refresh?: string }).refresh || '') === '1';
     try {
-      return await core.platform.summary(force);
+      const reply = await core.platform.summary(force);
+      /* 清单变了：媒体模型目录跟着更新（生成页不用等刷新） */
+      core.emitModels();
+      return reply;
     } catch (e) {
       throw new HttpError(502, (e as Error).message || '平台模型清单暂时不可用');
     }

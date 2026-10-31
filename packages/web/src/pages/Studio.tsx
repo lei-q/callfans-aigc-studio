@@ -167,9 +167,10 @@ function Composer() {
   const T = TYPES[t];
   const m = modelOf(s, p.model);
   const cost = estCost(s);
+  const usageBilling = !!m?.usageBilling;
   const fastsso = s.settings?.account.provider === 'fastsso';
   const route = routeInfo(s, t, t === 'audio' ? p.use : undefined);
-  const enough = route.kind === 'direct' ? true : route.kind === 'cloud' ? canAfford(s, cost) : false;
+  const enough = usageBilling ? route.kind === 'cloud' : route.kind === 'direct' ? true : route.kind === 'cloud' ? canAfford(s, cost) : false;
   const opt = s.optimize;
   const prompt = s.prompt[t];
   const plen = prompt.trim().length;
@@ -337,7 +338,7 @@ function Composer() {
             <select className="form-select" value={p.model} onChange={(e) => changeModel(e.target.value)}>
               {models.map((x) => (
                 <option key={x.id} value={x.id} disabled={x.status !== 'on'}>
-                  {x.name} · {x.price} 点/{x.basis}
+                  {x.name} · {x.usageBilling ? '按实际用量' : `${x.price} 点/${x.basis}`}
                   {x.status !== 'on' ? '（未开放）' : ''}
                 </option>
               ))}
@@ -366,8 +367,8 @@ function Composer() {
         <div className="cost-row">
           <div className="cost-box">
             <span className="ck">本次消耗</span>
-            <span className="cv num" style={{ color: enough ? 'var(--t1)' : 'var(--red)' }}>
-              {cost} 点
+            <span className="cv num" style={{ color: enough ? 'var(--t1)' : 'var(--red)', fontSize: usageBilling ? 14 : undefined }}>
+              {usageBilling ? '按实际用量' : `${cost} 点`}
             </span>
           </div>
           <div className="cost-sep" />
@@ -384,11 +385,13 @@ function Composer() {
           </div>
           <span className="grow" />
           <span className="tiny dim">
-            {route.kind === 'direct'
-              ? '自定义渠道：费用由你自己的上游结算，不扣平台点数'
-              : free > 0
-                ? `今日免费 ${free} 点优先抵扣`
-                : '1 点 = ¥1 · 生成失败自动退回'}
+            {usageBilling
+              ? '平台渠道按实际用量扣点，以平台账本为准'
+              : route.kind === 'direct'
+                ? '自定义渠道：费用由你自己的上游结算，不扣平台点数'
+                : free > 0
+                  ? `今日免费 ${free} 点优先抵扣`
+                  : '1 点 = ¥1 · 生成失败自动退回'}
           </span>
         </div>
 
@@ -403,12 +406,13 @@ function Composer() {
             onClick={() => (fastsso ? switchPage('models') : openDrawer(s.session?.loggedIn ? 'topup' : 'account'))}
           >
             <Icon name={fastsso ? 'coins' : s.session?.loggedIn ? 'coins' : 'user'} />
-            {fastsso ? '选择模型 · 进入模型与价格' : s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
+            {fastsso ? (s.session?.loggedIn ? '选择模型 · 进入模型与价格' : '登录后生成 · 进入模型与价格') : s.session?.loggedIn ? '没有可用模型 · 查看设置' : '登录后生成'}
           </button>
         ) : enough ? (
           <button className="btn primary gen-btn" onClick={() => void gen()}>
             <Icon name="send" />
-            生成{t === 'image' ? ` ${p.count} 张` : ` ${p.dur}s`} · {cost} 点
+            生成{t === 'image' ? ` ${p.count} 张` : ` ${p.dur}s`}
+            {usageBilling ? ' · 按实际用量' : ` · ${cost} 点`}
           </button>
         ) : (
           <button className="btn primary gen-btn" onClick={() => openDrawer('topup')} style={{ background: 'var(--amber)' }}>
@@ -418,7 +422,11 @@ function Composer() {
         )}
         <div className="tiny dim">
           生成后进入队列，可继续写下一条，不必等待完成。
-          {route.kind === 'cloud' ? '点数在云端按真实用量结算，失败自动退回。' : ''}
+          {route.kind === 'cloud'
+            ? usageBilling
+              ? '平台按实际用量扣点；创建成功后即使生成失败也不退回。'
+              : '点数在云端按真实用量结算，失败自动退回。'
+            : ''}
         </div>
       </div>
     </section>

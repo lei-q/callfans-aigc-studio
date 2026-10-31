@@ -234,7 +234,7 @@ function ResultDrawer({ id }: { id: string }) {
             </div>
             <div className="snap-row">
               <span className="sk">点数消耗</span>
-              <span className="sv">{j ? `${j.cost} 点（任务级）` : '——'} · 失败自动退回</span>
+              <span className="sv">{j ? (m.usageBilling ? '按平台实际用量计费' : `${j.cost} 点（任务级）`) : '——'} · {m.usageBilling ? '生成失败不退' : '失败自动退回'}</span>
             </div>
             {j?.requestId && (
               <div className="snap-row">
@@ -412,7 +412,7 @@ export function QueueRow({ j }: { j: Job }) {
       <div style={{ minWidth: 0 }}>
         <div className="qr-name">{j.name}</div>
         <div className="qr-sub">
-          {m.name} · {paramsBrief(j)} · {j.cost} 点
+          {m.name} · {paramsBrief(j)} · {m.usageBilling ? '按实际用量' : `${j.cost} 点`}
         </div>
       </div>
       <div>

@@ -28,7 +28,7 @@ import {
   type FssSku,
 } from './consumer';
 import { OidcClient, OidcError, randomToken, type OidcTokens } from './oidc';
-import { platformChat, PlatformError } from './platform';
+import { platformChat, platformError, PlatformError } from './platform';
 import type { EventHub } from '../events';
 import type { ChatMessage } from '../providers/types';
 import type { Secrets } from '../secrets';
@@ -412,6 +412,67 @@ export class AccountSession {
       this.store.setLlmKey(userId, null);
       return platformChat({ baseUrl, key: await this.llmKey(), model, messages, signal });
     }
+  }
+
+  /* ---------------- 平台生成网关：图片 / 视频 ---------------- */
+
+  /** 带模型密钥请求网关；401 时丢本地副本、只重换一次 */
+  private async gatewayFetch(path: string, opts: { method?: string; json?: unknown; signal?: AbortSignal; timeoutMs?: number } = {}) {
+    const base = (this.cfg.gatewayBase || 'https://api.callfansai.com').replace(/\/+$/, '');
+    const timeout = opts.timeoutMs ?? 120_000;
+    const signal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
+    const call = (key: string) =>
+      fetch(`${base}${path}`, {
+        method: opts.method || 'GET',
+        headers: {
+          Accept: 'application/json',
+          ...(opts.json !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          Authorization: `Bearer ${key}`,
+        },
+        body: opts.json !== undefined ? JSON.stringify(opts.json) : undefined,
+        signal,
+      }).catch((e) => {
+        if (opts.signal?.aborted) throw e;
+        if ((e as Error).name === 'TimeoutError') throw new PlatformError(504, '平台生成网关超时，请稍后再试', 'timeout');
+        throw new PlatformError(0, `连不上平台生成网关：${(e as Error).message}`, 'gateway_unreachable');
+      });
+    let res = await call(await this.llmKey());
+    const userId = this.profile?.id;
+    if (res.status === 401 && userId) {
+      this.store.setLlmKey(userId, null);
+      res = await call(await this.llmKey());
+    }
+    return res;
+  }
+
+  /** 平台生成接口返回 JSON；非 2xx 统一翻成可读错误 */
+  async gatewayJson<T>(path: string, opts: { method?: string; json?: unknown; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+    const res = await this.gatewayFetch(path, opts);
+    const text = await res.text();
+    let body: unknown = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      /* 非 JSON：下面的错误信息会带上原文 */
+    }
+    if (!res.ok) throw platformError(res.status, body ?? text);
+    return body as T;
+  }
+
+  /** 取视频文件等二进制内容 */
+  async gatewayBytes(path: string, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ buf: Buffer; mime: string }> {
+    const res = await this.gatewayFetch(path, opts);
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      let body: unknown = text;
+      try {
+        if (text) body = JSON.parse(text);
+      } catch {
+        /* 非 JSON：保留原文 */
+      }
+      throw platformError(res.status, body);
+    }
+    return { buf: Buffer.from(await res.arrayBuffer()), mime: res.headers.get('content-type') || 'application/octet-stream' };
   }
 
   async probe(force = false): Promise<{ ok: boolean; message: string; meta: CloudMeta | null }> {

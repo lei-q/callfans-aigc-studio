@@ -1,6 +1,6 @@
 # Fast-SSO 账号与充值接入
 
-AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费）。「模型与价格」里平台渠道与自定义渠道**二选一**：选平台渠道不用填 Base URL / API Key；**平台生成网关还没有接入媒体模型**，图片、视频与配音生成目前要走「自定义渠道」（用户自填 TreeCloud 兼容 Key，存下即启用），文本模型也会跟着渠道一起切换。
+AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费），图像与视频生成也走平台网关。「模型与价格」里平台渠道与自定义渠道**二选一**：选平台渠道不用填 Base URL / API Key；生成模型从平台 `/models` 清单按 `mode` 归类，音频媒体暂未开放，需要使用时可切到「自定义渠道」（用户自填 TreeCloud 兼容 Key，存下即启用），文本模型也会跟着渠道一起切换。
 
 ## 架构
 
@@ -102,7 +102,15 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 - 调用：`POST {gatewayBase}/v1/chat/completions`；401 丢本地副本重换一次，422 = 积分不足。
 - 失败时提示词辅助回退到规则推断，并在响应里带上原因。
 
+## 平台模型（图像 / 视频生成）
+
+- 模型目录：仍来自免令牌 `GET {gatewayBase}/models`，`mode` 以 `image` / `video` 开头的归到对应类型；价目表在「模型与价格」页面最下方统一展示。
+- 图片：`POST {gatewayBase}/v1/images/generations`（`model`、`prompt`、`n`、`response_format=b64_json`），返回的 `b64_json` 保存到本机媒体目录；**不自动重试**。
+- 视频：`POST {gatewayBase}/v1/videos`，请求体只有 `model / prompt / seconds / size`（**不传 `resolution`**）；把返回的 `id` 原样存为上游任务 ID，每 3–5 秒 `GET /v1/videos/{id}`，最多等 10 分钟，成功后 `GET /v1/videos/{id}/content` 取 mp4。
+- 计费：视频创建返回 200 即已按秒扣费，任务失败也不退；因此失败后**不会自动重建**，重跑需要用户手动确认。应用内这些模型显示「按实际用量」，余额每 10 秒自动刷新。
+- 密钥：复用账号会话里的长期 LiteLLM key，只在后端使用；401 时丢本地副本重换一次，422 = 积分不足。
+
 ## 尚未接入
 
-- 平台生成网关的**媒体**能力（图片 / 视频 / 语音）：登录后的点数目前只用于对话与订单；生成需要在「模型与价格」切到自定义渠道并填自己的 Key。平台上线媒体路由后，`Provider` 层可直接复用账号会话，渠道里的媒体清单也会自动出现。
+- 平台生成网关的**音频**能力（配音 / 音乐 / 音效）：需要时在「模型与价格」切到自定义渠道；音频模型出现在平台清单后会自动出现在对应段。
 - 站内支付渠道以外的退款/对账界面：以账号中心后台为准。

@@ -15,7 +15,13 @@ export interface PlatformModel {
   family?: string;
   context_window?: number | null;
   max_output_tokens?: number | null;
-  pricing?: { input_per_million?: number; output_per_million?: number } | null;
+  pricing?: {
+    input_per_million?: number;
+    output_per_million?: number;
+    per_image?: number;
+    per_video_second?: number;
+    per_video_second_by_resolution?: Record<string, number>;
+  } | null;
 }
 
 export class PlatformError extends Error {
@@ -108,6 +114,12 @@ export class PlatformCatalog {
     return pickChatModel(await this.models(), selected);
   }
 
+  /** 同步读缓存：生成渠道的模型目录要用它（不能在这里发请求） */
+  cachedModels(): PlatformModel[] {
+    const hit = this.cache;
+    return hit && hit.base === this.base() ? hit.models : [];
+  }
+
   /** 「模型与价格」用：清单（按 mode 分组交给界面） */
   async summary(force = false): Promise<PlatformModelsReply> {
     const models = await this.models(force);
@@ -121,6 +133,9 @@ export class PlatformCatalog {
         maxOutputTokens: m.max_output_tokens ?? null,
         inputPerMillion: m.pricing?.input_per_million ?? null,
         outputPerMillion: m.pricing?.output_per_million ?? null,
+        perImage: m.pricing?.per_image ?? null,
+        perVideoSecond: m.pricing?.per_video_second ?? null,
+        perVideoSecondByResolution: m.pricing?.per_video_second_by_resolution ?? null,
       })),
       at: Date.now(),
     };
@@ -186,11 +201,19 @@ export async function platformChat(opts: {
   return content;
 }
 
-function gatewayMessage(status: number, detail: string) {
+export function gatewayMessage(status: number, detail: string) {
   if (status === 401) return '模型密钥已失效：重新登录后再试';
   if (status === 422) return '积分不足：这个账号在该应用的积分用完了，充值后再试';
   if (status === 429) return '模型服务限流，请稍后再试';
   if (status === 400) return `模型请求不合法：${detail || '检查模型名与参数'}`;
   if (status >= 500) return '平台模型服务暂时不可用，稍后重试';
   return detail || `平台模型网关返回 HTTP ${status}`;
+}
+
+/** 网关错误体 → PlatformError（详情与 code 尽量保留，便于排查） */
+export function platformError(status: number, body: unknown): PlatformError {
+  const b = (body || {}) as { error?: { message?: string; code?: string } | string; message?: string; code?: string; detail?: string };
+  const detail = typeof b.error === 'string' ? b.error : b.error?.message || b.message || b.detail || (typeof body === 'string' ? body : '');
+  const code = typeof b.error === 'object' ? b.error?.code || b.code : b.code;
+  return new PlatformError(status, gatewayMessage(status, detail), code);
 }

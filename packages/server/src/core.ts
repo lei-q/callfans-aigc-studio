@@ -8,6 +8,7 @@ import { CloudSession } from './cloud/session';
 import { Db } from './db';
 import { EventHub } from './events';
 import { CloudProvider, gatewayModelToModelInfo } from './providers/cloud';
+import { PlatformMediaProvider, platformMediaModels } from './providers/platform';
 import { TreeCloudProvider } from './providers/treecloud';
 import type { Provider } from './providers/types';
 import { JobRunner } from './runner';
@@ -25,6 +26,8 @@ export interface CoreOptions {
   memory?: boolean;
   cloudPollMs?: number;
   directPollMs?: number;
+  /** 平台视频轮询间隔（默认 4 秒） */
+  platformPollMs?: number;
   /** 测试 / 开发：覆盖账号服务地址与提供方 */
   account?: Partial<import('@aigc/shared').AccountConfig>;
 }
@@ -70,6 +73,7 @@ export class Core {
   /** 开发用 Mock 云的设备码会话；生产模式下只作为可选的生成网关客户端 */
   readonly session: CloudSession;
   readonly cloud: CloudProvider;
+  readonly platformMedia: PlatformMediaProvider;
   readonly direct: TreeCloudProvider;
   readonly runner: JobRunner;
   readonly mediaDir: string;
@@ -95,6 +99,13 @@ export class Core {
       () => this.store.settings.runner.concurrency,
       opts.cloudPollMs,
     );
+    this.platformMedia = new PlatformMediaProvider({
+      accounts: () => this.accounts,
+      models: () => platformMediaModels(this.platform.cachedModels()),
+      loggedIn: () => this.accounts.loggedIn,
+      concurrency: () => this.store.settings.runner.concurrency,
+      pollMs: opts.platformPollMs,
+    });
     this.direct = new TreeCloudProvider(
       () => {
         const s = this.store.settings;
@@ -165,7 +176,7 @@ export class Core {
   /* ---------------- 模型与渠道 ---------------- */
 
   providers(): Provider[] {
-    return [this.cloud, this.direct];
+    return this.provider === 'mock' ? [this.cloud, this.direct] : [this.platformMedia, this.direct];
   }
 
   /** 当前生成渠道：cloud = 平台渠道，direct = 自定义渠道 */
@@ -175,8 +186,8 @@ export class Core {
 
   models(): ModelInfo[] {
     if (this.channel === 'direct') return this.store.settings.direct.keyEnc ? this.direct.models() : [];
-    /* 平台渠道：媒体模型还没上线，Mock 云另有一套自己的模型目录 */
-    if (this.provider !== 'mock') return [];
+    /* 平台渠道：媒体模型来自 /models 清单（免令牌，启动时预热）；Mock 云另有一套自己的目录 */
+    if (this.provider !== 'mock') return platformMediaModels(this.platform.cachedModels());
     const prices = this.store.settings.prices;
     const cloudCached = this.session.loggedIn ? this.session.models : this.store.cloudModelsCache;
     return cloudCached.map((g) => gatewayModelToModelInfo(g, prices[`cloud:${g.id}`]));
@@ -187,7 +198,8 @@ export class Core {
   }
 
   providerOf(model: ModelInfo): Provider {
-    return model.channel === 'direct' ? this.direct : this.cloud;
+    if (model.channel === 'direct') return this.direct;
+    return this.provider === 'mock' ? this.cloud : this.platformMedia;
   }
 
   /** 当前渠道是否可用：平台渠道要登录，自定义渠道要配了 Key */
@@ -198,7 +210,10 @@ export class Core {
       if (!d.enabled) return '自定义渠道没有启用：到「模型与价格 · 自定义渠道」重新保存一次';
       return null;
     }
-    if (this.provider !== 'mock') return '平台渠道还没有接入图像 / 视频 / 音频模型：到「模型与价格」切换到自定义渠道';
+    if (this.provider !== 'mock') {
+      if (!this.accounts.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「模型与价格」切到自定义渠道';
+      return null;
+    }
     if (!this.session.loggedIn) return '还没有登录账号：登录后才能用平台点数生成；也可以在「模型与价格」切到自定义渠道';
     return null;
   }

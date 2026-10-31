@@ -10,8 +10,14 @@ export const wsShort = (s: State, id: string) => {
   return { name: p ? p.name.split(' · ')[0] : '未命名', dot: p ? p.dot : '#8A90A2' };
 };
 
-export const modelOf = (s: State, id: string): ModelInfo =>
-  s.models.find((m) => m.id === id) || {
+/** 模型不在当前目录时的占位；按 id 缓存，保证选择器每次返回同一个引用 */
+const MISSING_MODELS = new Map<string, ModelInfo>();
+export const modelOf = (s: State, id: string): ModelInfo => {
+  const found = s.models.find((m) => m.id === id);
+  if (found) return found;
+  const hit = MISSING_MODELS.get(id);
+  if (hit) return hit;
+  const made: ModelInfo = {
     id,
     name: id.replace(/^(tc:|cloud:)/, '') || '未选择',
     type: 'image',
@@ -23,6 +29,9 @@ export const modelOf = (s: State, id: string): ModelInfo =>
     caps: [],
     limit: '',
   };
+  MISSING_MODELS.set(id, made);
+  return made;
+};
 
 /** 当前渠道能不能生成：平台渠道（Mock 云）要登录，自定义渠道要配了 Key */
 export const channelReady = (s: State) =>
@@ -36,17 +45,18 @@ export function modelsFor(s: State, type: MediaType, use?: AudioUse) {
 /** 当前生成走哪条路：平台渠道扣点数；自定义渠道由用户自己的上游结算 */
 export function routeInfo(s: State, type: MediaType, use?: AudioUse): { kind: 'cloud' | 'direct'; model?: ModelInfo } | { kind: null; reason: string } {
   const ready = modelsFor(s, type, use);
-  if (ready.length) return { kind: s.settings?.channel === 'direct' ? 'direct' : 'cloud', model: ready[0] };
-  const name = type === 'image' ? '图像' : type === 'video' ? '视频' : '音频';
-  /* 平台渠道的媒体模型还没上线；自定义渠道要自己配 Key */
   if (s.settings?.channel === 'direct') {
     if (!s.settings.direct.hasKey) return { kind: null, reason: '自定义渠道还没有配置：到「模型与价格」填入 Base URL 与 API Key' };
-    return { kind: null, reason: `自定义渠道里没有可用的${name}模型：到「模型与价格」刷新模型列表` };
+    if (!ready.length) return { kind: null, reason: `自定义渠道里没有可用的${typeName(type)}模型：到「模型与价格」刷新模型列表` };
+    return { kind: 'direct', model: ready[0] };
   }
-  if (s.settings?.account.provider !== 'mock') return { kind: null, reason: `平台渠道正在接入${name}模型：可以先到「模型与价格」切换到自定义渠道生成` };
+  /* 平台渠道：模型清单免令牌，能看见模型不等于能生成——还要登录才有平台点数 */
   if (!s.session?.loggedIn) return { kind: null, reason: '登录后才能用平台点数生成；也可以在「模型与价格」切到自定义渠道' };
-  return { kind: null, reason: '当前账号下没有该类型的可用模型' };
+  if (ready.length) return { kind: 'cloud', model: ready[0] };
+  return { kind: null, reason: `当前账号下没有可用的${typeName(type)}模型：到「模型与价格」刷新清单` };
 }
+
+const typeName = (type: MediaType) => (type === 'image' ? '图像' : type === 'video' ? '视频' : '音频');
 
 export const resultById = (s: State, id?: string | null) => (id ? s.results.find((r) => r.id === id) : undefined);
 export const jobById = (s: State, id?: string | null) => (id ? s.jobs.find((j) => j.id === id) : undefined);
