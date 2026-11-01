@@ -527,16 +527,27 @@ export class AccountSession {
     return sku?.name || `充值 ${skuCode}`;
   }
 
-  async createOrder(input: { packId: string; channel: PayChannel; idempotencyKey: string }): Promise<OrderDto> {
-    const sku = this.skusCache?.value.find((s) => s.id === input.packId) || (await this.skus(true)).find((s) => s.id === input.packId);
-    if (!sku) throw new ConsumerError(400, `这个档位不可用：${input.packId}`);
+  async createOrder(input: { packId?: string; points?: number; channel: PayChannel; idempotencyKey: string }): Promise<OrderDto> {
+    /* 临时测试入口：直接按点数下单（1 点 = ¥1），不走档位。
+       平台侧目前仍会校验 credits 必须是已开通档位，放开校验前这里会收到 400。 */
+    let credits: number;
+    let packName: string | undefined;
+    if (input.points != null) {
+      credits = input.points;
+      packName = `${credits} 点`;
+    } else {
+      const sku = this.skusCache?.value.find((s) => s.id === input.packId) || (await this.skus(true)).find((s) => s.id === input.packId);
+      if (!sku) throw new ConsumerError(400, `这个档位不可用：${input.packId}`);
+      credits = sku.points;
+      packName = sku.name;
+    }
     const o = await this.api.request<FssOrder>('/consumer/recharge/orders', {
       method: 'POST',
-      json: { credits: sku.points, channel: input.channel },
+      json: { credits, channel: input.channel },
       headers: { 'Idempotency-Key': input.idempotencyKey },
       timeoutMs: 25_000,
     });
-    return mapOrder(o, { packName: sku.name });
+    return mapOrder(o, { packName });
   }
 
   async prepay(orderId: string): Promise<{ order: OrderDto; codeUrl: string }> {

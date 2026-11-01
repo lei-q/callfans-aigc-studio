@@ -871,12 +871,12 @@ function newCheckoutKey() {
   return c?.randomUUID?.() || `ck-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function createOrder(packId: string, channel: PayChannel) {
+async function placeOrder(body: { packId: string } | { points: number }, channel: PayChannel) {
   /* 幂等键：网络超时重试复用同一个；成功后再生成新的 */
   const key = getState().checkoutKey || newCheckoutKey();
   setState((st) => void (st.checkoutKey = key));
   try {
-    const { order } = await api.post<{ order: OrderDto }>('/api/billing/orders', { packId, channel, idempotencyKey: key });
+    const { order } = await api.post<{ order: OrderDto }>('/api/billing/orders', { ...body, channel, idempotencyKey: key });
     setState((st) => void (st.activeOrder = order));
     let next = order;
     try {
@@ -893,6 +893,15 @@ export async function createOrder(packId: string, channel: PayChannel) {
     toastError(e, '下单失败');
     return null;
   }
+}
+
+export function createOrder(packId: string, channel: PayChannel) {
+  return placeOrder({ packId }, channel);
+}
+
+/** 临时测试入口：按任意正整数点数下单（1 点 = ¥1），正式上线前移除 */
+export function createCustomOrder(points: number, channel: PayChannel) {
+  return placeOrder({ points }, channel);
 }
 
 /** 重新展示已有订单的收款码（关闭弹窗再打开 / 上次 prepay 失败） */

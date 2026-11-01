@@ -11,6 +11,7 @@ import {
   closeActiveOrder,
   closeDrawer,
   copyPromptOf,
+  createCustomOrder,
   createOrder,
   deleteProject,
   deleteResult,
@@ -1076,24 +1077,18 @@ function TopupDrawer() {
   const paying = order && (order.status === 'created' || order.status === 'paying');
   /* 渠道以账号服务返回为准；undefined 表示还没读到，不展示选择 */
   const chans = payChannels(s.session);
-  /* 临时的自定义测试金额：只接受整数元，且必须是上游已开通的档位 */
+  /* 临时的自定义测试金额：任意正整数元，不要求与已开通档位一致；正式上线前连同入口一起移除 */
   const [customYuan, setCustomYuan] = useState('');
   const [customErr, setCustomErr] = useState('');
   const submitCustom = () => {
     const raw = customYuan.trim();
     const n = Number(raw);
     if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < 1) {
-      setCustomErr('请输入整数金额，最低 ¥1');
-      return;
-    }
-    const pack = s.packs.find((p) => p.points === n);
-    if (!pack) {
-      const have = s.packs.map((p) => `¥${p.amountCny}`).join(' / ') || '暂无';
-      setCustomErr(`账号服务没有 ¥${n} 的档位；当前可用：${have}`);
+      setCustomErr('请输入正整数金额，最低 ¥1');
       return;
     }
     setCustomErr('');
-    void createOrder(pack.id, s.payChannel);
+    void createCustomOrder(n, s.payChannel);
   };
   return (
     <>
@@ -1147,7 +1142,7 @@ function TopupDrawer() {
                     <input
                       className="form-input num"
                       inputMode="numeric"
-                      placeholder="整数，最低 1"
+                      placeholder="正整数，最低 1"
                       value={customYuan}
                       onChange={(e) => {
                         setCustomYuan(e.target.value);
@@ -1162,7 +1157,7 @@ function TopupDrawer() {
                     </button>
                   </div>
                   {customErr ? <div className="tiny pack-custom-err">{customErr}</div> : null}
-                  <div className="field-hint">临时测试入口：金额需与账号服务已开通的档位一致（1 点 = ¥1）。</div>
+                  <div className="field-hint">临时测试入口：可输入任意正整数金额（1 点 = ¥1），正式上线前会移除。</div>
                 </div>
               </div>
               {chans && chans.length > 0 && (

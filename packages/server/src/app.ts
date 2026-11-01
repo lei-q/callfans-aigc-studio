@@ -287,9 +287,11 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
       core.events.emit({ type: 'order', order });
       return { order };
     }
-    const order = await core.session.client.request<OrderDto>('/billing/orders', { json: { packId: body.packId, channel: body.channel } }).catch((e) => {
-      throw cloudErr(e);
-    });
+    const order = await core.session.client
+      .request<OrderDto>('/billing/orders', { json: { packId: body.packId, points: body.points, channel: body.channel } })
+      .catch((e) => {
+        throw cloudErr(e);
+      });
     core.events.emit({ type: 'order', order });
     return { order };
   });

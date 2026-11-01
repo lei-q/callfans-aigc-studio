@@ -326,21 +326,24 @@ button{width:100%;border:0;border-radius:9px;padding:11px;background:#4F46E5;col
   app.post('/billing/orders', async (req, reply) => {
     const u = needUser(req, reply);
     if (!u) return null;
-    const b = req.body as { packId?: string; channel?: PayChannel };
-    const pack = PACKS.find((p) => p.id === b.packId);
-    if (!pack) return err(reply, CLOUD_ERROR.NOT_FOUND, '档位不存在', 404);
+    const b = req.body as { packId?: string; points?: number; channel?: PayChannel };
     const channel = b.channel;
     if (!channel || !(o.payChannels ?? ['wechat', 'alipay']).includes(channel)) return err(reply, CLOUD_ERROR.NOT_FOUND, '支付渠道不支持', 400);
-    const bonus = !u.firstTopupDone && pack.promo === 'first-topup-double' ? pack.points : 0;
+    /* 临时测试入口：任意正整数点数（1 点 = ¥1） */
+    const custom = b.points != null;
+    if (custom && (!Number.isSafeInteger(b.points) || b.points! < 1)) return err(reply, CLOUD_ERROR.NOT_FOUND, '金额必须是正整数', 400);
+    const pack = PACKS.find((p) => p.id === b.packId);
+    if (!custom && !pack) return err(reply, CLOUD_ERROR.NOT_FOUND, '档位不存在', 404);
+    const bonus = !custom && !u.firstTopupDone && pack!.promo === 'first-topup-double' ? pack!.points : 0;
     const base = await baseUrl(app);
     const od: OrderDto & { userId: string } = {
       id: `o_${crypto.randomBytes(8).toString('hex')}`,
       userId: u.id,
-      packId: pack.id,
-      packName: pack.name,
+      packId: custom ? '' : pack!.id,
+      packName: custom ? `${b.points} 点` : pack!.name,
       channel,
-      amountCny: pack.amountCny,
-      points: pack.points + bonus,
+      amountCny: custom ? b.points! : pack!.amountCny,
+      points: custom ? b.points! : pack!.points + bonus,
       status: 'created',
       qrContent: `${base}/pay?order=__ID__`,
       cashierUrl: `${base}/pay?order=__ID__`,

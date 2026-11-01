@@ -99,6 +99,19 @@ describe('登录与充值', () => {
     expect(core.session.wallet?.balance).toBe(1 + 60);
     void packs;
   });
+
+  /* 临时测试入口：自定义金额可以是任意正整数，不受已开通档位限制 */
+  it('自定义金额：任意正整数点数下单并到账', async () => {
+    const core = await makeCore();
+    await login(core);
+    const before = core.session.wallet?.balance ?? 0;
+    const order = await core.session.client.request<any>('/billing/orders', { json: { points: 37, channel: 'wechat' } });
+    expect(order).toMatchObject({ points: 37, amountCny: 37, packName: '37 点' });
+    cloud.payOrder(order.id);
+    await new Promise((r) => setTimeout(r, 80));
+    await core.session.refreshWallet();
+    expect(core.session.wallet?.balance).toBe(before + 37);
+  });
 });
 
 describe('云端网关生成', () => {

@@ -101,12 +101,17 @@ export const postSchema = z.object({
   platform: z.string().max(20),
 });
 
-export const orderSchema = z.object({
-  packId: z.string().min(1).max(64),
-  channel: z.enum(['huifu', 'wechat', 'alipay']),
-  /** 幂等键：网络超时重试要复用同一个值；换档位 / 渠道时换新值 */
-  idempotencyKey: z.string().min(8).max(100),
-});
+/* 临时测试：除了账号服务已开通的档位，也允许直接按点数下单（1 点 = ¥1）。
+   这只是内测入口，正式上线前连同前端一起移除。 */
+export const orderSchema = z
+  .object({
+    packId: z.string().min(1).max(64).optional(),
+    points: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+    channel: z.enum(['huifu', 'wechat', 'alipay']),
+    /** 幂等键：网络超时重试要复用同一个值；换档位 / 渠道时换新值 */
+    idempotencyKey: z.string().min(8).max(100),
+  })
+  .refine((v) => (v.packId ? v.points == null : v.points != null), { message: 'packId 与 points 只能填一个' });
 
 /* ---------------- Fast-SSO 注册 / 找回 ---------------- */
 

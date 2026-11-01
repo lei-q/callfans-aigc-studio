@@ -87,6 +87,18 @@ test('登录 → 支付宝扫码充值 → 余额到账', async ({ page }) => {
   await closeDrawer(page);
 });
 
+test('充值：自定义金额可以是任意正整数', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await page.locator('.balance-chip').click();
+  await page.locator('.pack-custom input').fill('37');
+  await page.locator('.pack-custom .btn').click();
+  await expect(page.locator('.pay-panel')).toBeVisible();
+  await expect(page.locator('.pay-panel')).toContainText('到账 37 点');
+  await expect(page.locator('.pay-panel')).toContainText('¥37.00');
+  await closeDrawer(page);
+});
+
 test('生成 → 收件箱 → 放进画布 → 保存到素材库', async ({ page }) => {
   await open(page);
   await ensureLogin(page);
