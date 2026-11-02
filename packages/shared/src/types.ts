@@ -332,8 +332,6 @@ export interface Settings {
   channel: ChannelId;
   /** 两个渠道各自记住的默认模型；空串 = 自动挑第一个可用模型 */
   models: Record<ChannelId, ModelPicks>;
-  /** 按模型覆盖预估单价（点），仅用于展示预估 */
-  prices: Record<string, number>;
   runtime: {
     mode: RunMode;
     host: string;

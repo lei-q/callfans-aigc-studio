@@ -653,7 +653,7 @@ export function SettingsPage() {
       <div className="toolbar">
         <div className="page-title-block">
           <span className="page-title">设置</span>
-          <span className="page-sub">账号、预估单价与运行模式</span>
+          <span className="page-sub">账号、并发与运行模式</span>
         </div>
       </div>
 
@@ -747,7 +747,7 @@ export function SettingsPage() {
       </div>
 
       <div className="catalog-sec">
-        <div className="catalog-sec-name">并发与预估单价</div>
+        <div className="catalog-sec-name">并发数</div>
         <div className="card set-card">
           <div className="form-row">
             <span className="form-label">并发数</span>
@@ -759,26 +759,7 @@ export function SettingsPage() {
               ))}
             </div>
           </div>
-        </div>
-        <div className="card table-card price-table">
-          <div className="key-head">
-            <span>模型</span>
-            <span>预估单价（点）</span>
-            <span>计价单位</span>
-            <span className="th-right">操作</span>
-          </div>
-          {s.models.map((m) => (
-            <PriceRow key={m.id} m={m} overridden={st.prices[m.id] != null} />
-          ))}
-          {!s.models.length && (
-            <div className="key-row">
-              <span className="tiny dim">登录或配置 Key 后，这里会列出可用模型与单价。</span>
-            </div>
-          )}
-        </div>
-        <div className="table-note">
-          <Icon name="shield" />
-          <span>平台网关的实际扣费以平台账本为准（按真实用量结算）；这里的单价只用于生成前的预估展示。</span>
+          <div className="tiny dim">同一时间最多生成几个任务；超出的排进队列，前面的完成后自动开始。</div>
         </div>
       </div>
 
@@ -890,34 +871,3 @@ export function SettingsPage() {
   );
 }
 
-function PriceRow({ m, overridden }: { m: ModelInfo; overridden: boolean }) {
-  const [v, setV] = useState(String(m.price));
-  useEffect(() => setV(String(m.price)), [m.price]);
-  const save = () => {
-    const n = Number(v);
-    if (!isFinite(n) || n < 0) {
-      setV(String(m.price));
-      return;
-    }
-    if (n !== m.price) void patchSettings({ prices: { [m.id]: n } }, `已更新 ${m.name} 的预估单价`);
-  };
-  return (
-    <div className="key-row">
-      <span className="kr-name">
-        {m.name}
-        {overridden && <span className="ch-chip">已调整</span>}
-      </span>
-      <span>
-        <input className="form-input price-input" value={v} onChange={(e) => setV(e.target.value)} onBlur={save} onKeyDown={(e) => e.key === 'Enter' && save()} />
-      </span>
-      <span className="tiny dim">点 / {m.basis}</span>
-      <span className="right">
-        {overridden && (
-          <button className="btn sm ghost" onClick={() => void patchSettings({ prices: { [m.id]: null } }, '已恢复默认单价')}>
-            恢复默认
-          </button>
-        )}
-      </span>
-    </div>
-  );
-}

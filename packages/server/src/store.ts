@@ -72,7 +72,6 @@ export interface SettingsInternal {
   };
   channel: ChannelId;
   models: Record<ChannelId, ModelPicks>;
-  prices: Record<string, number>;
   runtime: { tokenHash?: string };
 }
 
@@ -96,7 +95,6 @@ export const DEFAULT_SETTINGS: SettingsInternal = {
   direct: { enabled: false, baseUrl: TREECLOUD_BASE_URL },
   channel: 'cloud',
   models: { cloud: { text: '', image: '', video: '', audio: '' }, direct: { text: '', image: '', video: '', audio: '' } },
-  prices: {},
   runtime: {},
 };
 
@@ -134,7 +132,6 @@ export class Store {
         cloud: { ...DEFAULT_SETTINGS.models.cloud, ...s?.models?.cloud, ...(s?.models?.cloud?.text ? {} : { text: legacy }) },
         direct: { ...DEFAULT_SETTINGS.models.direct, ...s?.models?.direct },
       },
-      prices: { ...s?.prices },
       runtime: { ...s?.runtime },
     };
   }

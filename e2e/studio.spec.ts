@@ -276,6 +276,9 @@ test('导航：API 接入并入模型与价格，设置页改叫「账号」', a
   expect(secs[secs.length - 1]).toBe('模型价格');
   await page.locator('.side-item', { hasText: '设置' }).click();
   await expect(page.locator('.catalog-sec-name').first()).toHaveText('账号');
+  await expect(page.locator('.catalog-sec-name', { hasText: '并发数' })).toBeVisible();
+  /* 预估单价只影响本地展示，没有实际扣费作用，已移除 */
+  await expect(page.locator('.catalog-sec-name', { hasText: '预估单价' })).toHaveCount(0);
   await expect(page.locator('.snap-row', { hasText: '账号服务' })).toHaveCount(0);
   await expect(page.locator('.snap-row', { hasText: '接口根' })).toHaveCount(0);
 });

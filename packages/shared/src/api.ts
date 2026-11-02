@@ -79,7 +79,6 @@ export interface SettingsPatch {
   direct?: { enabled?: boolean; baseUrl?: string; apiKey?: string; clearKey?: boolean };
   channel?: ChannelId;
   models?: Partial<Record<ChannelId, Partial<ModelPicks>>>;
-  prices?: Record<string, number | null>;
   runtime?: { mode?: RunMode; host?: string; port?: number; lan?: boolean; token?: string; clearToken?: boolean };
 }
 

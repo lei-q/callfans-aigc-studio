@@ -608,12 +608,6 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
         }
       }
     }
-    if (body.prices) {
-      for (const [k, v] of Object.entries(body.prices)) {
-        if (v == null) delete s.prices[k];
-        else s.prices[k] = v;
-      }
-    }
     if (body.runtime) {
       const r = body.runtime;
       if (r.token) s.runtime.tokenHash = sha256(r.token);

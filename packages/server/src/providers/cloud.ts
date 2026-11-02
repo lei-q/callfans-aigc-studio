@@ -10,12 +10,12 @@ import { ProviderError, type ChatMessage, type Provider, type ProviderOutput, ty
    客户端只负责提交任务、轮询、把结果媒体下载到本机。
    ========================================================================== */
 
-export function gatewayModelToModelInfo(g: GatewayModel, priceOverride?: number): ModelInfo {
+export function gatewayModelToModelInfo(g: GatewayModel): ModelInfo {
   return {
     id: `cloud:${g.id}`,
     name: g.name,
     type: g.type,
-    price: priceOverride ?? g.price,
+    price: g.price,
     basis: g.basis,
     status: 'on',
     channel: 'cloud',
@@ -35,7 +35,6 @@ export class CloudProvider implements Provider {
 
   constructor(
     private readonly session: () => CloudSession,
-    private readonly prices: () => Record<string, number>,
     private readonly concurrencyOf: () => number,
     private readonly pollMs = 3000,
   ) {}
@@ -56,8 +55,7 @@ export class CloudProvider implements Provider {
   }
 
   models(): ModelInfo[] {
-    const prices = this.prices();
-    return this.session().models.map((g) => gatewayModelToModelInfo(g, prices[`cloud:${g.id}`]));
+    return this.session().models.map((g) => gatewayModelToModelInfo(g));
   }
 
   concurrency() {

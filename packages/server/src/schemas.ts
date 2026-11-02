@@ -168,7 +168,6 @@ export const settingsSchema = z.object({
       direct: modelPicksSchema.optional(),
     })
     .optional(),
-  prices: z.record(z.string(), z.number().min(0).max(1000).nullable()).optional(),
   runtime: z
     .object({
       mode: z.enum(['desktop', 'web']).optional(),

@@ -1013,7 +1013,6 @@ body.drawer-open .toast-layer { left: 18px; }
 .key-row .kr-name { font-weight: 620; }
 .key-row .row-actions { justify-content: flex-end; }
 .key-row .kr-key { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--t2); }
-.price-table .key-head, .price-table .key-row { grid-template-columns: minmax(190px, 1.5fr) 150px minmax(180px, 1fr) 90px; }
 
 .code-card { overflow: hidden; }
 .code-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); }

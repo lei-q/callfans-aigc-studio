@@ -17,7 +17,6 @@ export interface TreeCloudConfig {
   baseUrl: string;
   apiKey: string | null;
   concurrency: number;
-  prices: Record<string, number>;
   pollMs?: number;
 }
 
@@ -70,7 +69,7 @@ export function classify(m: RawModel): MediaType | 'chat' | null {
   return 'chat';
 }
 
-export function toModelInfo(raw: RawModel, type: MediaType, prices: Record<string, number>): ModelInfo {
+export function toModelInfo(raw: RawModel, type: MediaType): ModelInfo {
   const id = `tc:${raw.id}`;
   const caps = raw.capabilities || [];
   const runnable = caps.filter((c) => RUNNABLE.has((c.runtime_status || '').toLowerCase()));
@@ -86,7 +85,7 @@ export function toModelInfo(raw: RawModel, type: MediaType, prices: Record<strin
     id,
     name: raw.name || raw.id,
     type,
-    price: prices[id] ?? def.price,
+    price: def.price,
     basis: def.basis,
     status,
     channel: 'direct',
@@ -169,8 +168,7 @@ export class TreeCloudProvider implements Provider {
   }
 
   models(): ModelInfo[] {
-    const prices = this.cfg().prices;
-    return this.catalog().models.map((m) => (prices[m.id] != null ? { ...m, price: prices[m.id] } : m));
+    return this.catalog().models;
   }
 
   concurrency() {
@@ -223,7 +221,7 @@ export class TreeCloudProvider implements Provider {
       const t = classify(m);
       if (!t) continue;
       if (t === 'chat') chat.push(m.id);
-      else models.push(toModelInfo(m, t, this.cfg().prices));
+      else models.push(toModelInfo(m, t));
     }
     return { models, chat, at: Date.now() };
   }

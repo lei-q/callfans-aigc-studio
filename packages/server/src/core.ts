@@ -95,7 +95,6 @@ export class Core {
     this.session = new CloudSession(this.store, this.secrets, this.events, () => this.store.settings.cloud.baseUrl);
     this.cloud = new CloudProvider(
       () => this.session,
-      () => this.store.settings.prices,
       () => this.store.settings.runner.concurrency,
       opts.cloudPollMs,
     );
@@ -113,7 +112,6 @@ export class Core {
           baseUrl: s.direct.baseUrl,
           apiKey: this.secrets.decrypt(s.direct.keyEnc),
           concurrency: s.runner.concurrency,
-          prices: s.prices,
           pollMs: opts.directPollMs,
         };
       },
@@ -188,9 +186,8 @@ export class Core {
     if (this.channel === 'direct') return this.store.settings.direct.keyEnc ? this.direct.models() : [];
     /* 平台渠道：媒体模型来自 /models 清单（免令牌，启动时预热）；Mock 云另有一套自己的目录 */
     if (this.provider !== 'mock') return platformMediaModels(this.platform.cachedModels());
-    const prices = this.store.settings.prices;
     const cloudCached = this.session.loggedIn ? this.session.models : this.store.cloudModelsCache;
-    return cloudCached.map((g) => gatewayModelToModelInfo(g, prices[`cloud:${g.id}`]));
+    return cloudCached.map((g) => gatewayModelToModelInfo(g));
   }
 
   modelById(id: string) {
@@ -245,7 +242,6 @@ export class Core {
       },
       channel: s.channel,
       models: { cloud: { ...s.models.cloud }, direct: { ...s.models.direct } },
-      prices: s.prices,
       runtime: {
         mode: launch.mode || this.opts.mode,
         host: launch.host || '127.0.0.1',
