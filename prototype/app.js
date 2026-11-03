@@ -55,11 +55,10 @@ const TYPES = {
   audio: { key: 'audio', name: '音频', ic: 'audio', hint: '配音 / 音乐 / 音效', unit: '条', modeCls: 'mode-audio' },
 };
 
-/* 项目：个人也可以按项目拆分，但不是团队空间，没有配额与成员概念 */
+/* 项目：个人也可以按项目拆分，但不是团队空间，没有配额与成员概念。
+   原型从唯一一个空项目开始，不预置示例项目。 */
 const WORKSPACES = [
-  { id: 'w1', name: '咖啡店 · 春季新品', dot: '#F97316', used: 2.88 },
-  { id: 'w2', name: '旅拍 · 短视频', dot: '#4F46E5', used: 17.55 },
-  { id: 'w3', name: '播客 · 片头与配乐', dot: '#7C5CFC', used: 1.8 },
+  { id: 'w1', name: '我的第一个项目', dot: '#F97316', used: 0 },
 ];
 
 /* 模型渠道：模型不是直连各家原厂的，而是经过渠道层统一接入、路由与计费。
@@ -127,12 +126,7 @@ const PROMPT_OPTIMIZE = {
 
 /* 描述偏短时走「扩写」，而不是只追加术语；这是新手最容易卡住的一步 */
 const EXPAND_THRESHOLD = 24;
-/* 首屏预填的示例提示词：用于给用户一个「这是示例，可以直接改」的标识 */
-const SEED_PROMPTS = {
-  image: '暖橙主色背景，哑光纸杯与咖啡豆居中，顶部柔光，奶油色高光，留出标题安全区',
-  video: '城市街头跟拍，人物手持咖啡杯，黄金时刻逆光，浅景深，胶片颗粒',
-  audio: '深夜电台片头：低沉男声导读，语气亲近，舒缓弦乐垫底，句间留白 0.4 秒',
-};
+/* 首屏不预填提示词：从空白开始，用户写什么就生成什么。 */
 const isThinPrompt = (type) => State.prompt[type].trim().length < EXPAND_THRESHOLD;
 const PARAM_NOTE = `<div class="param-note">${icon('check')}<span>以下为推荐值，不改也能直接生成；对结果不满意时再回来调整。</span></div>`;
 
@@ -140,22 +134,19 @@ const PARAM_NOTE = `<div class="param-note">${icon('check')}<span>以下为推�
    素材库装「这个项目产出的、要交付的东西」；审美库装「我个人认可的、代表我品味的东西」。
    两者不同：审美库跨项目、能收外部内容（本地图 / 网页），并且长期存在。 */
 const AESTHETIC_KEY = 'aigc-studio-aesthetic-v1';
-const AESTHETIC_SEED = [
-  { id: 'a1', kind: 'image', src: 'assets/thumbs/img-01-coffee-poster.webp', t: '暖橙商品图 · 主视觉', note: '低饱和暖橙，留白足', tags: ['暖调', '商品图'], from: '咖啡店 · 春季新品', at: '10-15' },
-  { id: 'a2', kind: 'image', src: 'assets/thumbs/img-02-aroma-scene.webp', t: '香薰静物 · 侧光', note: '侧光 + 浅景深，质感好', tags: ['静物', '自然光'], from: '咖啡店 · 春季新品', at: '10-15' },
-  { id: 'a3', kind: 'image', src: 'assets/thumbs/video-02-seaside-wide.webp', t: '航拍海岸 · 冷暖分层', note: '大留白、低饱和，做空镜参考', tags: ['空镜', '冷调'], from: '旅拍 · 短视频', at: '10-16' },
-  { id: 'a4', kind: 'image', src: 'assets/thumbs/img-04-package-mockup.webp', t: '包装立图 · 影棚', note: '硬光 + 干净背景', tags: ['影棚', '包装'], from: '咖啡店 · 春季新品', at: '10-16' },
-];
+/* 审美库不预置示例藏品：从空库开始，用户收藏什么就显示什么。
+   旧版本首次打开会写入 4 条演示数据（a1–a4），读取时顺手剔除。 */
+const LEGACY_AESTHETIC_IDS = new Set(['a1', 'a2', 'a3', 'a4']);
 
 function loadAesthetic() {
   try {
     const raw = localStorage.getItem(AESTHETIC_KEY);
     if (raw) {
       const list = JSON.parse(raw);
-      if (Array.isArray(list)) return list;
+      if (Array.isArray(list)) return list.filter((a) => !LEGACY_AESTHETIC_IDS.has(a?.id));
     }
-  } catch (_) { /* 存储不可用就用种子 */ }
-  return JSON.parse(JSON.stringify(AESTHETIC_SEED));
+  } catch (_) { /* 存储不可用就从空库开始 */ }
+  return [];
 }
 function saveAesthetic() {
   try {
@@ -190,20 +181,7 @@ function shrinkToThumb(src, cb) {
   img.src = src;
 }
 
-/* ===== 画布：参考图暂存区，按项目隔离 ===== */
-const CANVAS_SEED = {
-  w1: [
-    { id: 'c1', kind: 'media', type: 'image', f: 'img-01-coffee-poster', t: '主视觉 · 暖橙商品图', rid: 'r1', x: 40, y: 40 },
-    { id: 'c2', kind: 'media', type: 'video', f: 'video-01-street-vertical', t: '竖版 · 街头跟拍', rid: 'r5', x: 232, y: 40 },
-    { id: 'c4', kind: 'media', type: 'image', f: 'img-04-package-mockup', t: 'mockup · 包装立图', rid: 'r4', x: 232, y: 250 },
-  ],
-  w2: [
-    { id: 'c6', kind: 'media', type: 'video', f: 'video-02-seaside-wide', t: '横版 · 航拍海岸', rid: 'r6', x: 40, y: 40 },
-  ],
-  w3: [
-    { id: 'c10', kind: 'media', type: 'audio', f: 'audio-02-ambient-dawn', t: '音乐 · 清晨氛围', rid: 'r9', x: 232, y: 40 },
-  ],
-};
+/* ===== 画布：参考图暂存区，按项目隔离（从空画布开始） ===== */
 
 /* ===== 基础编辑：三大类各自的处理项（本地模拟，不产生真实文件） ===== */
 const EDIT_FILTERS = [
@@ -261,57 +239,13 @@ const ASSET_POOL = {
   ],
 };
 
-const RESULTS = [
-  { id: 'r1', job: 'j1', type: 'image', ws: 'w1', title: '主视觉 A · 暖橙商品图', asset: 'img-01-coffee-poster', ratio: '1:1', model: 'm-img-u2', seed: 88213, time: '16:20', status: 'adopted', tags: ['暖调', '商品图'], dur: 0, home: 'canvas' },
-  { id: 'r2', job: 'j1', type: 'image', ws: 'w1', title: '主视觉 B · 香薰静物', asset: 'img-02-aroma-scene', ratio: '1:1', model: 'm-img-u2', seed: 88214, time: '16:20', status: 'new', tags: ['低饱和', '静物'], dur: 0, home: 'library' },
-  { id: 'r3', job: 'j1', type: 'image', ws: 'w1', title: '主视觉 C · 可颂平铺', asset: 'img-03-pastry-flatlay', ratio: '1:1', model: 'm-img-u2', seed: 88215, time: '16:20', status: 'new', tags: ['美食', '平铺'], dur: 0, home: 'library' },
-  { id: 'r4', job: 'j1', type: 'image', ws: 'w1', title: '主视觉 D · 包装立图', asset: 'img-04-package-mockup', ratio: '1:1', model: 'm-img-u2', seed: 88216, time: '16:20', status: 'fav', tags: ['包装', '影棚'], dur: 0, home: 'canvas' },
-  { id: 'r5', job: 'j2', type: 'video', ws: 'w2', title: '竖版首帧 · 街头跟拍', asset: 'video-01-street-vertical', ratio: '9:16', model: 'm-vid-c1', seed: 51204, time: '15:05', status: 'new', tags: ['9:16', '推近'], dur: 5, cam: '推近', home: 'canvas' },
-  { id: 'r6', job: 'j3', type: 'video', ws: 'w2', title: '横版空镜 · 航拍海岸', asset: 'video-02-seaside-wide', ratio: '16:9', model: 'm-vid-c1', seed: 50987, time: '14:40', status: 'new', tags: ['16:9', '环绕'], dur: 8, cam: '环绕', home: 'canvas' },
-  { id: 'r7', job: 'j5', type: 'video', ws: 'w1', title: '产品动效 · 水花循环', asset: 'video-03-studio-loop', ratio: '16:9', model: 'm-vid-f1', seed: 47310, time: '13:52', status: 'new', tags: ['16:9', '固定'], dur: 3, cam: '固定', home: 'draft' },
-  { id: 'r8', job: 'j6', type: 'audio', ws: 'w3', title: '片头 · 深夜电台 30s', asset: 'audio-01-night-radio', ratio: '1:1', model: 'm-aud-tts', seed: 30112, time: '12:30', status: 'adopted', tags: ['岚 · 温和女声', '深夜'], dur: 30, home: 'draft' },
-  { id: 'r9', job: 'j7', type: 'audio', ws: 'w3', title: '音乐 · 清晨氛围 60s', asset: 'audio-02-ambient-dawn', ratio: '1:1', model: 'm-aud-mus', seed: 30555, time: '11:58', status: 'new', tags: ['清晨专注', '60 BPM'], dur: 60, home: 'canvas' },
-  { id: 'r10', job: 'j8', type: 'audio', ws: 'w3', title: '音效 · 品牌标识 5s', asset: 'audio-03-brand-stinger', ratio: '1:1', model: 'm-aud-sfx', seed: 31240, time: '11:20', status: 'new', tags: ['音效', '5 秒'], dur: 5, home: 'library' },
-];
-
-const JOBS = [
-  { id: 'j1', name: '春季新品 · 主视觉 4 张', type: 'image', ws: 'w1', model: 'm-img-u2', ratio: '1:1', count: 4, res: '2k',
-    prompt: '暖橙主色背景，哑光纸杯与咖啡豆居中，顶部柔光，奶油色高光，留出标题安全区', refs: 1, cost: 1.2, status: 'succeeded', durText: '2 分 10 秒', time: '16:20', dateKey: 'today', results: ['r1', 'r2', 'r3', 'r4'] },
-  { id: 'j2', name: '旅拍短片 · 竖版 5s 首帧', type: 'video', ws: 'w2', model: 'm-vid-c1', ratio: '9:16', dur: 5, cam: '推近',
-    prompt: '城市街头跟拍，人物手持咖啡杯，黄金时刻逆光，浅景深，胶片颗粒', refs: 1, cost: 4, status: 'succeeded', durText: '3 分 40 秒', time: '15:05', dateKey: 'today', results: ['r5'] },
-  { id: 'j3', name: '旅拍空镜 · 横版 8s', type: 'video', ws: 'w2', model: 'm-vid-c1', ratio: '16:9', dur: 8, cam: '环绕',
-    prompt: '航拍缓慢推近海岸线，清晨薄雾，冷暖分层，真实光影', refs: 0, cost: 6.4, status: 'succeeded', durText: '6 分 05 秒', time: '14:40', dateKey: 'today', results: ['r6'] },
-  { id: 'j5', name: '产品动效 · 水花循环 3s', type: 'video', ws: 'w1', model: 'm-vid-f1', ratio: '16:9', dur: 3, cam: '固定',
-    prompt: '水珠缓慢落在亮橙色表面，深色影棚，边缘光，微距，首尾可循环', refs: 0, cost: 0.75, status: 'succeeded', durText: '48 秒', time: '13:52', dateKey: 'today', results: ['r7'] },
-  { id: 'j6', name: '深夜电台 · 片头 30s', type: 'audio', ws: 'w3', model: 'm-aud-tts', use: 'tts', dur: 30, voice: 'lan', lang: '中文',
-    prompt: '深夜电台片头：低沉男声导读，语气亲近，舒缓弦乐垫底，句间留白 0.4 秒', refs: 0, cost: 0.5, status: 'succeeded', durText: '35 秒', time: '12:30', dateKey: 'today', results: ['r8'] },
-  { id: 'j7', name: '清晨专注 · 背景音乐 60s', type: 'audio', ws: 'w3', model: 'm-aud-mus', use: 'music', dur: 60, mood: 'morning',
-    prompt: '钢琴与轻电子，60 BPM，无明显旋律尖峰，适合口播垫底，可循环', refs: 0, cost: 1.2, status: 'succeeded', durText: '1 分 10 秒', time: '11:58', dateKey: 'today', results: ['r9'] },
-  { id: 'j8', name: '品牌标识音 5s', type: 'audio', ws: 'w3', model: 'm-aud-sfx', use: 'sfx', dur: 5,
-    prompt: '木质敲击 + 上扬泛音，收尾干净无混响尾巴', refs: 0, cost: 0.1, status: 'succeeded', durText: '12 秒', time: '11:20', dateKey: 'today', results: ['r10'] },
-  { id: 'j4', name: '春季限定 · 产品动效 3s', type: 'video', ws: 'w1', model: 'm-vid-f1', ratio: '16:9', dur: 3, cam: '推近',
-    prompt: '水珠沿杯身缓慢下滑，深色影棚，边缘光勾勒轮廓，微距，循环衔接', refs: 0, cost: 0.75, status: 'running', progress: 62, eta: '约 1 分钟', time: '16:35', dateKey: 'today', results: [] },
-  { id: 'j9', name: '门店场景图 4 张', type: 'image', ws: 'w1', model: 'm-img-f2', ratio: '4:5', count: 4, res: '1080p',
-    prompt: '门店午后场景：窗边座位、木质吧台、暖光吊灯，生活方式摄影', refs: 0, cost: 0.19, status: 'queued', queueNote: '前面 1 个任务', time: '16:38', dateKey: 'today', results: [] },
-  { id: 'j10', name: '春季新品 · 大幅面 2 张', type: 'image', ws: 'w1', model: 'm-img-u2', ratio: '1:1', count: 2, res: '4k',
-    prompt: '暖橙背景，哑光纸杯居中，大幅面输出，材质细节清晰', refs: 0, cost: 1.32, status: 'failed', time: '15:12', dateKey: 'today',
-    fail: { code: 'E-PRM-04', reason: '4K（4096×4096）超出 Aurora-Image U2 上限 2K', fix: '改用 Aurora-Image X1，或降到 2K' }, results: [] },
-  { id: 'j11', name: '横版宣传片 12s', type: 'video', ws: 'w2', model: 'm-vid-c1', ratio: '16:9', dur: 12, cam: '环绕',
-    prompt: '航拍环绕雪山与湖面，日出金光，长镜头', refs: 0, cost: 9.6, status: 'failed', time: '14:02', dateKey: 'today',
-    fail: { code: 'E-DUR-02', reason: '时长 12s 超过当前模型上限 8s（排队 4 分钟后失败）', fix: '按时长上限 8s 重试，或拆成两段各 6s' }, results: [] },
-  { id: 'j12', name: '冬季热饮预热 · 场景图 4 张', type: 'image', ws: 'w1', model: 'm-img-u2', ratio: '4:5', count: 4, res: '2k',
-    prompt: '冬季窗边热饮场景，毛毯与书本，暖光，浅景深', refs: 0, cost: 1.2, status: 'canceled', time: '11:05', dateKey: 'today', results: [] },
-  { id: 'j13', name: '昨日 · 门店实拍风格 6 张', type: 'image', ws: 'w1', model: 'm-img-f2', ratio: '1:1', count: 6, res: '1080p',
-    prompt: '门店实拍：吧台、拉花、豆仓，自然光，真实随手感', refs: 0, cost: 0.29, status: 'succeeded', durText: '52 秒', time: '昨天 18:40', dateKey: 'yesterday', results: [] },
-  { id: 'j14', name: '昨日 · 竖版预告 9:16', type: 'video', ws: 'w2', model: 'm-vid-c1', ratio: '9:16', dur: 8, cam: '跟随',
-    prompt: '竖版跟拍预告：人物上车、关门、车窗反光，节奏偏快', refs: 0, cost: 6.4, status: 'succeeded', durText: '6 分 20 秒', time: '昨天 17:12', dateKey: 'yesterday', results: [] },
-];
+/* 任务与产出都从空开始：原型不预置任何生成记录。 */
 
 /* 钱包：点数余额制。1 点 = ¥1，没有订阅、没有日配额、点数不过期。
    每日免费点数当日有效、不累积，生成时优先抵扣。 */
 const WALLET = {
-  balance: 18.6,
-  spent: { image: 2.88, video: 17.55, audio: 1.8 },
+  balance: 0,
+  spent: { image: 0, video: 0, audio: 0 },
   dailyFree: 0.5,
   dailyUsed: 0,
   firstTopupDone: false,
@@ -340,7 +274,7 @@ const State = {
   type: 'image',
   editPick: { image: null, video: null, audio: null },
   editOps: cloneEdit(),
-  canvas: JSON.parse(JSON.stringify(CANVAS_SEED)),
+  canvas: {},
   canvasSel: [],
   canvasOpen: true,          /* 右侧画布面板是否展开 */
   cvsView: {},               /* 每个项目的画布视口：{x, y, k} */
@@ -362,27 +296,20 @@ const State = {
   genLock: false,
   task: null,
   apiLang: 'curl',
-  apiKeys: [
-    { id: 'k1', name: '生产环境', ch: 'ch-gw', key: 'sk-live-8f3a······c21', created: '10-02 14:20', lastUsed: '今天 21:12', on: true },
-    { id: 'k2', name: '本地脚本', ch: 'ch-direct', key: 'sk-test-24b7······90e', created: '10-08 09:41', lastUsed: '昨天 23:05', on: true },
-  ],
-  apiUsage: [
-    { t: '21:12', model: 'm-img-f2', n: 12, pts: 0.96 },
-    { t: '20:47', model: 'm-img-u2', n: 4, pts: 1.2 },
-    { t: '18:03', model: 'm-aud-tts', n: 2, pts: 1 },
-  ],
+  apiKeys: [],
+  apiUsage: [],
   queueFilter: 'all',        /* all | failed */
   libScope: 'ws',            /* ws | all */
   editScope: 'ws',           /* ws | all */
   canvasConfirm: false,
   prompt: {
-    image: '暖橙主色背景，哑光纸杯与咖啡豆居中，顶部柔光，奶油色高光，留出标题安全区',
-    video: '城市街头跟拍，人物手持咖啡杯，黄金时刻逆光，浅景深，胶片颗粒',
-    audio: '深夜电台片头：低沉男声导读，语气亲近，舒缓弦乐垫底，句间留白 0.4 秒',
+    image: '',
+    video: '',
+    audio: '',
   },
   negative: { image: '', video: '', audio: '' },
   optimize: null,            /* AI 优化建议待应用 */
-  refs: { image: [{ f: 'img-03-pastry-flatlay', w: 0.6 }], video: [{ f: 'video-02-seaside-wide', w: 0.5 }], audio: [] },
+  refs: { image: [], video: [], audio: [] },
   adv: false,
   refScope: 'ws',
   params: {
@@ -390,8 +317,8 @@ const State = {
     video: { model: 'm-vid-c1', ratio: '9:16', dur: 5, cam: '推近', fps: 24, firstFrame: true, loop: false },
     audio: { model: 'm-aud-tts', use: 'tts', dur: 30, voice: 'lan', mood: 'morning', lang: '中文', volume: 80 },
   },
-  jobs: JOBS.map((j) => ({ ...j, charged: ['running', 'queued'].includes(j.status) })),
-  results: RESULTS.map((r) => ({ ...r })),
+  jobs: [],
+  results: [],
   wallet: JSON.parse(JSON.stringify(WALLET)),
   expanded: {},
   jobFilter: 'all',          /* all | failed | running */
@@ -1096,7 +1023,6 @@ function renderComposer() {
   const opt = State.optimize;
   const plen = State.prompt[t].trim().length;
   const thin = isThinPrompt(t);
-  const seeded = State.prompt[t] === SEED_PROMPTS[t];
 
   return `<section class="card composer-card">
     <div class="composer-head">
@@ -1114,7 +1040,6 @@ function renderComposer() {
         ${anchorBarHTML()}
         <div class="field-head">
           <span class="field-label">${icon('pen')}提示词</span>
-          ${seeded ? `<span class="chip outline">${icon('sparkles')}示例内容，可直接改或清空</span>` : ''}
           ${opt ? `<span class="ai-suggest">${icon('sparkles')}优化建议待应用</span>` : ''}
           <span class="grow"></span>
           <button class="btn sm ai" data-action="ai-optimize">${icon('sparkles')}${thin ? '帮我写详细' : '补充细节'}</button>
@@ -4909,8 +4834,7 @@ const ACTIONS = {
     if (texts.length) {
       const joined = texts.map((i) => i.text.trim()).join('，');
       const cur = (State.prompt[type] || '').trim();
-      const isSeed = !cur || cur === (SEED_PROMPTS[type] || '').trim();
-      State.prompt[type] = isSeed ? joined : `${cur}，${joined}`;
+      State.prompt[type] = cur ? `${cur}，${joined}` : joined;
       textNote = ` · ${texts.length} 处文字已写进提示词`;
     }
     State.type = type; State.page = 'studio'; State.domain = null; State.studioTab = 'gen';
