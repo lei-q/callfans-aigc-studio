@@ -992,13 +992,35 @@ export function computeAgent(s: State): AgentResult {
 }
 
 let agentSeq = 0;
-export async function agentOpen() {
+/** 上一次分析的范围签名与已润色签名：选区没变就不重复请求对话模型 */
+let agentSig = '';
+let agentEnhancedSig = '';
+let agentTimer: ReturnType<typeof setTimeout> | null = null;
+
+function agentSignature(s: State) {
+  const sel = canvasSelItems(s);
+  const items = sel.length ? sel : canvasItems(s);
+  return JSON.stringify([
+    sel.length > 0,
+    items.map((i) => [i.id, i.kind, i.type, i.rid, i.t, i.text, i.src]),
+    canvasLinks(s).map((l) => [l.from, l.to]),
+    s.type,
+  ]);
+}
+
+export async function agentOpen(force = false) {
   const s = getState();
+  const sig = agentSignature(s);
+  if (!force && s.agent.open && sig === agentSig) return;
+  agentSig = sig;
   const result = computeAgent(s);
   const seq = ++agentSeq;
   const llm = !!s.session?.loggedIn;
-  setState((st) => void (st.agent = { open: true, result, loading: llm && !!result.draft }));
-  if (!llm || !result.draft) return;
+  /* 没有提示词、手写文字或帖子可读时，润色只能得到空泛结论，白白消耗对话 token */
+  const hasSignal = result.counts.prompts > 0 || result.counts.posts > 0 || result.nodeTexts.length > 0 || result.notes.length > 0 || result.linkCount > 0;
+  const willEnhance = llm && !!result.draft && hasSignal && (force || sig !== agentEnhancedSig);
+  setState((st) => void (st.agent = { open: true, result, loading: willEnhance }));
+  if (!willEnhance) return;
   try {
     const items = result.scoped ? canvasSelItems(s) : canvasItems(s);
     const prompts = items
@@ -1014,6 +1036,7 @@ export async function agentOpen() {
       draft: result.draft,
     });
     if (seq !== agentSeq) return;
+    agentEnhancedSig = sig;
     setState((st) => {
       if (!st.agent.result) return;
       st.agent.loading = false;
@@ -1028,17 +1051,28 @@ export async function agentOpen() {
   }
 }
 
-/** 选区一变就重算，否则结论和范围对不上 */
+/** 选区一变就重算，否则结论和范围对不上；连续点击只算最后一次 */
 export function agentResync() {
-  if (getState().agent.open) void agentOpen();
+  if (!getState().agent.open) return;
+  if (agentTimer) clearTimeout(agentTimer);
+  agentTimer = setTimeout(() => {
+    agentTimer = null;
+    void agentOpen();
+  }, 450);
 }
 
 export function agentScopeAll() {
   setState((s) => void (s.canvasSel = []));
-  void agentOpen();
+  void agentOpen(true);
 }
 
-export const agentClose = () => setState((s) => void (s.agent = { open: false, result: null, loading: false }));
+export function agentClose() {
+  if (agentTimer) clearTimeout(agentTimer);
+  agentTimer = null;
+  agentSig = '';
+  agentEnhancedSig = '';
+  setState((s) => void (s.agent = { open: false, result: null, loading: false }));
+}
 
 export function agentApply() {
   const r = getState().agent.result;
@@ -1067,12 +1101,16 @@ export function agentCopy() {
 
 /* ---------------- 带去做 / 参考 / 存素材库 ---------------- */
 
+/** 参考素材只收图片：视频生成的第一张图片作首帧，图片生成也只接受图片 */
+const isRefImage = (type?: MediaType) => type === 'image';
+
 /** 选中的素材写进该类型的参考素材，文字一并写进提示词 */
 export function canvasUse(type: MediaType) {
   const s = getState();
   const sel = canvasSelItems(s);
   if (!sel.length) return;
-  const media = sel.filter((i) => i.kind === 'media');
+  const media = sel.filter((i) => i.kind === 'media' && type !== 'audio' && isRefImage(i.type));
+  const skipped = sel.filter((i) => i.kind === 'media' && (type === 'audio' || !isRefImage(i.type))).length;
   const texts = sel.filter((i) => (i.kind === 'text' || i.kind === 'node') && (i.text || '').trim());
   const prevRefs = s.refs[type].length;
   setState((st) => {
@@ -1098,7 +1136,7 @@ export function canvasUse(type: MediaType) {
   toast(
     'ai',
     '已把画布内容带过来',
-    `${media.length ? `${media.length} 项素材作为参考` : '未选素材'}${texts.length ? ` · ${texts.length} 处文字已写进提示词` : ''}${media.length && prevRefs ? `（替换了原有 ${prevRefs} 项）` : ''}`,
+    `${media.length ? `${media.length} 项素材作为参考` : '未选素材'}${texts.length ? ` · ${texts.length} 处文字已写进提示词` : ''}${media.length && prevRefs ? `（替换了原有 ${prevRefs} 项）` : ''}${skipped ? ` · 忽略 ${skipped} 项非图片素材` : ''}`,
   );
 }
 
@@ -1112,9 +1150,13 @@ export function toRefs(ids: string[]) {
     toast('warn', items.some((i) => i.kind === 'node' || i.kind === 'text') ? '这条不是素材' : '这里没有素材', '先选中一张图片');
     return false;
   }
-  const other = media.find((i) => i.type !== t);
-  if (other && other.type) {
-    toast('warn', `这是${TYPES[other.type].name}，当前在${TYPES[t].name}页`, `切到「${TYPES[other.type].name}创作」的生成页再拖一次`);
+  const other = media.find((i) => !isRefImage(i.type));
+  if (other) {
+    toast(
+      'warn',
+      other.type === 'video' ? '视频不能当参考图' : other.type ? `这是${TYPES[other.type].name}，不能作为参考图` : '这个素材不能作为参考图',
+      t === 'video' ? '图生视频用第一张图片作首帧，请拖入图片素材' : '参考素材只能是图片',
+    );
     return false;
   }
   const room = MAX_REFS - s.refs[t].length;

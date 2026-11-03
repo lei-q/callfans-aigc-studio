@@ -13,6 +13,8 @@ button.avatar:hover { color: var(--primary); border-color: var(--primary-border)
 .wm-actions { display: flex; gap: 6px; padding: 4px; }
 .wm-new { display: flex; gap: 6px; padding: 4px; align-items: center; }
 .wm-new .form-input { flex: 1; min-width: 0; }
+/* 菜单里的按钮默认撑满整行，新建项目的「创建」要按内容宽度，否则输入框被挤没 */
+.ws-menu .wm-new .btn { width: auto; flex: none; }
 
 /* ---------- 媒体占位：真实视频与音频没有封面 ---------- */
 .rc-media video, .cvs-pick-item video, .src-thumb video, .post-item video, .post-pool-item video, .pc-cell video, .edit-thumb video,

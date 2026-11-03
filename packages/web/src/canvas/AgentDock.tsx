@@ -84,7 +84,7 @@ export function AgentDock() {
             <span>{r.scoped ? `只看你圈定的 ${total} 个元素` : `基于整块画板的 ${total} 个元素`}</span>
           </div>
           <span className="grow" />
-          <button className="icon-btn" title="重新分析" onClick={() => void agentOpen()}>
+          <button className="icon-btn" title="重新分析" onClick={() => void agentOpen(true)}>
             <Icon name="refresh" />
           </button>
           <button

@@ -10,7 +10,7 @@ import { ProviderError, type Provider, type ProviderOutput, type RunContext } fr
 /* ============================================================================
    平台生成 Provider：用账号会话里的 LiteLLM 密钥调 https://api.callfansai.com
    - 图片：POST /v1/images/generations，b64_json 落本机；不自动重试
-   - 视频：POST /v1/videos（model / prompt / seconds / size，不传 resolution）
+   - 视频：POST /v1/videos（model / prompt / seconds / size；有首帧时改用 multipart 带 input_reference）
            → 原样保存返回的 id → 每 3–5 秒 GET /v1/videos/{id}（最多 10 分钟）
            → GET /v1/videos/{id}/content 取 mp4
    创建成功（200）即已按秒计费，失败也不退：失败后绝不自动重建。
@@ -189,14 +189,37 @@ export class PlatformMediaProvider implements Provider {
     if (job.negative?.trim()) prompt += `。避免：${job.negative.trim()}`;
     const seconds = String(Math.max(1, Math.round(job.dur || 5)));
     const size = videoSize(job.ratio, job.vres);
+    /* 首帧参考图按平台约定用 multipart 的 input_reference 上传；
+       不支持首帧的模型会在创建阶段返回 400（此时还没有计费）。 */
+    const first = job.firstFrame !== false ? job.refs[0] : undefined;
+    const ref = first ? await ctx.resolveRef(first.src) : null;
+    const image = ref ? await imageBytes(ref) : null;
+    /* 选了首帧却读不出来时不要悄悄退回纯文生视频，否则成片和用户预期完全无关 */
+    if (first && !image) throw new ProviderError('E-PRM-04', '首帧参考图读取失败，未提交生成', '重新拖入图片后再试；本次没有提交，不会扣点');
     ctx.progress(3, '提交到平台…');
-    const created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
-      method: 'POST',
-      json: { model: upstream, prompt, seconds, size },
-      signal: ctx.signal,
-      /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
-      timeoutMs: 130_000,
-    });
+    let created: VideoReply;
+    if (image) {
+      const form = new FormData();
+      form.append('model', upstream);
+      form.append('prompt', prompt);
+      form.append('seconds', seconds);
+      form.append('size', size);
+      form.append('input_reference', new Blob([image.buf], { type: image.mime }), `first-frame.${image.mime.includes('jpeg') ? 'jpg' : 'png'}`);
+      created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
+        method: 'POST',
+        form,
+        signal: ctx.signal,
+        /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
+        timeoutMs: 130_000,
+      });
+    } else {
+      created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
+        method: 'POST',
+        json: { model: upstream, prompt, seconds, size },
+        signal: ctx.signal,
+        timeoutMs: 130_000,
+      });
+    }
     const id = created?.id;
     if (!id) throw new ProviderError('E-UPS-52', '平台没有返回视频任务 ID', '稍后重试；如果已被计费请联系支持');
     job.upstreamTaskId = id;
@@ -258,6 +281,17 @@ export class PlatformMediaProvider implements Provider {
       });
     }
   }
+}
+
+/** 参考图可能是本机 data URL，也可能是远程地址；统一取成字节再上传 */
+async function imageBytes(ref: { dataUrl: string; mime: string }): Promise<{ buf: Buffer; mime: string } | null> {
+  const inline = /^data:([^;,]+);base64,(.*)$/.exec(ref.dataUrl);
+  if (inline) return { buf: Buffer.from(inline[2], 'base64'), mime: inline[1] };
+  if (/^https?:\/\//i.test(ref.dataUrl)) {
+    const got = await download(ref.dataUrl);
+    return got.buf.length ? got : null;
+  }
+  return null;
 }
 
 async function download(url: string, signal?: AbortSignal): Promise<{ buf: Buffer; mime: string }> {

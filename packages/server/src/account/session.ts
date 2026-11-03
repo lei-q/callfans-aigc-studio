@@ -417,7 +417,7 @@ export class AccountSession {
   /* ---------------- 平台生成网关：图片 / 视频 ---------------- */
 
   /** 带模型密钥请求网关；401 时丢本地副本、只重换一次 */
-  private async gatewayFetch(path: string, opts: { method?: string; json?: unknown; signal?: AbortSignal; timeoutMs?: number } = {}) {
+  private async gatewayFetch(path: string, opts: { method?: string; json?: unknown; form?: FormData; signal?: AbortSignal; timeoutMs?: number } = {}) {
     const base = (this.cfg.gatewayBase || 'https://api.callfansai.com').replace(/\/+$/, '');
     const timeout = opts.timeoutMs ?? 120_000;
     const signal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
@@ -429,7 +429,7 @@ export class AccountSession {
           ...(opts.json !== undefined ? { 'Content-Type': 'application/json' } : {}),
           Authorization: `Bearer ${key}`,
         },
-        body: opts.json !== undefined ? JSON.stringify(opts.json) : undefined,
+        body: opts.form ?? (opts.json !== undefined ? JSON.stringify(opts.json) : undefined),
         signal,
       }).catch((e) => {
         if (opts.signal?.aborted) throw e;
@@ -445,8 +445,8 @@ export class AccountSession {
     return res;
   }
 
-  /** 平台生成接口返回 JSON；非 2xx 统一翻成可读错误 */
-  async gatewayJson<T>(path: string, opts: { method?: string; json?: unknown; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+  /** 平台生成接口返回 JSON；非 2xx 统一翻成可读错误。multipart 走 form */
+  async gatewayJson<T>(path: string, opts: { method?: string; json?: unknown; form?: FormData; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
     const res = await this.gatewayFetch(path, opts);
     const text = await res.text();
     let body: unknown = null;

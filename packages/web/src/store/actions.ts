@@ -245,6 +245,10 @@ export function addRefItem(rid: string) {
   const s = getState();
   const r = resultById(s, rid);
   if (!r) return;
+  if (r.type !== 'image') {
+    toast('warn', '参考素材只能是图片', '视频生成的第一张图片会作为首帧');
+    return;
+  }
   const t = s.type;
   if (s.refs[t].length >= MAX_REFS) {
     toast('warn', '最多 4 项', '先移除一项再加');
@@ -1156,6 +1160,7 @@ export async function editSave() {
 
 /* ---------------- 杂项 ---------------- */
 
-export const refPool = (s: State) => libResults(s).filter((r) => r.type === s.type && (s.refScope === 'all' || r.ws === s.ws));
+export const refPool = (s: State) =>
+  libResults(s).filter((r) => r.type === 'image' && (s.type === 'image' || s.type === 'video') && (s.refScope === 'all' || r.ws === s.ws));
 export const agentParamLabel = agentParamText;
 export { resoOf, SEED_PROMPTS, inScope };

@@ -282,3 +282,16 @@ test('导航：API 接入并入模型与价格，设置页改叫「账号」', a
   await expect(page.locator('.snap-row', { hasText: '账号服务' })).toHaveCount(0);
   await expect(page.locator('.snap-row', { hasText: '接口根' })).toHaveCount(0);
 });
+
+test('项目切换器：新建项目的名称输入框不能被「创建」按钮挤没', async ({ page }) => {
+  await open(page);
+  await page.locator('.ws-btn').click();
+  await page.locator('.wm-actions .btn', { hasText: '新建项目' }).click();
+  const input = page.locator('.wm-new .form-input');
+  await expect(input).toBeVisible();
+  const box = await input.boundingBox();
+  expect(box!.width).toBeGreaterThan(150);
+  const create = page.locator('.wm-new .btn', { hasText: '创建' });
+  await expect(create).toBeVisible();
+  expect((await create.boundingBox())!.width).toBeLessThan(box!.width);
+});
