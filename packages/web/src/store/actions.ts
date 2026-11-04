@@ -23,7 +23,6 @@ import {
   EDIT_DEF,
   MAX_REFS,
   POST_PLATFORMS,
-  SEED_PROMPTS,
   TYPES,
   affordable,
   agentParamText,
@@ -173,8 +172,7 @@ export async function optimizePrompt() {
   try {
     const r = await api.post<OptimizeReply>('/api/assist/optimize', { type: t, prompt: cur });
     setState((st) => void (st.optimize = r));
-    if (r.mode === 'expand') toast('ai', r.llm ? '已用对话模型补成完整提示词' : '已把这句话补成完整提示词', r.llm ? '看一眼，不满意就点「忽略」' : r.reason || '看一眼，不满意就点「忽略」');
-    else toast('ai', '给了几条可加的细节', r.llm ? '挑不挑都行，不改也能直接生成' : r.reason || '挑不挑都行，不改也能直接生成');
+    toast('ai', r.mode === 'expand' ? '已用模型补成完整提示词' : '模型给了几条可加的细节', '看一眼，不满意就点「忽略」');
   } catch (e) {
     toastError(e);
   } finally {
@@ -1163,4 +1161,4 @@ export async function editSave() {
 export const refPool = (s: State) =>
   libResults(s).filter((r) => r.type === 'image' && (s.type === 'image' || s.type === 'video') && (s.refScope === 'all' || r.ws === s.ws));
 export const agentParamLabel = agentParamText;
-export { resoOf, SEED_PROMPTS, inScope };
+export { resoOf, inScope };

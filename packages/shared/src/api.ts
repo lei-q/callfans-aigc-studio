@@ -47,9 +47,8 @@ export interface OptimizeReply {
   add: string;
   neg: string;
   note: string;
+  /** 恒为 true：内容只来自真实模型 */
   llm: boolean;
-  /** 没有可用模型路由时的说明（此时为规则推断） */
-  reason?: string;
 }
 
 export interface AgentEnhanceBody {

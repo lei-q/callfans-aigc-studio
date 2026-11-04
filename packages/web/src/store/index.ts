@@ -25,7 +25,7 @@ import type {
   Settings,
   WalletDto,
 } from '@aigc/shared';
-import { EDIT_DEF, PEN_COLORS, SEED_PROMPTS } from '@aigc/shared';
+import { EDIT_DEF, PEN_COLORS } from '@aigc/shared';
 
 export type Page = 'studio' | 'jobs' | 'library' | 'models' | 'aesthetic' | 'settings';
 export type DrawerType = 'result' | 'help' | 'queue' | 'ref-add' | 'topup' | 'edit' | 'post' | 'project' | 'account';
@@ -176,7 +176,7 @@ export const initialState: State = {
   type: 'image',
   drawer: null,
 
-  prompt: { ...SEED_PROMPTS },
+  prompt: { image: '', video: '', audio: '' },
   negative: { image: '', video: '', audio: '' },
   refs: { image: [], video: [], audio: [] },
   params: {

@@ -1,23 +1,16 @@
 import type { AgentEnhanceBody, AgentEnhanceReply, MediaType, OptimizeReply } from '@aigc/shared';
-import { EXPAND_THRESHOLD, PROMPT_OPTIMIZE, TYPES } from '@aigc/shared';
+import { EXPAND_THRESHOLD, TYPES } from '@aigc/shared';
 import type { Core } from './core';
 import type { ChatMessage } from './providers/types';
+import { HttpError } from './runner';
 
 /* ============================================================================
-   提示词辅助：真正调用模型。路由顺序：
+   提示词辅助：只调用真实模型，不做规则拼接、不预置示例内容。路由顺序：
      1. Fast-SSO 已登录 → 平台模型网关（用该账号的长期密钥，扣平台点数）
      2. Mock 云已登录  → 本地 Mock 云的对话能力
-     3. 都没有 → 回退规则推断，并在响应里说明原因
+     3. 自定义渠道     → 用户自己的文本模型
+   没有可用路由时直接报错，由界面提示登录或配置渠道。
    ========================================================================== */
-
-export function ruleOptimize(type: MediaType, prompt: string): OptimizeReply {
-  const cur = prompt.trim();
-  const cfg = PROMPT_OPTIMIZE[type];
-  if (cur.length < EXPAND_THRESHOLD) {
-    return { mode: 'expand', result: `${cur}。${cfg.expand}`, add: '', neg: cfg.neg, note: cfg.note, llm: false };
-  }
-  return { mode: 'add', result: '', add: cfg.add, neg: cfg.neg, note: cfg.note, llm: false };
-}
 
 export type ChatRoute = { kind: 'platform'; model: string } | { kind: 'direct'; model: string } | { kind: 'cloud' } | { kind: 'none'; reason: string };
 
@@ -49,12 +42,6 @@ export async function chatRoute(core: Core): Promise<ChatRoute> {
   }
 }
 
-export function chatRouteLabel(route: ChatRoute) {
-  if (route.kind === 'none') return route.reason;
-  if (route.kind === 'cloud') return '云端网关';
-  return `${route.kind === 'direct' ? '自定义渠道' : '平台模型'} ${route.model}`;
-}
-
 /** 从模型回复里抠出第一个 JSON 对象 */
 export function extractJson<T>(text: string): T | null {
   const m = /\{[\s\S]*\}/.exec(text.replace(/```json|```/g, ''));
@@ -79,11 +66,10 @@ async function ask(core: Core, route: Exclude<ChatRoute, { kind: 'none' }>, mess
 }
 
 export async function optimizePrompt(core: Core, type: MediaType, prompt: string): Promise<OptimizeReply> {
-  const fallback = ruleOptimize(type, prompt);
   const route = await chatRoute(core);
-  if (route.kind === 'none') return { ...fallback, reason: chatRouteLabel(route) };
+  if (route.kind === 'none') throw new HttpError(409, '提示词助手需要可用的文本模型', route.reason);
   const kind = TYPES[type].name;
-  const expand = fallback.mode === 'expand';
+  const expand = prompt.trim().length < EXPAND_THRESHOLD;
   const sys =
     `你是 AIGC ${kind}提示词助手，服务社媒运营。用户只会写一句大白话。` +
     (expand
@@ -97,17 +83,17 @@ export async function optimizePrompt(core: Core, type: MediaType, prompt: string
       { role: 'user', content: prompt.trim() },
     ]);
     const j = extractJson<{ result?: string; add?: string; neg?: string; note?: string }>(text);
-    if (!j) return { ...fallback, reason: '模型回复无法解析，已用规则补全' };
-    if (expand && j.result?.trim()) {
-      return { ...fallback, result: j.result.trim(), neg: j.neg?.trim() || fallback.neg, note: j.note?.trim() || fallback.note, llm: true };
+    if (expand && j?.result?.trim()) {
+      return { mode: 'expand', result: j.result.trim(), add: '', neg: j.neg?.trim() || '', note: j.note?.trim() || '', llm: true };
     }
-    if (!expand && j.add?.trim()) {
-      return { ...fallback, add: j.add.trim().replace(/^[。，,]/, ''), neg: j.neg?.trim() || fallback.neg, note: j.note?.trim() || fallback.note, llm: true };
+    if (!expand && j?.add?.trim()) {
+      return { mode: 'add', result: '', add: j.add.trim().replace(/^[。，,]/, ''), neg: j.neg?.trim() || '', note: j.note?.trim() || '', llm: true };
     }
+    throw new HttpError(502, '模型没有返回可用的提示词', '稍后重试；如果一直失败，换个文本模型再试');
   } catch (e) {
-    return { ...fallback, reason: `${(e as Error).message || '模型调用失败'}，已用规则补全` };
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(502, `模型调用失败：${(e as Error).message || '未知错误'}`, '稍后重试');
   }
-  return { ...fallback, reason: '模型回复为空，已用规则补全' };
 }
 
 export async function enhanceAgent(core: Core, body: AgentEnhanceBody): Promise<AgentEnhanceReply | null> {

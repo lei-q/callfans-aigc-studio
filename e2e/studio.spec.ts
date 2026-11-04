@@ -65,6 +65,15 @@ test.afterEach(() => {
 test('首启是干净的：没有示例数据，生成入口引导登录', async ({ page }) => {
   await open(page);
   await expect(page.locator('#cvsWorld .cvs-el')).toHaveCount(0);
+  /* 首屏不预填示例提示词 */
+  await expect(page.locator('.composer-card .prompt-input')).toHaveValue('');
+  /* 未登录时三种创作都要提示登录或切自定义渠道，而不是只提示音频 */
+  for (const label of ['图像创作', '视频创作', '音频创作']) {
+    await page.locator('.side-item', { hasText: label }).click();
+    const note = page.locator('.composer-card .channel-note');
+    await expect(note).toContainText('登录后才能用平台点数生成');
+    await expect(note.locator('.btn', { hasText: '去登录' })).toBeVisible();
+  }
   await page.locator('.side-item', { hasText: '素材库' }).click();
   await expect(page.locator('.result-card')).toHaveCount(0);
   await page.locator('.side-item', { hasText: '创作' }).first().click();

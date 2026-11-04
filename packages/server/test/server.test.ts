@@ -161,15 +161,31 @@ describe('云端网关生成', () => {
 });
 
 describe('AI 辅助真调模型', () => {
+  it('未登录没有文本模型时直接报错，不返回预置示例', async () => {
+    const core = await makeCore();
+    const { optimizePrompt } = await import('../src/assist');
+    await expect(optimizePrompt(core, 'image', '秋季新品海报')).rejects.toThrow(/文本模型/);
+  });
+
   it('登录后「帮我写详细」走云端对话', async () => {
     const core = await makeCore();
     const { optimizePrompt } = await import('../src/assist');
-    const off = optimizePrompt(core, 'image', '秋季新品海报');
-    expect((await off).llm).toBe(false);
     await login(core);
     const r = await optimizePrompt(core, 'image', '秋季新品海报');
     expect(r.llm).toBe(true);
+    expect(r.mode).toBe('expand');
     expect(r.result).toContain('秋季新品海报');
+  });
+
+  it('提示词很长时让模型补充细节', async () => {
+    const core = await makeCore();
+    const { optimizePrompt } = await import('../src/assist');
+    await login(core);
+    const r = await optimizePrompt(core, 'video', '夜晚的海边，浪花拍打礁石，镜头从远景慢慢推近到人物侧脸，最后停在她的眼睛上');
+    expect(r.llm).toBe(true);
+    expect(r.mode).toBe('add');
+    expect(r.add.length).toBeGreaterThan(0);
+    expect(r.result).toBe('');
   });
 });
 

@@ -5,7 +5,6 @@ import {
   MAX_REFS,
   PLATFORM_DEFAULT,
   PLATFORMS,
-  SEED_PROMPTS,
   TYPES,
   agentParamText,
   agentReadBoard,
@@ -1124,8 +1123,7 @@ export function canvasUse(type: MediaType) {
     if (texts.length) {
       const joined = texts.map((i) => (i.text || '').trim()).join('，');
       const cur = (st.prompt[type] || '').trim();
-      const isSeed = !cur || cur === SEED_PROMPTS[type].trim();
-      st.prompt[type] = isSeed ? joined : `${cur}，${joined}`;
+      st.prompt[type] = cur ? `${cur}，${joined}` : joined;
     }
     st.type = type;
     st.page = 'studio';

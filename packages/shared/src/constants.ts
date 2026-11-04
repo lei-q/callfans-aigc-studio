@@ -40,36 +40,8 @@ export const SFX_DURS = [{ k: 5, n: '5 秒' }, { k: 8, n: '8 秒' }];
 export const AUDIO_USES: [AudioUse, string, string][] = [['tts', '配音', 'mic'], ['music', '音乐', 'audio'], ['sfx', '音效', 'zap']];
 export const LANGS = ['中文', '英文', '中英混读'];
 
-export const PROMPT_OPTIMIZE: Record<MediaType, { expand: string; add: string; neg: string; note: string }> = {
-  image: {
-    expand: '真实摄影质感，柔和自然光与极轻落地阴影，主体居中并留出标题安全区，浅景深，材质细节清晰',
-    add: '顶部柔光 + 浅景深 f/2.0 + 微距质感细节，中心构图，留出文字安全区',
-    neg: '模糊, 多余文字, 低分辨率, 结构变形, 水印',
-    note: '补充光线与镜头信息，并补上通用负面词，出图稳定性更高。',
-  },
-  video: {
-    expand: '缓慢推近运镜，黄金时刻光线，浅景深，轻微电影颗粒，画面稳定无抖动，首尾衔接自然',
-    add: '缓慢推近运镜，6 秒时长，24fps，轻微电影颗粒，首尾衔接自然',
-    neg: '画面抖动, 闪烁, 结构错位, 肢体畸变',
-    note: '补充运镜与帧率约束，可减少帧间跳变和结构漂移。',
-  },
-  audio: {
-    expand: '语速中等偏慢，语气自然亲近，句间留白 0.4 秒，底噪干净，峰值控制在 -3dB',
-    add: '语速中等，句间留白 0.4 秒，底噪 -28dB，峰值 -3dB',
-    neg: '爆音, 齿音过重, 音量跳变, 背景嗡鸣',
-    note: '补充朗读与混音约束，导出后可直接进入剪辑。',
-  },
-};
-
 /** 描述偏短时走「扩写」，而不是只追加术语；这是新手最容易卡住的一步 */
 export const EXPAND_THRESHOLD = 24;
-
-/** 首屏预填的示例提示词 */
-export const SEED_PROMPTS: Record<MediaType, string> = {
-  image: '暖橙主色背景，哑光纸杯与咖啡豆居中，顶部柔光，奶油色高光，留出标题安全区',
-  video: '城市街头跟拍，人物手持咖啡杯，黄金时刻逆光，浅景深，胶片颗粒',
-  audio: '深夜电台片头：低沉男声导读，语气亲近，舒缓弦乐垫底，句间留白 0.4 秒',
-};
 
 /** 多平台适配：每个比例重新构图，不是裁剪 */
 export const PLATFORMS = [

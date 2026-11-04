@@ -9,7 +9,6 @@ import {
   MOODS,
   RATIOS,
   RESOS,
-  SEED_PROMPTS,
   SFX_DURS,
   TYPES,
   VIDEO_RATIOS,
@@ -170,12 +169,13 @@ function Composer() {
   const usageBilling = !!m?.usageBilling;
   const fastsso = s.settings?.account.provider === 'fastsso';
   const route = routeInfo(s, t, t === 'audio' ? p.use : undefined);
+  const directChannel = s.settings?.channel === 'direct';
+  const needLogin = route.kind === null && !s.session?.loggedIn && !directChannel;
   const enough = usageBilling ? route.kind === 'cloud' : route.kind === 'direct' ? true : route.kind === 'cloud' ? canAfford(s, cost) : false;
   const opt = s.optimize;
   const prompt = s.prompt[t];
   const plen = prompt.trim().length;
   const thin = plen < EXPAND_THRESHOLD;
-  const seeded = prompt === SEED_PROMPTS[t];
   const free = dailyFreeLeft(s);
   const refs = s.refs[t];
   const models = modelsFor(s, t, t === 'audio' ? p.use : undefined);
@@ -203,12 +203,6 @@ function Composer() {
               <Icon name="pen" />
               {t === 'audio' && p.use === 'tts' ? '配音文案' : '提示词'}
             </span>
-            {seeded && (
-              <span className="chip outline">
-                <Icon name="sparkles" />
-                示例内容，可直接改或清空
-              </span>
-            )}
             {opt && (
               <span className="ai-suggest">
                 <Icon name="sparkles" />
@@ -336,7 +330,20 @@ function Composer() {
             </span>
             <span className="field-hint">{models.length ? m.note : ''}</span>
           </div>
-          {models.length ? (
+          {route.kind === null && (
+            <div className="channel-note">
+              <Icon name="alert" />
+              <span>{route.reason}</span>
+              <button
+                className="btn sm primary"
+                onClick={() => (needLogin ? openDrawer('account') : switchPage('models'))}
+              >
+                <Icon name={needLogin ? 'user' : directChannel ? 'cpu' : 'coins'} />
+                {needLogin ? '去登录' : directChannel ? '去配置渠道' : '查看模型'}
+              </button>
+            </div>
+          )}
+          {models.length > 0 && (
             <select className="form-select" value={p.model} onChange={(e) => changeModel(e.target.value)}>
               {models.map((x) => (
                 <option key={x.id} value={x.id} disabled={x.status !== 'on'}>
@@ -345,17 +352,6 @@ function Composer() {
                 </option>
               ))}
             </select>
-          ) : (
-            <div className="channel-note">
-              <Icon name="alert" />
-              <span>{route.kind === null ? route.reason : `当前没有可用的${T.name}模型，到「设置」里刷新模型列表。`}</span>
-              {route.kind === null && (
-                <button className="btn sm primary" onClick={() => openDrawer(s.session?.loggedIn ? 'topup' : 'account')}>
-                  <Icon name={s.session?.loggedIn ? 'coins' : 'user'} />
-                  {s.session?.loggedIn ? '去充值' : '去登录'}
-                </button>
-              )}
-            </div>
           )}
           <Params t={t} />
         </div>
