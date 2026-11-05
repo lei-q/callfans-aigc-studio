@@ -310,10 +310,12 @@ export function ModelsPage() {
           </span>
         </div>
         <span className="grow" />
-        <button className="btn primary" onClick={() => openDrawer('topup')}>
-          <Icon name="coins" />
-          充值点数
-        </button>
+        {s.session?.accountMode !== 'enterprise' && (
+          <button className="btn primary" onClick={() => openDrawer('topup')}>
+            <Icon name="coins" />
+            充值点数
+          </button>
+        )}
       </div>
 
       <div className="catalog-sec">
@@ -667,13 +669,17 @@ export function SettingsPage() {
                 <div className="grow">
                   <b>{s.session?.profile?.nickname}</b>
                   <span className="tiny dim">
-                    {s.session?.profile?.phoneMasked} · 余额 {balance(s)} 点 · 今日免费 {round1(s.wallet?.freeToday || 0)} 点
+                    {s.session?.accountMode === 'enterprise'
+                      ? `${s.session?.tenant?.name || '企业'} 员工 · 余额 ${balance(s)} 点 · 由企业账户结算`
+                      : `${s.session?.profile?.phoneMasked} · 余额 ${balance(s)} 点 · 今日免费 ${round1(s.wallet?.freeToday || 0)} 点`}
                   </span>
                 </div>
-                <button className="btn primary sm" onClick={() => openDrawer('topup')}>
-                  <Icon name="coins" />
-                  充值
-                </button>
+                {s.session?.accountMode !== 'enterprise' && (
+                  <button className="btn primary sm" onClick={() => openDrawer('topup')}>
+                    <Icon name="coins" />
+                    充值
+                  </button>
+                )}
                 <button className="btn ghost sm" onClick={() => void logout()}>
                   退出登录
                 </button>

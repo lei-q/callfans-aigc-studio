@@ -413,9 +413,13 @@ function Composer() {
             {usageBilling ? ' · 按实际用量' : ` · ${cost} 点`}
           </button>
         ) : (
-          <button className="btn primary gen-btn" onClick={() => openDrawer('topup')} style={{ background: 'var(--amber)' }}>
+          <button className="btn primary gen-btn" onClick={() => openDrawer(s.session?.accountMode === 'enterprise' ? 'account' : 'topup')} style={{ background: 'var(--amber)' }}>
             <Icon name="coins" />
-            {topupOpen(s) ? '点数不足 · 去充值' : '点数不足 · 充值暂未开放'}
+            {s.session?.accountMode === 'enterprise'
+              ? '点数不足 · 联系租户管理员'
+              : topupOpen(s)
+                ? '点数不足 · 去充值'
+                : '点数不足 · 充值暂未开放'}
           </button>
         )}
         <div className="tiny dim">

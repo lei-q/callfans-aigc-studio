@@ -1,5 +1,6 @@
 import type {
   AccountConfig,
+  AccountMode,
   CloudMeta,
   DevicePollReply,
   LoginStartReply,
@@ -10,15 +11,18 @@ import type {
   UserProfile,
   WalletDto,
 } from '@aigc/shared';
+import { enterpriseClientIdOf, enterpriseIssuerOf } from '@aigc/shared';
 import { callbackPage, startCallbackServer, type CallbackHandle, type CallbackResult, type CallbackReply } from './callback';
 import {
   ConsumerClient,
   ConsumerError,
+  mapAppProfile,
   mapBalance,
   mapChannels,
   mapOrder,
   mapProfile,
   mapSku,
+  type FssAppMe,
   type FssBalance,
   type FssChannels,
   type FssLlmKey,
@@ -37,9 +41,10 @@ import type { Store } from '../store';
 /* ============================================================================
    Fast-SSO 账号会话：
    - 授权码 + PKCE 登录，回环回调由本机服务临时监听；
-   - access token 只在内存，refresh token 加密落盘；
-   - 余额 / 档位 / 渠道 / 订单来自 /api/v1/consumer/*；
-   - 注册与找回密码走 /api/v1/public/consumer/*。
+   - 两个入口共用同一套客户端：个人账号走 consumer Realm，
+     企业员工走 business Realm，登录后一律用 /app/** 统一契约；
+   - access token 只在内存，refresh token 加密落盘（含登录入口）；
+   - 余额 / 准入来自 /app/**；充值与订单只对个人账号开放。
    ========================================================================== */
 
 export type SessionStatus = 'logged_out' | 'pending' | 'logged_in';
@@ -52,12 +57,15 @@ interface StoredTokens {
   expiresAt: number;
   /** ms；0 = 未知 */
   refreshExpiresAt?: number;
+  /** 签发令牌的入口；旧会话没有这个字段，按个人账号处理 */
+  mode?: AccountMode;
 }
 
 interface PendingLogin {
   state: string;
   nonce: string;
   verifier: string;
+  mode: AccountMode;
   createdAt: number;
   server: CallbackHandle | null;
   timer: NodeJS.Timeout | null;
@@ -74,12 +82,16 @@ export class AccountSession {
   wallet: WalletDto | null = null;
   payChannels: PayChannel[] | undefined = undefined;
   reachable: boolean | null = null;
+  /** 当前（或正在发起的）登录入口 */
+  mode: AccountMode = 'consumer';
 
   private tokens: StoredTokens | null = null;
   private pending: PendingLogin | null = null;
   private refreshing: Promise<StoredTokens | null> | null = null;
   private oidc: OidcClient | null = null;
   private oidcKey = '';
+  /** /app/me 的统一身份；个人账号兜底老的 /consumer/me 时为 null */
+  private appMe: FssAppMe | null = null;
   /** 订单 → 最近一次 prepay 返回的二维码内容；订单查询本身不带 codeUrl */
   private prepayCodes = new Map<string, string>();
   private skusCache: { value: PackDto[]; at: number } | null = null;
@@ -110,11 +122,16 @@ export class AccountSession {
     return this.config();
   }
 
-  private client() {
+  private client(mode: AccountMode = this.mode) {
     const c = this.cfg;
-    const key = `${c.issuer}|${c.clientId}`;
+    const issuer = mode === 'enterprise' ? enterpriseIssuerOf(c) : c.issuer.replace(/\/+$/, '');
+    if (!issuer) {
+      throw new ConsumerError(503, '还没有配置企业登录入口，请联系平台管理员');
+    }
+    const clientId = mode === 'enterprise' ? enterpriseClientIdOf(c) : c.clientId;
+    const key = `${mode}|${issuer}|${clientId}`;
     if (!this.oidc || key !== this.oidcKey) {
-      this.oidc = new OidcClient(c.issuer, c.clientId);
+      this.oidc = new OidcClient(issuer, clientId);
       this.oidcKey = key;
     }
     return this.oidc;
@@ -131,6 +148,7 @@ export class AccountSession {
       return;
     }
     this.tokens = stored;
+    this.mode = stored.mode === 'enterprise' ? 'enterprise' : 'consumer';
     try {
       if (stored.expiresAt <= Date.now() + CLOCK_SKEW_MS) {
         const fresh = await this.refresh();
@@ -150,22 +168,29 @@ export class AccountSession {
 
   /* ---------------- 登录：授权码 + PKCE ---------------- */
 
-  async loginStart(_client?: 'desktop' | 'web', _deviceName?: string): Promise<LoginStartReply> {
+  async loginStart(
+    _client?: 'desktop' | 'web',
+    _deviceName?: string,
+    mode: AccountMode = 'consumer',
+  ): Promise<LoginStartReply> {
     await this.closePending();
     const c = this.cfg;
+    this.mode = mode === 'enterprise' ? 'enterprise' : 'consumer';
+    const oidc = this.client(this.mode);
     const state = randomToken(24);
     const nonce = randomToken(24);
     const verifier = randomToken(48);
     /* 先拿 Discovery：连不上时直接给出可读错误，不留下监听 */
-    await this.client().discovery();
+    await oidc.discovery();
     this.reachable = true;
 
     const server = await startCallbackServer(c.redirectUri, (r) => this.onCallback(r));
-    const loginUrl = await this.client().authorizeUrl({ redirectUri: c.redirectUri, state, nonce, verifier });
+    const loginUrl = await oidc.authorizeUrl({ redirectUri: c.redirectUri, state, nonce, verifier });
     const pending: PendingLogin = {
       state,
       nonce,
       verifier,
+      mode: this.mode,
       createdAt: Date.now(),
       server,
       timer: null,
@@ -204,8 +229,10 @@ export class AccountSession {
       return { status: 400, html: callbackPage({ ok: false, title: '没有拿到授权码', message: '请回到应用重新点「登录」。' }) };
     }
     try {
-      const tokens = await this.client().exchangeCode({ code: r.code, verifier: pending.verifier, redirectUri: this.cfg.redirectUri });
-      if (tokens.id_token) await this.client().verifyIdToken(tokens.id_token, { nonce: pending.nonce });
+      const oidc = this.client(pending.mode);
+      const tokens = await oidc.exchangeCode({ code: r.code, verifier: pending.verifier, redirectUri: this.cfg.redirectUri });
+      if (tokens.id_token) await oidc.verifyIdToken(tokens.id_token, { nonce: pending.nonce });
+      this.mode = pending.mode;
       this.applyTokens(tokens);
       await this.fetchProfile();
       this.status = 'logged_in';
@@ -282,6 +309,7 @@ export class AccountSession {
       idToken: t.id_token || this.tokens?.idToken,
       expiresAt: now + (t.expires_in || 900) * 1000,
       refreshExpiresAt: t.refresh_expires_in ? now + t.refresh_expires_in * 1000 : this.tokens?.refreshExpiresAt,
+      mode: this.mode,
     };
     this.store.accountSession = this.secrets.encrypt(JSON.stringify(this.tokens));
   }
@@ -313,6 +341,8 @@ export class AccountSession {
     this.tokens = null;
     this.profile = null;
     this.wallet = null;
+    this.appMe = null;
+    this.mode = 'consumer';
     this.payChannels = undefined;
     this.skusCache = null;
     this.prepayCodes.clear();
@@ -331,19 +361,39 @@ export class AccountSession {
   /* ---------------- 资料 / 余额 / 渠道 ---------------- */
 
   private async fetchProfile() {
-    const me = await this.api.request<FssMe>('/consumer/me');
-    this.profile = mapProfile(me);
+    try {
+      const me = await this.api.request<FssAppMe>('/app/me');
+      this.appMe = me;
+      this.mode = me.mode === 'enterprise' ? 'enterprise' : 'consumer';
+      this.profile = mapAppProfile(me);
+    } catch (e) {
+      /* 老版账号服务还没有 /app/**：个人账号退回 /consumer/me，企业登录则需要新版 */
+      if (!(e instanceof ConsumerError) || e.status !== 404 || this.mode !== 'consumer') throw e;
+      const me = await this.api.request<FssMe>('/consumer/me');
+      this.appMe = null;
+      this.profile = mapProfile(me);
+    }
   }
 
   async refreshWallet(): Promise<WalletDto | null> {
     if (!this.loggedIn && !this.tokens) return null;
     try {
-      const b = await this.api.request<FssBalance>('/consumer/entitlements/balance');
+      const b = await this.appRequest<FssBalance>('/app/entitlements/balance', '/consumer/entitlements/balance');
       this.setWallet(mapBalance(b));
       return this.wallet;
     } catch (e) {
       if (e instanceof ConsumerError && e.isAuth) this.setLoggedOut('登录已失效');
       throw e;
+    }
+  }
+
+  /** 统一契约优先；只有老版账号服务（404）的个人账号才退回 /consumer/** */
+  private async appRequest<T>(appPath: string, consumerPath: string, init?: Parameters<ConsumerClient['request']>[1]): Promise<T> {
+    try {
+      return await this.api.request<T>(appPath, init);
+    } catch (e) {
+      if (!(e instanceof ConsumerError) || e.status !== 404 || this.mode === 'enterprise') throw e;
+      return this.api.request<T>(consumerPath, init);
     }
   }
 
@@ -354,6 +404,12 @@ export class AccountSession {
 
   async refreshChannels(): Promise<PayChannel[] | undefined> {
     if (!this.tokens) return this.payChannels;
+    /* 企业员工不在应用内充值：用量由租户账户承担 */
+    if (this.mode === 'enterprise') {
+      this.payChannels = [];
+      this.emitSession();
+      return this.payChannels;
+    }
     try {
       const r = await this.api.request<FssChannels>('/consumer/recharge/channels');
       this.payChannels = mapChannels(r);
@@ -367,9 +423,10 @@ export class AccountSession {
   /* ---------------- 平台模型：长期密钥 + 对话 ---------------- */
 
   /**
-   * 该账号在本应用里的长期 LiteLLM 密钥。
-   * 本地有副本就直接用；没有才向账号服务换一次（每个用户每个应用只有一把）。
-   * 409 litellm_key_exists = 平台已有、本机丢了：不重试，提示人工吊销。
+   * 该账号在本应用、本机上的长期 LiteLLM 密钥。
+   * 本地有副本就直接用；没有才向账号服务换一次（每个用户、每个应用、每台设备一把）。
+   * 409 litellm_key_exists = 平台已为本机签发过、但本机副本丢了：带 recover
+   * 再换一次，平台只吊销本机那一把，其他设备手里的密钥不受影响。
    * key 只留在后端（加密落库），绝不返回给前端。
    */
   async llmKey(): Promise<string> {
@@ -378,19 +435,29 @@ export class AccountSession {
     const held = this.secrets.decrypt(this.store.llmKeyOf(userId));
     if (held) return held;
     if (this.keyPending) return this.keyPending;
-    const p = (async () => {
+    const deviceId = this.store.deviceFingerprint;
+    const exchange = (recover: boolean) =>
+      this.appRequest<FssLlmKey>('/app/llm-keys', '/consumer/llm-keys', {
+        method: 'POST',
+        json: { deviceId, recover },
+        timeoutMs: 25_000,
+      });
+    const issue = async (): Promise<FssLlmKey> => {
       try {
-        const r = await this.api.request<FssLlmKey>('/consumer/llm-keys', { method: 'POST', timeoutMs: 25_000 });
-        if (!r?.key) throw new ConsumerError(502, '账号服务没有返回模型密钥');
-        this.store.setLlmKey(userId, this.secrets.encrypt(r.key));
-        return r.key;
+        return await exchange(false);
       } catch (e) {
-        if (e instanceof ConsumerError && e.status === 409) {
-          if (e.code === 'billing_account_provisioning') throw new ConsumerError(409, '权益账户正在开通，约 30 秒后再试');
-          if (e.code === 'litellm_key_exists') throw new ConsumerError(409, '平台已为该账号签发过模型密钥，但本机没有副本：请先让平台吊销，再重新登录申请');
-        }
+        if (!(e instanceof ConsumerError) || e.status !== 409) throw e;
+        if (e.code === 'billing_account_provisioning') throw new ConsumerError(409, '权益账户正在开通，约 30 秒后再试');
+        // 本机副本已丢：补发只影响本设备这一把，因此可以自愈。
+        if (e.code === 'litellm_key_exists') return exchange(true);
         throw e;
       }
+    };
+    const p = (async () => {
+      const r = await issue();
+      if (!r?.key) throw new ConsumerError(502, '账号服务没有返回模型密钥');
+      this.store.setLlmKey(userId, this.secrets.encrypt(r.key));
+      return r.key;
     })();
     this.keyPending = p;
     try {
@@ -500,14 +567,24 @@ export class AccountSession {
   }
 
   info(): SessionInfo {
+    const enterprise = this.mode === 'enterprise';
+    const tenant =
+      enterprise && this.appMe?.tenantId
+        ? { id: this.appMe.tenantId, name: this.appMe.tenantName || this.appMe.tenantId }
+        : undefined;
     return {
       loggedIn: this.loggedIn,
       profile: this.profile || undefined,
       cloudReachable: this.reachable !== false,
       cloudMessage: this.reachable === false ? '连不上账号服务：检查网络后到「设置 · 账号」重试' : undefined,
-      payChannels: this.payChannels,
+      payChannels: enterprise ? [] : this.payChannels,
       loginMode: 'browser',
-      registerEnabled: true,
+      registerEnabled: !enterprise,
+      /* 未登录时也告诉界面当前入口，登录按钮据此展示 */
+      accountMode: this.loggedIn ? this.mode : undefined,
+      tenant,
+      apps: enterprise ? this.appMe?.apps || [] : undefined,
+      roles: enterprise ? this.appMe?.roles || [] : undefined,
     };
   }
 
@@ -528,6 +605,7 @@ export class AccountSession {
   }
 
   async createOrder(input: { packId?: string; points?: number; channel: PayChannel; idempotencyKey: string }): Promise<OrderDto> {
+    this.requireConsumer('在应用内充值');
     /* 临时测试入口：直接按点数下单（1 点 = ¥1），不走档位。
        平台侧目前仍会校验 credits 必须是已开通档位，放开校验前这里会收到 400。 */
     let credits: number;
@@ -551,6 +629,7 @@ export class AccountSession {
   }
 
   async prepay(orderId: string): Promise<{ order: OrderDto; codeUrl: string }> {
+    this.requireConsumer('在应用内充值');
     const p = await this.api.request<FssPrepay>(`/consumer/recharge/orders/${encodeURIComponent(orderId)}/prepay`, {
       method: 'POST',
       timeoutMs: 25_000,
@@ -598,6 +677,13 @@ export class AccountSession {
   }
 
   /* ---------------- 注册 / 找回密码 ---------------- */
+
+  /** 充值是个人账号的能力；企业员工的用量记在租户账户上 */
+  private requireConsumer(action: string) {
+    if (this.mode === 'enterprise') {
+      throw new ConsumerError(403, `企业员工账号由租户统一结算，不能${action}；额度不足请联系租户管理员`);
+    }
+  }
 
   private get fp() {
     return this.store.deviceFingerprint;
@@ -656,8 +742,9 @@ export class AccountSession {
 
   async logout() {
     const refreshToken = this.tokens?.refreshToken;
+    const mode = this.mode;
     this.clear();
-    if (refreshToken) await this.client().revoke(refreshToken).catch(() => {});
+    if (refreshToken) await this.client(mode).revoke(refreshToken).catch(() => {});
   }
 
   stop() {
@@ -683,6 +770,7 @@ function parseTokens(raw: string): StoredTokens | null {
       idToken: t.idToken,
       expiresAt: t.expiresAt || 0,
       refreshExpiresAt: t.refreshExpiresAt,
+      mode: t.mode === 'enterprise' ? 'enterprise' : 'consumer',
     };
   } catch {
     return null;

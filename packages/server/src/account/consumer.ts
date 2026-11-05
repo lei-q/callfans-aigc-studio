@@ -1,9 +1,10 @@
 import type { OrderDto, PackDto, PayChannel, UserProfile, WalletDto } from '@aigc/shared';
 
 /* ============================================================================
-   Fast-SSO consumer API 客户端与 DTO 映射。
+   Fast-SSO 账号 API 客户端与 DTO 映射。
    基址：https://account.callfansai.com/api/v1
-   只允许调 /consumer/** 与 /public/**；令牌越界会被服务端 403 consumer_scope。
+   登录、身份、余额、模型密钥走 /app/**（个人账号与企业员工共用）；
+   充值与订单仍只有个人账号可用的 /consumer/**；注册找回走 /public/**。
    ========================================================================== */
 
 export class ConsumerError extends Error {
@@ -106,6 +107,25 @@ export interface FssMe {
   createdAt?: string | null;
 }
 
+/**
+ * GET /app/me：一方应用的统一契约。个人账号与企业员工是同一个形状，
+ * 只有 mode / tenantId / tenantName 不同，所以账号层不用按 Realm 分叉。
+ */
+export interface FssAppMe {
+  userId: string;
+  username: string;
+  displayName?: string | null;
+  email?: string | null;
+  realm?: string;
+  /** consumer = 个人账号；enterprise = 企业员工 */
+  mode?: string;
+  appId?: string | null;
+  tenantId?: string | null;
+  tenantName?: string | null;
+  apps?: string[];
+  roles?: string[];
+}
+
 export interface FssBalance {
   accountId: string;
   appId?: string;
@@ -200,6 +220,14 @@ export function mapProfile(me: FssMe): UserProfile {
     nickname: me.displayName || me.username || '账号',
     phoneMasked: maskPhone(me.phone),
     createdAt: me.createdAt ? Date.parse(me.createdAt) : Date.now(),
+  };
+}
+
+export function mapAppProfile(me: FssAppMe): UserProfile {
+  return {
+    id: me.userId,
+    nickname: me.displayName || me.username || '账号',
+    createdAt: Date.now(),
   };
 }
 

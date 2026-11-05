@@ -82,9 +82,11 @@ export interface StoredApiKey extends ApiKey {
 export const DEFAULT_ACCOUNT: AccountConfig = {
   provider: (process.env.AIGC_ACCOUNT_PROVIDER === 'mock' ? 'mock' : 'fastsso') as AccountProvider,
   issuer: process.env.AIGC_SSO_ISSUER || 'https://sso.callfansai.com/realms/consumer',
+  enterpriseIssuer: process.env.AIGC_SSO_ENTERPRISE_ISSUER || '',
   apiBase: process.env.AIGC_ACCOUNT_API || 'https://account.callfansai.com/api/v1',
   gatewayBase: process.env.AIGC_GATEWAY_URL || 'https://api.callfansai.com',
   clientId: process.env.AIGC_SSO_CLIENT_ID || 'aigc-callfans',
+  enterpriseClientId: process.env.AIGC_SSO_ENTERPRISE_CLIENT_ID || '',
   redirectUri: process.env.AIGC_SSO_REDIRECT || 'http://127.0.0.1:5781/auth/callback',
 };
 

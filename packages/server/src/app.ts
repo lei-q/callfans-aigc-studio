@@ -196,8 +196,9 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
 
   app.get('/api/auth/session', async () => ({ session: core.sessionInfo(), wallet: core.account.wallet }));
   app.post('/api/auth/login', async (req) => {
-    const body = (req.body || {}) as { deviceName?: string };
-    return core.account.loginStart(core.opts.desktop ? 'desktop' : 'web', body.deviceName).catch((e) => {
+    const body = (req.body || {}) as { deviceName?: string; mode?: string };
+    const mode = body.mode === 'enterprise' ? 'enterprise' : 'consumer';
+    return core.account.loginStart(core.opts.desktop ? 'desktop' : 'web', body.deviceName, mode).catch((e) => {
       throw fastsso ? accountErr(e) : cloudErr(e);
     });
   });

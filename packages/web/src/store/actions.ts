@@ -1,4 +1,5 @@
 import type {
+  AccountMode,
   AestheticItem,
   CreateJobBody,
   DevicePollReply,
@@ -752,13 +753,13 @@ export const canAfford = (s: State, cost: number) => affordable(s.wallet, cost);
 
 /* ---------------- 账号：Fast-SSO（授权码 + PKCE）/ Mock 云设备码 ---------------- */
 
-export async function loginStart() {
+export async function loginStart(mode: AccountMode = 'consumer') {
   setState((st) => {
     st.loginError = null;
     st.loginFlow = null;
   });
   try {
-    const r = await api.post<LoginStartReply>('/api/auth/login', {});
+    const r = await api.post<LoginStartReply>('/api/auth/login', { mode });
     setState((st) => void (st.loginFlow = { ...r, startedAt: Date.now() }));
     window.open(r.loginUrl, '_blank', 'noopener');
     void loginPollLoop();

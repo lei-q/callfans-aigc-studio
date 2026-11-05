@@ -2,7 +2,7 @@
    领域类型：服务端与前端共用的一份数据合同
    ========================================================================== */
 import type { OrderDto, PayChannel, UserProfile, WalletDto } from './cloud';
-import type { AccountConfig } from './account';
+import type { AccountConfig, AccountMode } from './account';
 
 export type MediaType = 'image' | 'video' | 'audio';
 export type ResKey = '1080p' | '2k' | '4k';
@@ -362,6 +362,14 @@ export interface SessionInfo {
   loginMode?: 'browser' | 'device';
   /** 是否支持在应用内注册 / 找回密码（Fast-SSO 账号服务） */
   registerEnabled?: boolean;
+  /** 当前登录入口：个人账号或企业员工；未登录为 undefined */
+  accountMode?: AccountMode;
+  /** 企业模式下令牌所属租户 */
+  tenant?: { id: string; name: string };
+  /** 企业模式下当前账号已准入的应用 */
+  apps?: string[];
+  /** 企业模式下当前账号的租户角色 */
+  roles?: string[];
 }
 
 export interface Bootstrap {

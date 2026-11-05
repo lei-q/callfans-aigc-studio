@@ -872,9 +872,21 @@ function AccountDrawer() {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   if (s.session?.loggedIn) {
     const p = s.session.profile;
+    const enterprise = s.session.accountMode === 'enterprise';
+    const tenant = s.session.tenant;
     return (
       <>
-        <Head ic="user" title={p?.nickname || '已登录'} sub={<span>{p?.phoneMasked || '云端账号'} · 点数跟着账号走，换设备不丢</span>} />
+        <Head
+          ic="user"
+          title={p?.nickname || '已登录'}
+          sub={
+            enterprise ? (
+              <span>{tenant?.name || '企业'} · 员工账号 · 用量由企业账户承担</span>
+            ) : (
+              <span>{p?.phoneMasked || '云端账号'} · 点数跟着账号走，换设备不丢</span>
+            )
+          }
+        />
         <div className="drawer-body">
           <div className="d-section">
             <div className="wallet-card">
@@ -886,27 +898,60 @@ function AccountDrawer() {
                 </div>
               </div>
               <div className="wc-side">
-                <div className="tiny dim">今日免费 {dailyFreeLeft(s)} 点</div>
-                <div className="wc-split">
-                  <span>1 点 = ¥1</span>
-                  <span>点数不过期</span>
-                </div>
+                {enterprise ? (
+                  <>
+                    <div className="tiny dim">{tenant?.name || '企业账户'}</div>
+                    <div className="wc-split">
+                      <span>企业统一结算</span>
+                      <span>额度联系管理员</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="tiny dim">今日免费 {dailyFreeLeft(s)} 点</div>
+                    <div className="wc-split">
+                      <span>1 点 = ¥1</span>
+                      <span>点数不过期</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
-          <div className="d-section">
-            <div className="d-section-title">
-              <Icon name="clock" />
-              最近订单
+          {enterprise ? (
+            <div className="d-section">
+              <div className="d-section-title">
+                <Icon name="shield" />
+                企业准入
+              </div>
+              {s.session.apps?.length ? (
+                <div className="tiny dim">已准入应用：{s.session.apps.join('、')}</div>
+              ) : (
+                <div className="tiny dim">当前账号还没有被授予任何应用。</div>
+              )}
+              {s.session.roles?.length ? (
+                <div className="tiny dim" style={{ marginTop: 6 }}>
+                  角色：{s.session.roles.join('、')}
+                </div>
+              ) : null}
             </div>
-            <OrderList />
-          </div>
+          ) : (
+            <div className="d-section">
+              <div className="d-section-title">
+                <Icon name="clock" />
+                最近订单
+              </div>
+              <OrderList />
+            </div>
+          )}
         </div>
         <div className="drawer-foot">
-          <button className="btn primary" onClick={() => openDrawer('topup')}>
-            <Icon name="coins" />
-            充值
-          </button>
+          {!enterprise && (
+            <button className="btn primary" onClick={() => openDrawer('topup')}>
+              <Icon name="coins" />
+              充值
+            </button>
+          )}
           <span className="grow" />
           <button className="btn ghost" onClick={() => void logout()}>
             退出登录
@@ -917,6 +962,7 @@ function AccountDrawer() {
   }
   const registerEnabled = !!s.session?.registerEnabled;
   const browser = flow?.mode === 'browser';
+  const fastsso = s.settings?.account.provider === 'fastsso';
   return (
     <>
       <Head
@@ -934,15 +980,31 @@ function AccountDrawer() {
                 desc={
                   s.loginError ||
                   (s.settings?.account.provider === 'fastsso'
-                    ? '登录后可以查看余额、充值与订单；生成请在「模型与价格 · 自定义渠道」填自己的 Key。'
+                    ? '个人账号登录后可充值、查看订单；企业员工请用租户管理员开通的账号登录。生成请在「模型与价格 · 自定义渠道」填自己的 Key。'
                     : '登录后才能用平台点数生成；也可以填自己的 TreeCloud Key 走自定义渠道。')
                 }
               >
                 <div className="auth-actions">
-                  <button className="btn primary" onClick={() => void loginStart()}>
-                    <Icon name="user" />
-                    {s.session?.loginMode === 'device' ? '开始登录' : '使用账号登录'}
-                  </button>
+                  {fastsso ? (
+                    <>
+                      <button className="btn primary" onClick={() => void loginStart('consumer')}>
+                        <Icon name="user" />
+                        个人账号登录
+                      </button>
+                      <button className="btn ghost" onClick={() => void loginStart('enterprise')}>
+                        <Icon name="shield" />
+                        企业员工登录
+                      </button>
+                      <span className="tiny dim">
+                        个人账号用手机 / 邮箱；企业员工用租户管理员开通的登录名，用量由企业账户承担。
+                      </span>
+                    </>
+                  ) : (
+                    <button className="btn primary" onClick={() => void loginStart()}>
+                      <Icon name="user" />
+                      {s.session?.loginMode === 'device' ? '开始登录' : '使用账号登录'}
+                    </button>
+                  )}
                   {registerEnabled && (
                     <button className="btn ghost" onClick={() => setMode('register')}>
                       注册新账号
@@ -956,7 +1018,7 @@ function AccountDrawer() {
                   <Icon name="shield" />
                 </div>
                 <b>已在浏览器中打开登录页</b>
-                <span className="tiny dim">在浏览器里完成登录或注册，授权完成后这个抽屉会自动继续。</span>
+                <span className="tiny dim">在浏览器里完成登录，授权完成后这个抽屉会自动继续。</span>
                 <a className="btn ghost" href={flow.loginUrl} target="_blank" rel="noreferrer">
                   重新打开登录页
                 </a>

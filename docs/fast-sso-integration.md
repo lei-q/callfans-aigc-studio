@@ -1,6 +1,8 @@
 # Fast-SSO 账号与充值接入
 
-AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、登录、找回密码、积分与充值都由账号中心提供；登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费），图像与视频生成也走平台网关。「模型与价格」里平台渠道与自定义渠道**二选一**：选平台渠道不用填 Base URL / API Key；生成模型从平台 `/models` 清单按 `mode` 归类，音频媒体暂未开放，需要使用时可切到「自定义渠道」（用户自填 TreeCloud 兼容 Key，存下即启用），文本模型也会跟着渠道一起切换。
+AIGC Studio 是 Fast-SSO 的一方应用，有两个登录入口、同一份账号层：**个人账号**登录 `consumer` Realm，用手机/邮箱注册并自行充值；**企业员工**登录 `business` Realm，由租户管理员开通账号与应用准入，用量记在租户的计费账户上。两个入口签发同一个客户端（`aigc-callfans`）的令牌，登录后一律走 `/api/v1/app/**` 统一契约，应用不需要为两套账号写两套逻辑。
+
+登录后提示词助手与 Agent 走平台模型（`https://api.callfansai.com`，按点数计费），图像与视频生成也走平台网关。「模型与价格」里平台渠道与自定义渠道**二选一**：选平台渠道不用填 Base URL / API Key；生成模型从平台 `/models` 清单按 `mode` 归类，音频媒体暂未开放，需要使用时可切到「自定义渠道」（用户自填 TreeCloud 兼容 Key，存下即启用），文本模型也会跟着渠道一起切换。
 
 ## 架构
 
@@ -9,14 +11,15 @@ AIGC Studio 作为 Fast-SSO `consumer` Realm 的一方应用接入：注册、�
         │  只调本机服务（127.0.0.1:5780）
         ▼
 本机 Fastify 服务（packages/server）
-        │  OIDC 授权码 + PKCE；consumer Bearer Token
+        │  OIDC 授权码 + PKCE；Bearer Token
+        ├── 个人账号 ── https://sso.callfansai.com/realms/consumer
+        └── 企业员工 ── https://sso.callfansai.com/realms/business
         ▼
-https://sso.callfansai.com/realms/consumer
-https://account.callfansai.com/api/v1
+https://account.callfansai.com/api/v1   （/app/** 身份、余额、模型密钥；个人账号另用 /consumer/** 充值）
 ```
 
 - 窗口与浏览器**不直连**账号 API；账号 API 的 CORS 白名单也不包含本机来源。
-- `access_token` 只保存在本机服务内存里；`refresh_token` 用本机密钥（AES-256-GCM）加密后写入 sql.js 存储。
+- `access_token` 只保存在本机服务内存里；`refresh_token` 用本机密钥（AES-256-GCM）加密后写入 sql.js 存储，并记下签发它的入口（`consumer` / `enterprise`），重启后按同一 Realm 刷新。
 - 登录在**系统浏览器**完成，回调由本机固定的 `127.0.0.1:5781` 监听器接收，只接受 `GET /auth/callback`，校验 `state` 后换码，并校验 ID Token（签名、`iss`、`aud`/`azp`、`exp`/`nbf`、`nonce`）。
 - 回环回调要求「浏览器」和「本机服务」在同一台机器上（桌面端、本机 Web 端）。以 `--lan` 暴露给其他设备时，其他设备的浏览器回调会落到它们自己的 5781，登录只能在该服务机本机完成。
 
@@ -24,19 +27,21 @@ https://account.callfansai.com/api/v1
 
 | 项 | 值 |
 | --- | --- |
-| OIDC Issuer | `https://sso.callfansai.com/realms/consumer` |
+| OIDC Issuer（个人） | `https://sso.callfansai.com/realms/consumer` |
+| OIDC Issuer（企业） | `https://sso.callfansai.com/realms/business` |
 | API 根 | `https://account.callfansai.com/api/v1` |
-| 客户端 | `aigc-callfans`（public，无密钥） |
+| 客户端 | `aigc-callfans`（public，无密钥；两个 Realm 各登记一份） |
 | 回调 | `http://127.0.0.1:5781/auth/callback` |
 | 积分 | micro，`1 积分 = 1_000_000 micro`，界面按 `micro / 1e6` 展示 |
-| 渠道 | `huifu` / `wechat` / `alipay`；`mock` 永远不展示 |
+| 渠道 | `huifu` / `wechat` / `alipay`；`mock` 永远不展示；企业员工不开放充值 |
 
 ## 上线前检查
 
 1. Fast-SSO 控制台里该应用 `status=active`、`realm=consumer`、`trust=一方`、`protocol=OIDC`、`clientType=public`。
 2. `redirectUris` 包含 `http://127.0.0.1:5781/auth/callback`（逐字符一致，末尾斜杠也算）。
-3. 若 5781 被其他程序占用，登录会提示端口占用；换端口必须同时改控制台与 `AIGC_SSO_REDIRECT`。
-4. 通过 `AIGC_ACCOUNT_PROVIDER` 以外的环境变量覆盖配置（见下）时，重启应用生效。
+3. 企业入口：`business` Realm 里同名客户端 `aigc-callfans` 已启用，回调与 `webOrigins` 相同，默认 scope 含 `entitled-apps`；`app_client` 表把 `business` / `aigc-callfans` 映射到同一个 `app` 行；企业客户拥有该应用（`tenant_app`），员工被授予准入（`user_app_access`）。
+4. 若 5781 被其他程序占用，登录会提示端口占用；换端口必须同时改控制台与 `AIGC_SSO_REDIRECT`。
+5. 通过 `AIGC_ACCOUNT_PROVIDER` 以外的环境变量覆盖配置（见下）时，重启应用生效。
 
 ## 配置
 
@@ -44,17 +49,19 @@ https://account.callfansai.com/api/v1
 | --- | --- |
 | `AIGC_ACCOUNT_PROVIDER` | `fastsso`（设为 `mock` 时使用开发用 Mock 云） |
 | `AIGC_SSO_ISSUER` | `https://sso.callfansai.com/realms/consumer` |
+| `AIGC_SSO_ENTERPRISE_ISSUER` | 留空时把 `AIGC_SSO_ISSUER` 的 Realm 名换成 `business` |
 | `AIGC_ACCOUNT_API` | `https://account.callfansai.com/api/v1` |
 | `AIGC_SSO_CLIENT_ID` | `aigc-callfans` |
+| `AIGC_SSO_ENTERPRISE_CLIENT_ID` | 留空沿用 `AIGC_SSO_CLIENT_ID` |
 | `AIGC_SSO_REDIRECT` | `http://127.0.0.1:5781/auth/callback` |
 
-设置页「账号与云端」只读展示这四项，并提供「测试连接」（Discovery + `/public/consumer/documents`）。
+设置页「账号与云端」只读展示入口与 API 地址，并提供「测试连接」（Discovery + `/public/consumer/documents`）。
 
 ## 本机服务端点
 
 | 端点 | 说明 |
 | --- | --- |
-| `POST /api/auth/login` | 生成 `state`/`nonce`/PKCE，启动回调监听，返回 `{mode:'browser', loginUrl, expiresIn}` |
+| `POST /api/auth/login` | 生成 `state`/`nonce`/PKCE，启动回调监听，返回 `{mode:'browser', loginUrl, expiresIn}`；请求体 `{mode:'consumer'｜'enterprise'}` 选择入口 |
 | `POST /api/auth/poll` | 登录进度：`pending` / `approved` / `denied` / `expired` |
 | `POST /api/auth/cancel` | 取消并关闭回调监听 |
 | `POST /api/auth/logout` | 撤销 refresh token 并清理本地会话 |
@@ -75,13 +82,30 @@ https://account.callfansai.com/api/v1
 
 ## 上游调用
 
-- Discovery：`{issuer}/.well-known/openid-configuration`（缓存 1 小时）。
+- Discovery：`{issuer}/.well-known/openid-configuration`（缓存 1 小时，按入口分别缓存）。
 - 授权：`scope=openid profile email`、`code_challenge_method=S256`。
-- 账号 API：只调 `/api/v1/consumer/**` 与 `/api/v1/public/**`；其他路径会被 `403 consumer_scope` 拒绝。
-- 充值：`/consumer/recharge/skus` → `/channels` → `POST /orders`（`Idempotency-Key`）→ `POST /orders/{id}/prepay` → 轮询 `GET /orders/{id}`。
+- 统一契约：身份与余额用 `/api/v1/app/me`、`/app/entitlements/balance`，模型密钥用 `POST /app/llm-keys`；个人账号与企业员工走同一组路径。
+  - 个人账号的令牌另可访问 `/api/v1/consumer/**` 与 `/api/v1/public/**`；企业令牌访问 consumer 路径会被拒绝。
+  - 老版账号服务没有 `/app/**`（404）时，个人账号自动退回 `/consumer/me`、`/consumer/entitlements/balance`、`/consumer/llm-keys`；企业入口要求升级后的账号服务。
+- 充值（仅个人账号）：`/consumer/recharge/skus` → `/channels` → `POST /orders`（`Idempotency-Key`）→ `POST /orders/{id}/prepay` → 轮询 `GET /orders/{id}`。
 - 取消：`POST /consumer/recharge/orders/{id}/close`；只有待支付订单能关闭，已支付返回 409。该接口需要账号服务升级到包含 consumer close 的版本。
 - 渠道过滤：只保留 `huifu` / `wechat` / `alipay` 且服务端 `enabled=true`；`mock` 一律不展示。
-- 登录状态以 ID Token 校验通过 + `GET /consumer/entitlements/balance` 成功为准；access token 401 时刷新一次，失败则登出并提示。
+- 登录状态以 ID Token 校验通过 + `/app/entitlements/balance` 成功为准；access token 401 时刷新一次，失败则登出并提示。
+
+## 企业员工模式
+
+登录抽屉提供「个人账号登录」与「企业员工登录」两个按钮，后者用 `business` Realm 的 issuer 和同一个 `clientId` 发起授权码流程。登录成功后：
+
+- `/app/me` 返回 `mode=enterprise`、`tenantId`/`tenantName`、`apps`（已准入应用）、`roles`（租户角色），会话信息随 SSE 同步到界面；账号抽屉展示企业名称与准入范围，不再显示订单与充值。
+- 余额读 `/app/entitlements/balance`，是**租户计费账户**在该应用下的余额，由企业统一结算。
+- 模型密钥用 `POST /app/llm-keys` 换取：服务端按「租户计费账户 + 员工 + 应用 + 设备」签发，撤销员工准入后下一次申请即失败。
+- 关键错误码（均来自 `/app/**`，`code` 字段稳定）：
+  - `403 app_not_entitled`：员工未被授予该应用准入，提示联系租户管理员；
+  - `403 app_not_registered`：令牌里的 `azp` 在 `app_client` 没有登记；
+  - `403 account_disabled`：员工账号已停用；
+  - `409 billing_account_inactive`：租户计费账户不可用，联系平台管理员；
+  - `403 app_scope_mismatch`：请求了其他应用的积分。
+- 企业员工不能注册、找回密码或在应用内充值；账号由租户管理员在控制台「员工目录」创建与重置。
 
 ## 开发与测试
 
@@ -97,8 +121,9 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 
 - 清单：`GET {gatewayBase}/models`，免令牌，缓存 60 秒；`gatewayBase` 默认 `https://api.callfansai.com`，可用 `AIGC_GATEWAY_URL` 覆盖。
 - 选模型：`AIGC_CHAT_MODEL` →「模型与价格 · 文本模型」里选的（平台渠道）→ 内置偏好（`deepseek-v4.1-flash-1017`、`claude-haiku-5-5`、`gpt-6-luna`）→ 最便宜的 openai 协议对话模型；不写死。
-- 密钥：`POST /consumer/llm-keys` 用 consumer token 换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。
-  - 409 `billing_account_provisioning` → 约 30 秒后重试；409 `litellm_key_exists` → 本地副本丢了，先让平台吊销再换，不重试。
+- 密钥：`POST /app/llm-keys`（个人账号为 `/consumer/llm-keys` 的兼容回退）用当前令牌换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。
+  - 409 `billing_account_provisioning` → 约 30 秒后重试。
+  - 409 `litellm_key_exists` → 平台已为本机签发过、但本机副本丢了：带 `recover:true` 自动补发一次（只影响本设备这一把）；补发仍冲突时把服务端信息原样上报。
 - 调用：`POST {gatewayBase}/v1/chat/completions`；401 丢本地副本重换一次，422 = 积分不足。
 - 失败时提示词辅助回退到规则推断，并在响应里带上原因。
 

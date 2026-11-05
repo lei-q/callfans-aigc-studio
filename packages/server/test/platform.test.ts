@@ -161,7 +161,7 @@ describe('平台媒体模型与生成', () => {
         const u = String(url);
         calls.push({ url: u, auth: (init?.headers as Record<string, string> | undefined)?.Authorization, body: init?.body ? JSON.parse(String(init.body)) : undefined });
         if (u.endsWith('/models')) return jsonRes(200, CATALOG);
-        if (u.endsWith('/consumer/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/images/generations')) {
           return jsonRes(200, { data: [{ b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'), media_type: 'image/png' }] });
         }
@@ -204,7 +204,7 @@ describe('平台媒体模型与生成', () => {
         const u = String(url);
         calls.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined });
         if (u.endsWith('/models')) return jsonRes(200, CATALOG);
-        if (u.endsWith('/consumer/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid1', status: 'queued' });
         if (u.endsWith('/v1/videos/vid1/content')) return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'Content-Type': 'video/mp4' } });
         if (u.endsWith('/v1/videos/vid1')) {
@@ -248,13 +248,13 @@ describe('账号会话：换一次 key 之后一直复用', () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
         calls.push({ url: String(url), auth });
-        if (String(url).endsWith('/consumer/llm-keys')) return jsonRes(200, { key: 'sk-test-123', keyId: 'k1', expiresAt: null, appId: 'aigc-studio' });
+        if (String(url).endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test-123', keyId: 'k1', expiresAt: null, appId: 'aigc-studio' });
         return jsonRes(200, { choices: [{ message: { content: ' 好的 ' } }] });
       }),
     );
     expect(await core.accounts.llmKey()).toBe('sk-test-123');
     expect(await core.accounts.llmKey()).toBe('sk-test-123');
-    expect(calls.filter((c) => c.url.endsWith('/consumer/llm-keys'))).toHaveLength(1);
+    expect(calls.filter((c) => c.url.endsWith('/app/llm-keys'))).toHaveLength(1);
     /* 明文不落库 */
     expect(core.store.llmKeyOf('u1')).toBeTruthy();
     expect(core.store.llmKeyOf('u1')).not.toContain('sk-test-123');
@@ -268,11 +268,17 @@ describe('账号会话：换一次 key 之后一直复用', () => {
     expect(calls.at(-1)!.auth).not.toContain('at-test');
   });
 
-  it('409 litellm_key_exists 不重试，提示先吊销', async () => {
+  it('409 litellm_key_exists 带 recover 补发一次；再次 409 就上报服务端信息', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
-    vi.stubGlobal('fetch', vi.fn(async () => jsonRes(409, { code: 'litellm_key_exists', message: '已有模型密钥' })));
-    await expect(core.accounts.llmKey()).rejects.toThrow('吊销');
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      jsonRes(409, { code: 'litellm_key_exists', message: '已有模型密钥' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(core.accounts.llmKey()).rejects.toThrow('已有模型密钥');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bodies = fetchMock.mock.calls.map((c) => JSON.parse(String(c[1]?.body)) as { recover?: boolean });
+    expect(bodies.map((b) => b.recover)).toEqual([false, true]);
   });
 
   it('网关 401 时丢本地副本，只重换一次', async () => {
@@ -282,7 +288,7 @@ describe('账号会话：换一次 key 之后一直复用', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (String(url).endsWith('/consumer/llm-keys')) {
+        if (String(url).endsWith('/app/llm-keys')) {
           exchanged += 1;
           return jsonRes(200, { key: `sk-${exchanged}`, keyId: 'k', expiresAt: null });
         }
