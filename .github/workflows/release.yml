@@ -21,7 +21,7 @@ jobs:
       matrix:
         include:
           - name: macOS (arm64 + x64)
-            os: macos-14
+            os: macos-15
             target: --mac --arm64 --x64
             pkg: true
           - name: Windows (x64)
