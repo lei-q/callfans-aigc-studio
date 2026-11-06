@@ -32,6 +32,7 @@ import {
   type FssSku,
 } from './consumer';
 import { OidcClient, OidcError, randomToken, type OidcTokens } from './oidc';
+import { openInBrowser } from '../open';
 import { platformChat, platformError, PlatformError } from './platform';
 import type { EventHub } from '../events';
 import type { ChatMessage } from '../providers/types';
@@ -105,6 +106,11 @@ export class AccountSession {
     private readonly secrets: Secrets,
     private readonly events: EventHub,
     private readonly config: () => AccountConfig,
+    /** 桌面端由本机服务直接拉起系统浏览器；Web 端由页面打开 */
+    private readonly opener: { desktop: boolean; open: (url: string) => Promise<boolean> } = {
+      desktop: false,
+      open: openInBrowser,
+    },
   ) {
     this.api = new ConsumerClient({
       apiBase: () => this.config().apiBase,
@@ -207,7 +213,10 @@ export class AccountSession {
     this.pending = pending;
     this.status = 'pending';
     this.emitSession();
-    return { mode: 'browser', loginUrl, expiresIn: LOGIN_TTL_MS / 1000, interval: 2 };
+    /* 桌面端在这里直接拉起系统浏览器，不依赖渲染进程的 window.open */
+    let opened: boolean | undefined;
+    if (this.opener.desktop) opened = await this.opener.open(loginUrl);
+    return { mode: 'browser', loginUrl, expiresIn: LOGIN_TTL_MS / 1000, interval: 2, opened };
   }
 
   private async onCallback(r: CallbackResult): Promise<CallbackReply> {

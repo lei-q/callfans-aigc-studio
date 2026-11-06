@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -59,6 +60,16 @@ function jsonRes(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => {
+      const p = (s.address() as net.AddressInfo).port;
+      s.close(() => resolve(p));
+    });
+  });
+}
+
 describe('企业入口地址', () => {
   it('由 consumer issuer 推出 business Realm，也允许显式覆盖', () => {
     expect(enterpriseIssuerOf(config())).toBe('https://sso.test/realms/business');
@@ -68,6 +79,51 @@ describe('企业入口地址', () => {
     expect(enterpriseIssuerOf(config({ issuer: 'https://sso.test/auth' }))).toBe('');
     expect(enterpriseClientIdOf(config())).toBe('aigc-callfans');
     expect(enterpriseClientIdOf(config({ enterpriseClientId: 'aigc-enterprise' }))).toBe('aigc-enterprise');
+  });
+});
+
+describe('登录页打开方式', () => {
+  it('桌面端由本机服务直接拉起系统浏览器，并把结果带回会话', async () => {
+    const port = await freePort();
+    const opened: string[] = [];
+    const core = await Core.create({
+      dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'aigc-open-')),
+      mode: 'desktop',
+      desktop: true,
+      version: 'test',
+      memory: true,
+      account: {
+        provider: 'fastsso',
+        issuer: 'https://sso.test/realms/consumer',
+        apiBase: 'http://account.test/api/v1',
+        gatewayBase: 'http://gw.test',
+        redirectUri: `http://127.0.0.1:${port}/auth/callback`,
+      },
+      openExternal: async (url) => {
+        opened.push(url);
+        return true;
+      },
+    });
+    cores.push(core);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) =>
+        String(url).includes('/.well-known/')
+          ? jsonRes(200, {
+              issuer: 'https://sso.test/realms/consumer',
+              authorization_endpoint: 'https://sso.test/auth',
+              token_endpoint: 'https://sso.test/token',
+              jwks_uri: 'https://sso.test/jwks',
+            })
+          : jsonRes(404, {}),
+      ),
+    );
+    const r = await core.accounts.loginStart('desktop', undefined, 'consumer');
+    expect(r.mode).toBe('browser');
+    expect(r.opened).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toContain('https://sso.test/auth?');
+    expect(opened[0]).toContain('code_challenge_method=S256');
   });
 });
 

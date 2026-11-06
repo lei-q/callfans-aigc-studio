@@ -53,6 +53,11 @@ export interface LoginStartReply {
   loginUrl: string;
   /** 给客户端画二维码的内容；browser 模式没有（回环回调只能在发起登录的机器上打开） */
   qrContent?: string;
+  /**
+   * 桌面端由本机服务直接打开系统浏览器时，表示是否拉起成功；
+   * Web 端与设备码流程没有这个字段。
+   */
+  opened?: boolean;
   expiresIn: number;
   interval: number;
   /** 仅 device 模式：轮询用的设备码 */

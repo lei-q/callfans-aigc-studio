@@ -10,6 +10,7 @@ import {
   cancelOrder,
   closeActiveOrder,
   closeDrawer,
+  copyLoginLink,
   copyPromptOf,
   createCustomOrder,
   createOrder,
@@ -1017,8 +1018,18 @@ function AccountDrawer() {
                 <div className="auth-wait-ic">
                   <Icon name="shield" />
                 </div>
-                <b>已在浏览器中打开登录页</b>
-                <span className="tiny dim">在浏览器里完成登录，授权完成后这个抽屉会自动继续。</span>
+                <b>{flow.opened === false ? '登录页没能自动打开' : '已在浏览器中打开登录页'}</b>
+                <span className="tiny dim">
+                  {flow.opened === false
+                    ? '复制下面的登录链接，在浏览器里打开；登录完成后这个抽屉会自动继续。'
+                    : '在浏览器里完成登录，授权完成后这个抽屉会自动继续。没看到浏览器？复制链接手动打开。'}
+                </span>
+                <div className="login-url">
+                  <input className="form-input" readOnly value={flow.loginUrl} onFocus={(e) => e.currentTarget.select()} />
+                  <button className="btn ghost sm" onClick={() => void copyLoginLink(flow.loginUrl)}>
+                    复制链接
+                  </button>
+                </div>
                 <a className="btn ghost" href={flow.loginUrl} target="_blank" rel="noreferrer">
                   重新打开登录页
                 </a>

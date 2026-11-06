@@ -10,6 +10,7 @@ import { EventHub } from './events';
 import { CloudProvider, gatewayModelToModelInfo } from './providers/cloud';
 import { PlatformMediaProvider, platformMediaModels } from './providers/platform';
 import { TreeCloudProvider } from './providers/treecloud';
+import { openInBrowser } from './open';
 import type { Provider } from './providers/types';
 import { JobRunner } from './runner';
 import { Secrets } from './secrets';
@@ -30,6 +31,8 @@ export interface CoreOptions {
   platformPollMs?: number;
   /** 测试 / 开发：覆盖账号服务地址与提供方 */
   account?: Partial<import('@aigc/shared').AccountConfig>;
+  /** 测试用：替换「用系统浏览器打开登录页」的实现 */
+  openExternal?: (url: string) => Promise<boolean>;
 }
 
 /** 运行模式：桌面 / Web、端口、是否允许局域网访问。Electron 启动前就要读，所以单独存成文件 */
@@ -90,7 +93,10 @@ export class Core {
     fs.mkdirSync(this.mediaDir, { recursive: true });
     fs.mkdirSync(this.uploadsDir, { recursive: true });
 
-    this.accounts = new AccountSession(this.store, this.secrets, this.events, () => this.store.settings.account);
+    this.accounts = new AccountSession(this.store, this.secrets, this.events, () => this.store.settings.account, {
+      desktop: opts.desktop,
+      open: opts.openExternal || openInBrowser,
+    });
     this.platform = new PlatformCatalog(() => this.store.settings.account);
     this.session = new CloudSession(this.store, this.secrets, this.events, () => this.store.settings.cloud.baseUrl);
     this.cloud = new CloudProvider(

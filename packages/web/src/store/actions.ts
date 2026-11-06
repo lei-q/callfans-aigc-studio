@@ -754,6 +754,9 @@ export const canAfford = (s: State, cost: number) => affordable(s.wallet, cost);
 /* ---------------- 账号：Fast-SSO（授权码 + PKCE）/ Mock 云设备码 ---------------- */
 
 export async function loginStart(mode: AccountMode = 'consumer') {
+  const desktop = !!window.aigcDesktop;
+  /* Web 端在点击的同一拍先开一个空白页：Discovery 慢时再开新窗口会被浏览器拦掉 */
+  const pre = desktop ? null : window.open('', '_blank');
   setState((st) => {
     st.loginError = null;
     st.loginFlow = null;
@@ -761,11 +764,35 @@ export async function loginStart(mode: AccountMode = 'consumer') {
   try {
     const r = await api.post<LoginStartReply>('/api/auth/login', { mode });
     setState((st) => void (st.loginFlow = { ...r, startedAt: Date.now() }));
-    window.open(r.loginUrl, '_blank', 'noopener');
+    if (r.mode === 'browser') {
+      if (desktop) {
+        /* 桌面端由本机服务直接拉起系统浏览器，这里只处理没拉起来的情况 */
+        if (r.opened === false) {
+          setState((st) => void (st.loginError = '登录页没能自动打开：点「复制登录链接」，粘贴到浏览器里打开'));
+          toast('warn', '登录页没能自动打开', '复制下面的登录链接，在浏览器里打开即可');
+        }
+      } else if (pre && !pre.closed) {
+        pre.location.href = r.loginUrl;
+      } else if (!window.open(r.loginUrl, '_blank')) {
+        setState((st) => void (st.loginError = '浏览器拦住了登录页：点「复制登录链接」，粘贴到浏览器里打开'));
+      }
+    } else {
+      pre?.close();
+    }
     void loginPollLoop();
   } catch (e) {
+    pre?.close();
     setState((st) => void (st.loginError = (e as Error).message));
     toastError(e, '发起登录失败');
+  }
+}
+
+export async function copyLoginLink(url: string) {
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('success', '已复制登录链接', '粘贴到浏览器地址栏打开，登录完成后会回到应用');
+  } catch {
+    toast('warn', '复制失败', '请手动选中登录链接复制');
   }
 }
 
