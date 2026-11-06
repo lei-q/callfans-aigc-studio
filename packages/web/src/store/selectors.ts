@@ -51,7 +51,7 @@ export function routeInfo(s: State, type: MediaType, use?: AudioUse): { kind: 'c
     return { kind: 'direct', model: ready[0] };
   }
   /* 平台渠道：模型清单免令牌，能看见模型不等于能生成——还要登录才有平台点数 */
-  if (!s.session?.loggedIn) return { kind: null, reason: '登录后才能用平台点数生成；也可以在「模型与价格」切到自定义渠道' };
+  if (!s.session?.loggedIn) return { kind: null, reason: '登录后才能用平台点数生成' };
   if (ready.length) return { kind: 'cloud', model: ready[0] };
   return { kind: null, reason: `当前账号下没有可用的${typeName(type)}模型：到「模型与价格」刷新清单` };
 }

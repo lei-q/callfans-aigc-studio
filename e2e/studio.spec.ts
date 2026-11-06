@@ -250,26 +250,22 @@ test('任务记录：打开不报错，能展开任务', async ({ page }) => {
   await expect(row).toHaveClass(/open/);
 });
 
-test('模型与价格：渠道二选一，平台渠道不填 Key', async ({ page }) => {
+test('模型与价格：只保留平台渠道，不显示自定义渠道与密钥输入', async ({ page }) => {
   await open(page);
   await page.locator('.side-item', { hasText: '模型与价格' }).click();
   await expect(page.locator('.page-title')).toHaveText('模型与价格');
   await expect(page.locator('.catalog-sec-name', { hasText: '渠道' })).toBeVisible();
   const plat = page.locator('.set-choice', { hasText: '平台渠道' });
-  const custom = page.locator('.set-choice', { hasText: '自定义渠道' });
-  /* 默认平台渠道：没有 Base URL / API Key 要填 */
+  await expect(plat).toBeVisible();
   await expect(plat).toContainText('使用中');
+  /* 自定义渠道与 Base URL / API Key 输入都已隐藏 */
+  await expect(page.locator('.set-choice', { hasText: '自定义渠道' })).toHaveCount(0);
   await expect(page.locator('.set-card .form-label', { hasText: 'API Key' })).toHaveCount(0);
-  await custom.click();
-  await expect(custom).toContainText('待配置');
-  await expect(page.locator('.set-card .form-label', { hasText: 'API Key' })).toBeVisible();
-  /* 图像 / 视频 / 音频模型都跟着渠道走 */
+  await expect(page.locator('.set-card .form-label', { hasText: 'Base URL' })).toHaveCount(0);
+  /* 图像 / 视频 / 音频模型都在 */
   await expect(page.locator('.catalog-sec-name', { hasText: '图像模型' })).toBeVisible();
   await expect(page.locator('.catalog-sec-name', { hasText: '音频模型' })).toBeVisible();
   await expect(page.locator('.catalog-sec-name', { hasText: '文本模型' })).toBeVisible();
-  await plat.click();
-  await expect(plat).toContainText('使用中');
-  await expect(page.locator('.set-card .form-label', { hasText: 'API Key' })).toHaveCount(0);
   await page.locator('.side-item', { hasText: '设置' }).click();
   await expect(page.locator('.catalog-sec-name', { hasText: '直连' })).toHaveCount(0);
 });
