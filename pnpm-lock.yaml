@@ -54,6 +54,9 @@ importers:
 
   packages/desktop:
     devDependencies:
+      '@aigc/shared':
+        specifier: workspace:*
+        version: link:../shared
       electron:
         specifier: 44.6.0
         version: 44.6.0

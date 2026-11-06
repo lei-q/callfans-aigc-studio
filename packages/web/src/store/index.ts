@@ -23,6 +23,7 @@ import type {
   Result,
   SessionInfo,
   Settings,
+  UpdateState,
   WalletDto,
 } from '@aigc/shared';
 import { EDIT_DEF, PEN_COLORS } from '@aigc/shared';
@@ -59,6 +60,8 @@ export interface State {
   channels: Channel[];
   settings: Settings | null;
   apiKeys: ApiKey[];
+  /** 桌面端自动更新：主进程推送的最新状态；Web 模式为 null */
+  update: UpdateState | null;
 
   /* ---------------- 账号 / 充值 ---------------- */
   loginFlow: (LoginStartReply & { startedAt: number }) | null;
@@ -159,6 +162,7 @@ export const initialState: State = {
   channels: [],
   settings: null,
   apiKeys: [],
+  update: null,
 
   loginFlow: null,
   checkoutKey: null,

@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, session, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, session, shell, Tray, type MessageBoxOptions } from 'electron';
+import { Updater } from './updater';
 
 /* ============================================================================
    AIGC 创作台 · 桌面主进程
@@ -30,7 +31,7 @@ interface ServerModule {
     port?: number;
     accessToken?: string;
     version?: string;
-  }): Promise<{ url: string; port: number; generatedToken?: string; close(): Promise<void> }>;
+  }): Promise<{ url: string; port: number; generatedToken?: string; activeJobs(): number; close(): Promise<void> }>;
 }
 
 app.setName('AIGC Studio');
@@ -121,6 +122,7 @@ function chooseMode(): Promise<Mode | null> {
 let server: Awaited<ReturnType<ServerModule['startServer']>> | null = null;
 let mainWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let updater: Updater | null = null;
 let mode: Mode = 'desktop';
 
 function loadServer(): ServerModule {
@@ -140,6 +142,8 @@ async function startDesktop() {
     version: app.getVersion(),
   });
   await session.defaultSession.cookies.set({ url: server.url, name: 'aigc_token', value: token, httpOnly: true, sameSite: 'lax' });
+  const s = server;
+  updater?.setActiveJobs(() => s.activeJobs());
   createWindow(server.url);
 }
 
@@ -195,6 +199,8 @@ async function startWeb() {
     }
   }
   if (!server) throw lastErr;
+  const s = server;
+  updater?.setActiveJobs(() => s.activeJobs());
   if (process.platform === 'darwin') app.dock?.hide();
   createTray();
   if (!process.env.AIGC_NO_BROWSER) void shell.openExternal(server.url);
@@ -222,6 +228,8 @@ function createTray() {
       { label: '在浏览器中打开', click: () => void shell.openExternal(url) },
       { label: '复制访问地址', click: () => clipboard.writeText(url) },
       { label: '打开数据目录', click: () => void shell.openPath(userData) },
+      { type: 'separator' },
+      { label: '检查更新', click: () => void checkUpdatesFromTray() },
       { type: 'separator' },
       {
         label: '改为桌面应用方式运行',
@@ -251,6 +259,52 @@ ipcMain.on('app:open-external', (_e, url: string) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) void shell.openExternal(url);
 });
 
+/* ---------------- 自动更新 ---------------- */
+
+function setupUpdater(nativePrompt: boolean) {
+  updater = new Updater();
+  ipcMain.handle('update:state', () => updater?.getState() ?? null);
+  ipcMain.handle('update:check', () => updater?.check(true));
+  ipcMain.handle('update:download', () => updater?.download());
+  ipcMain.on('update:dismiss', () => updater?.dismiss());
+  updater.init(nativePrompt);
+}
+
+/** Web 模式（托盘）没有页面：手动检查后用系统弹窗给出结果 */
+async function checkUpdatesFromTray() {
+  if (!updater) return;
+  const st = await updater.check(true);
+  if (process.platform === 'darwin') app.focus({ steal: true });
+  const box = (o: MessageBoxOptions) => dialog.showMessageBox({ noLink: true, ...o });
+  if (st.stage === 'available') {
+    const { response } = await box({
+      type: 'info',
+      title: '发现新版本',
+      message: `AIGC 创作台 v${st.version} 可以更新`,
+      detail: '下载完成后会在任务全部结束时自动安装并重启。',
+      buttons: ['下载并更新', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) void updater.download();
+  } else if (st.stage === 'error') {
+    await box({ type: 'error', title: '检查更新失败', message: '暂时无法检查更新', detail: st.message });
+  } else if (st.stage === 'downloading') {
+    await box({ type: 'info', title: '正在下载更新', message: `正在下载 v${st.version}（${st.percent ?? 0}%）`, detail: '下载完成后会在任务全部结束时自动安装。' });
+  } else if (st.stage === 'waiting') {
+    await box({
+      type: 'info',
+      title: '更新已下载',
+      message: `v${st.version} 已下载`,
+      detail: st.busy ? `还有 ${st.busy} 个任务在执行或排队，每分钟检查一次，空闲后自动安装。` : '正在确认任务状态，空闲后自动安装。',
+    });
+  } else if (st.stage === 'installing') {
+    await box({ type: 'info', title: '正在安装更新', message: '应用即将退出并重新启动' });
+  } else if (st.stage === 'idle') {
+    await box({ type: 'info', title: '已经是最新版本', message: `当前 v${st.currentVersion}` });
+  }
+}
+
 /* ---------------- 生命周期 ---------------- */
 
 if (!app.requestSingleInstanceLock()) {
@@ -275,6 +329,7 @@ if (!app.requestSingleInstanceLock()) {
       }
       if (!readJson<LaunchConfig>(launchFile)?.mode) writeLaunch({ mode: chosen });
       mode = chosen;
+      setupUpdater(mode === 'web');
       if (mode === 'web') await startWeb();
       else await startDesktop();
     } catch (e) {
@@ -298,6 +353,7 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting || !server) return;
     e.preventDefault();
     quitting = true;
+    updater?.stop();
     const s = server;
     server = null;
     void s.close().finally(() => app.quit());

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Icon } from './components/common';
 import { Sidebar, Toasts, Topbar } from './components/Shell';
+import { UpdateFloat, UpdatePrompt, useUpdater, useUpdateToasts } from './components/Update';
 import { Drawer } from './drawers/Drawers';
 import { getState, setState, useStore } from './store';
 import { boot, redo, startPersistence, undo } from './store/data';
@@ -182,6 +183,8 @@ export function App() {
     void boot();
   }, []);
   useKeys();
+  useUpdater();
+  useUpdateToasts();
   if (!ready) {
     return (
       <div className="boot-screen">
@@ -215,6 +218,8 @@ export function App() {
       </div>
       <Drawer />
       <Toasts />
+      <UpdatePrompt />
+      <UpdateFloat />
     </>
   );
 }

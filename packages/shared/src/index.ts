@@ -7,3 +7,4 @@ export * from './account';
 export * from './wallet';
 export * from './agent';
 export * from './api';
+export * from './update';

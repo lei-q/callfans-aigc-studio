@@ -32,6 +32,8 @@ export interface RunningServer {
   core: Core;
   /** 局域网模式下自动生成的访问口令（只在首次生成时返回） */
   generatedToken?: string;
+  /** 自动更新用：执行中 + 排队中的任务数 */
+  activeJobs(): number;
   close(): Promise<void>;
 }
 
@@ -71,6 +73,9 @@ export async function startServer(o: StartOptions): Promise<RunningServer> {
     port: realPort,
     core,
     generatedToken,
+    activeJobs() {
+      return core.store.jobs.all().filter((j) => j.status === 'running' || j.status === 'queued').length;
+    },
     async close() {
       core.runner.stop();
       await app.close();

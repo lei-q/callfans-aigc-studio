@@ -27,20 +27,25 @@ if (!targets.length) {
   process.exit(1);
 }
 
-/** postinstall：把选择写给当前登录用户（应用首次启动时读取），同时留一份系统级默认值 */
+/** postinstall：把选择写给当前登录用户（应用首次启动时读取），同时留一份系统级默认值
+ *  升级/自动更新时保留已有选择：用户之前选过 Web 服务，不能被安装包默认值改回桌面应用 */
 const postinstall = (mode) => `#!/bin/bash
 MODE="${mode}"
 SYS="/Library/Application Support/AIGC Studio"
 mkdir -p "$SYS"
-printf '{"mode":"%s"}' "$MODE" > "$SYS/launch-mode.json"
-chmod 644 "$SYS/launch-mode.json"
+if [ ! -f "$SYS/launch-mode.json" ]; then
+  printf '{"mode":"%s"}' "$MODE" > "$SYS/launch-mode.json"
+  chmod 644 "$SYS/launch-mode.json"
+fi
 CONSOLE_USER=$(stat -f%Su /dev/console 2>/dev/null)
 if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
   HOME_DIR=$(dscl . -read /Users/"$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
   if [ -n "$HOME_DIR" ]; then
     DIR="$HOME_DIR/Library/Application Support/AIGC Studio"
     mkdir -p "$DIR"
-    printf '{"mode":"%s"}' "$MODE" > "$DIR/pending-mode.json"
+    if [ ! -f "$DIR/launch-mode.json" ]; then
+      printf '{"mode":"%s"}' "$MODE" > "$DIR/pending-mode.json"
+    fi
     chown -R "$CONSOLE_USER" "$DIR" 2>/dev/null || true
   fi
 fi
