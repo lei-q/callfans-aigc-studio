@@ -263,6 +263,29 @@ test('任务记录：打开不报错，能展开任务', async ({ page }) => {
   await expect(row).toHaveClass(/open/);
 });
 
+test('失败任务：可以手动从任务记录移除', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  /* 参数超限会在本地直接记一条失败任务，不提交云端 */
+  const created = await page.evaluate(async () => {
+    const b = (await (await fetch('/api/bootstrap')).json()) as { projects: { id: string }[] };
+    const res = await fetch('/api/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-aigc-client': '1' },
+      body: JSON.stringify({ jobs: [{ type: 'image', ws: b.projects[0].id, model: 'cloud:g-img-1', prompt: '移除测试用失败任务', refs: [], ratio: '1:1', count: 1, res: '4k' }] }),
+    });
+    return (await res.json()) as { jobs: { status: string }[] };
+  });
+  expect(created.jobs[0].status).toBe('failed');
+
+  await page.locator('.side-item', { hasText: '任务记录' }).click();
+  const row = page.locator('.jobs-table .t-row', { hasText: '移除测试用失败任务' });
+  await expect(row).toBeVisible();
+  await row.locator('button', { hasText: '移除' }).click();
+  await row.locator('button', { hasText: '再点一次移除' }).click();
+  await expect(page.locator('.jobs-table .t-row', { hasText: '移除测试用失败任务' })).toHaveCount(0);
+});
+
 test('模型与价格：只保留平台渠道，不显示自定义渠道与密钥输入', async ({ page }) => {
   await open(page);
   await page.locator('.side-item', { hasText: '模型与价格' }).click();

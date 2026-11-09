@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { JobStatus, MediaType, Result } from '@aigc/shared';
 import { TYPES, clamp, seededSeries } from '@aigc/shared';
 import { useStore } from '../store';
@@ -49,6 +49,32 @@ export function TaskIc({ type, icon, cls }: { type?: MediaType; icon?: string; c
     <span className={`task-ic ${cls || (type ? jobIconCls(type) : 'violet')}`}>
       <Icon name={icon || (type ? TYPES[type].ic : 'sparkles')} />
     </span>
+  );
+}
+
+/** 二次确认的删除按钮：第一次点击进入待确认，3.5 秒后自动复位 */
+export function DangerButton({
+  label,
+  confirmLabel,
+  onConfirm,
+  className = 'btn danger-ghost',
+}: {
+  label: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  className?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3500);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button className={className} onClick={() => (armed ? onConfirm() : setArmed(true))}>
+      <Icon name="trash" />
+      {armed ? confirmLabel : label}
+    </button>
   );
 }
 

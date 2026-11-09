@@ -405,6 +405,21 @@ export async function fixJob(id: string) {
   }
 }
 
+/** 移除失败任务：只删本地记录，点数在失败时已经退回 */
+export async function removeJob(id: string) {
+  const j = jobById(getState(), id);
+  try {
+    await api.del(`/api/jobs/${id}`);
+    setState((s) => {
+      s.jobs = s.jobs.filter((x) => x.id !== id);
+      delete s.expanded[id];
+    });
+    toast('info', '已移除失败任务', j ? `${j.name} · 不会再出现在任务记录里` : undefined);
+  } catch (e) {
+    toastError(e);
+  }
+}
+
 export const toggleJob = (id: string) => setState((s) => void (s.expanded[id] = !s.expanded[id]));
 
 export function openJob(id: string) {

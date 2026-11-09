@@ -196,7 +196,8 @@ describe('平台媒体模型与生成', () => {
     const req = calls.filter((c) => c.url.endsWith('/v1/images/generations'));
     expect(req).toHaveLength(1);
     expect(req[0].auth).toBe('Bearer sk-test');
-    expect(req[0].body).toMatchObject({ model: 'gemini-3-pro-image-preview', n: 1, response_format: 'b64_json' });
+    expect(req[0].body).toMatchObject({ model: 'gemini-3-pro-image-preview', n: 1 });
+    expect(req[0].body).not.toHaveProperty('response_format');
   });
 
   it('图片：有参考素材时走 /v1/images/edits，multipart 上传 image[]，不退化成文生图', async () => {

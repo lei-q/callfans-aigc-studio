@@ -388,6 +388,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.post('/api/jobs/:id/cancel', async (req) => core.runner.cancel((req.params as { id: string }).id));
   app.post('/api/jobs/:id/retry', async (req) => ({ job: core.runner.retry((req.params as { id: string }).id) }));
   app.post('/api/jobs/:id/fix', async (req) => core.runner.fix((req.params as { id: string }).id));
+  app.delete('/api/jobs/:id', async (req) => core.runner.remove((req.params as { id: string }).id));
 
   /* ---------------- 产出 ---------------- */
 

@@ -130,12 +130,13 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 ## 平台模型（图像 / 视频生成）
 
 - 模型目录：仍来自免令牌 `GET {gatewayBase}/models`，`mode` 以 `image` / `video` 开头的归到对应类型；价目表在「模型与价格」页面最下方统一展示。
-- 图片：`POST {gatewayBase}/v1/images/generations`（`model`、`prompt`、`n`、`response_format=b64_json`），返回的 `b64_json` 保存到本机媒体目录；**不自动重试**。
+- 图片：`POST {gatewayBase}/v1/images/generations`（`model`、`prompt`、`n`；**不传 `response_format`**，部分上游不支持该参数会直接报 `UnsupportedParamsError`），返回的 `b64_json` 或 `url` 都保存到本机媒体目录；有参考素材时改用 `POST /v1/images/edits`（multipart，重复的 `image[]`，最多 4 张）。**不自动重试**。
 - 视频：`POST {gatewayBase}/v1/videos`，请求体只有 `model / prompt / seconds / size`（**不传 `resolution`**）；把返回的 `id` 原样存为上游任务 ID，每 3–5 秒 `GET /v1/videos/{id}`，最多等 10 分钟，成功后 `GET /v1/videos/{id}/content` 取 mp4。
 - 计费：视频创建返回 200 即已按秒扣费，任务失败也不退；因此失败后**不会自动重建**，重跑需要用户手动确认。应用内这些模型显示「按实际用量」，余额每 10 秒自动刷新。
 - 密钥：复用账号会话里的长期 LiteLLM key，只在后端使用；401 时丢本地副本重换一次，422 = 积分不足。
 
-## 尚未接入
+## 音频
 
-- 平台生成网关的**音频**能力（配音 / 音乐 / 音效）：需要时在「模型与价格」切到自定义渠道；音频模型出现在平台清单后会自动出现在对应段。
+- 配音：`mode=audio_speech` 的模型通过 `POST {gatewayBase}/v1/audio/speech` 合成（`model`、`input`、`voice`、`response_format=mp3`）。
+- 音乐 / 音效：平台当前不提供，界面会明确提示没有可用模型，不会静默失败。
 - 站内支付渠道以外的退款/对账界面：以账号中心后台为准。

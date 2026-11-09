@@ -193,9 +193,11 @@ export class PlatformMediaProvider implements Provider {
     }
 
     ctx.progress(6, '提交到平台…');
+    /* 不传 response_format：部分上游（如 qwen-image 系列）不支持该参数，LiteLLM 会直接报
+       UnsupportedParamsError。默认返回结构里 url / b64_json 两种都已在 saveImageReply 处理。 */
     const reply = await this.deps.accounts().gatewayJson<ImageReply>('/v1/images/generations', {
       method: 'POST',
-      json: { model: upstream, prompt, n: count, response_format: 'b64_json' },
+      json: { model: upstream, prompt, n: count },
       signal: ctx.signal,
       timeoutMs: 600_000,
     });

@@ -182,6 +182,16 @@ export class JobRunner {
     return { job, log };
   }
 
+  /** 用户手动移除失败任务：只删本地记录，不涉及点数（失败时已退回） */
+  remove(id: string) {
+    const job = this.store.jobs.get(id);
+    if (!job) throw new HttpError(404, '任务不存在');
+    if (job.status !== 'failed') throw new HttpError(400, '只能移除失败的任务', '生成中或已完成的任务记录请保留');
+    this.store.jobs.del(id);
+    this.core.events.emit({ type: 'job.deleted', id });
+    return { ok: true };
+  }
+
   /* ---------------- 调度 ---------------- */
 
   /** 排队提示：每个渠道各排各的。排在第一位时保留「重新排队」这类说明 */

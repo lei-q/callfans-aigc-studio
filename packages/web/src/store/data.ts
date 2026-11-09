@@ -127,6 +127,10 @@ export function applyEvent(raw: unknown) {
       case 'job':
         upsert(s.jobs, e.job, byCreatedDesc);
         break;
+      case 'job.deleted':
+        s.jobs = s.jobs.filter((j) => j.id !== e.id);
+        delete s.expanded[e.id];
+        break;
       case 'result':
         upsert(s.results, e.result, byCreatedDesc);
         break;

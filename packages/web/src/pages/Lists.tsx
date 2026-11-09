@@ -1,6 +1,6 @@
 import type { Job, Result } from '@aigc/shared';
 import { TYPES, mmss, paramsBrief, promptBrief, round1, timeLabel } from '@aigc/shared';
-import { Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, Wave } from '../components/common';
+import { DangerButton, Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, Wave } from '../components/common';
 import { setState, useStore } from '../store';
 import {
   adoptAll,
@@ -20,6 +20,7 @@ import {
   openResult,
   postExport,
   postNew,
+  removeJob,
   retryJob,
   toggleJob,
 } from '../store/actions';
@@ -101,7 +102,7 @@ export function JobsPage() {
             成功 {jobs.filter((j) => j.status === 'succeeded').length} · 失败 {jobs.filter((j) => j.status === 'failed').length} · 进行中{' '}
             {jobs.filter((j) => j.status === 'running' || j.status === 'queued').length}
           </span>
-          <span className="right dim">任务记录永久保留，不会被任何一步隐式删除</span>
+          <span className="right dim">任务记录永久保留；失败任务可手动移除</span>
         </div>
       </div>
       <div className="table-note">
@@ -187,10 +188,13 @@ function JobRow({ j, open }: { j: Job; open: boolean }) {
         <div className="right num strong">{m.usageBilling ? '按量' : j.cost}</div>
         <div className="row-actions" onClick={(e) => e.stopPropagation()}>
           {j.status === 'failed' && (
-            <button className="btn sm ai" onClick={() => void fixJob(j.id)}>
-              <Icon name="wand" />
-              修复重试
-            </button>
+            <>
+              <button className="btn sm ai" onClick={() => void fixJob(j.id)}>
+                <Icon name="wand" />
+                修复重试
+              </button>
+              <DangerButton className="btn sm danger-ghost" label="移除" confirmLabel="再点一次移除" onConfirm={() => void removeJob(j.id)} />
+            </>
           )}
           {j.status === 'succeeded' && (
             <button className="btn sm ghost" onClick={() => openJob(j.id)}>
@@ -236,6 +240,7 @@ function JobSub({ j }: { j: Job }) {
               <button className="btn sm ghost" onClick={() => void retryJob(j.id)}>
                 原样重试
               </button>
+              <DangerButton className="btn sm danger-ghost" label="移除" confirmLabel="再点一次移除" onConfirm={() => void removeJob(j.id)} />
             </span>
           </div>
         )}

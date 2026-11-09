@@ -149,6 +149,18 @@ describe('云端网关生成', () => {
     expect(j.fail?.code).toBe('E-PRM-04');
   });
 
+  it('失败任务可以手动移除，非失败任务拒绝移除', async () => {
+    const core = await makeCore();
+    await login(core);
+    const failed = core.runner.create({ type: 'image', ws: 'w1', model: 'cloud:g-img-1', prompt: '大幅面', refs: [], ratio: '1:1', count: 1, res: '4k' });
+    core.runner.remove(failed.id);
+    expect(core.store.jobs.get(failed.id)).toBeUndefined();
+
+    const queued = core.runner.create({ type: 'video', ws: 'w1', model: 'cloud:g-vid-1', prompt: '海边日落', refs: [], ratio: '16:9', dur: 5, cam: '推近' });
+    expect(() => core.runner.remove(queued.id)).toThrow(/只能移除失败/);
+    core.runner.cancel(queued.id);
+  });
+
   it('余额不足：云端返回 40201，任务失败且提示充值', async () => {
     const core = await makeCore();
     await login(core, '13900002222');

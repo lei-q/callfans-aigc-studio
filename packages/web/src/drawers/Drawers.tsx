@@ -45,6 +45,7 @@ import {
   refPool,
   registerComplete,
   registerStart,
+  removeJob,
   renameProject,
   resetPassword,
   retryJob,
@@ -54,7 +55,7 @@ import { addResultToCanvas } from '../canvas/ops';
 import { togglePlay } from '../store/player';
 import { balance, dailyFreeLeft, jobById, libResults, modelOf, payChannels, queueJobs, resultById, topupOpen } from '../store/selectors';
 import { cssOfEdit } from '../lib/util';
-import { Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, TypeChip, Wave } from '../components/common';
+import { DangerButton, Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, TypeChip, Wave } from '../components/common';
 
 export function Drawer() {
   const d = useStore((s) => s.drawer);
@@ -291,21 +292,6 @@ function ResultDrawer({ id }: { id: string }) {
   );
 }
 
-function DangerButton({ label, confirmLabel, onConfirm }: { label: string; confirmLabel: string; onConfirm: () => void }) {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    if (!armed) return;
-    const t = setTimeout(() => setArmed(false), 3500);
-    return () => clearTimeout(t);
-  }, [armed]);
-  return (
-    <button className="btn danger-ghost" onClick={() => (armed ? onConfirm() : setArmed(true))}>
-      <Icon name="trash" />
-      {armed ? confirmLabel : label}
-    </button>
-  );
-}
-
 /* ---------------- 使用地图 ---------------- */
 
 function HelpDrawer() {
@@ -463,6 +449,7 @@ export function QueueRow({ j }: { j: Job }) {
             <button className="btn sm ghost" title="参数不变，直接重试" onClick={() => void retryJob(j.id)}>
               重试
             </button>
+            <DangerButton className="btn sm danger-ghost" label="移除" confirmLabel="再点一次移除" onConfirm={() => void removeJob(j.id)} />
           </div>
         )}
       </div>
@@ -524,7 +511,7 @@ function QueueDrawer() {
       <div className="drawer-foot">
         <span className="tiny dim">
           <Icon name="shield" />
-          任务完成后会保留在「任务记录」，不会自动清理
+          任务完成后会保留在「任务记录」，失败任务可手动移除
         </span>
         <span className="grow" />
         <button className="btn primary" onClick={goJobs}>

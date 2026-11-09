@@ -393,6 +393,7 @@ export interface Bootstrap {
 /** 服务端推送的事件 */
 export type ServerEvent =
   | { type: 'job'; job: Job }
+  | { type: 'job.deleted'; id: string }
   | { type: 'result'; result: Result }
   | { type: 'result.deleted'; id: string }
   | { type: 'wallet'; wallet: WalletDto | null }
