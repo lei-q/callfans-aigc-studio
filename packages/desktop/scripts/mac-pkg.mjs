@@ -80,15 +80,21 @@ for (const t of targets) {
   /* 3. 分发描述：强制显示自定义页，选项一目了然 */
   const res = path.join(work, 'resources');
   fs.mkdirSync(res);
-  fs.writeFileSync(
-    path.join(res, 'welcome.html'),
-    `<html><body style="font-family:-apple-system,'PingFang SC',sans-serif;font-size:13px;line-height:1.7">
+  /* macOS 安装器按 HTML 里声明的编码渲染欢迎页；不声明 charset 会把 UTF-8 中文显示成乱码。
+     同时补 UTF-8 BOM，旧版 Installer 也能据此识别编码。 */
+  const welcome = `\uFEFF<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>AIGC 创作台 ${version}</title></head>
+<body style="font-family:-apple-system,'PingFang SC',sans-serif;font-size:13px;line-height:1.7">
 <h3>AIGC 创作台 ${version}</h3>
 <p>按次付费、说一句就能出片。接下来的「安装类型」页可以选择运行方式：</p>
 <ul><li><b>桌面应用</b>（默认）：独立窗口，只在本机访问。</li>
 <li><b>Web 服务</b>：勾选「以 Web 服务方式运行」，启动后在菜单栏常驻，用浏览器访问 http://127.0.0.1:5780 。</li></ul>
-<p>两种方式共用同一份数据，之后可以随时在应用「设置 · 运行模式」里切换。</p></body></html>`,
-  );
+<p>两种方式共用同一份数据，之后可以随时在应用「设置 · 运行模式」里切换。</p></body></html>`;
+  /* 缺了 UTF-8 声明时安装器介绍页会乱码，宁可让打包直接失败 */
+  if (!/<meta charset="utf-8"/i.test(welcome) || welcome.charCodeAt(0) !== 0xfeff) {
+    throw new Error('welcome.html 缺少 UTF-8 声明（charset / BOM），macOS 安装器的介绍页会乱码');
+  }
+  fs.writeFileSync(path.join(res, 'welcome.html'), welcome);
   const dist = path.join(work, 'distribution.xml');
   fs.writeFileSync(
     dist,
