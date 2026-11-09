@@ -39,7 +39,8 @@ export const channelReady = (s: State) =>
 
 /** 当前渠道下某类型可用的模型；音频再按用途过滤 */
 export function modelsFor(s: State, type: MediaType, use?: AudioUse) {
-  return s.models.filter((m) => m.type === type && (type !== 'audio' || !use || !m.uses || !m.uses.includes(use)));
+  /* 未声明 uses 的音频模型视为通用；声明了就必须支持当前用途 */
+  return s.models.filter((m) => m.type === type && (type !== 'audio' || !use || !m.uses?.length || m.uses.includes(use)));
 }
 
 /** 当前生成走哪条路：平台渠道扣点数；自定义渠道由用户自己的上游结算 */

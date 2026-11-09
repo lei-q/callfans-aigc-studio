@@ -535,8 +535,11 @@ export class AccountSession {
     return body as T;
   }
 
-  /** 取视频文件等二进制内容 */
-  async gatewayBytes(path: string, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ buf: Buffer; mime: string }> {
+  /** 取视频 / 音频等二进制内容；语音合成需要 POST JSON */
+  async gatewayBytes(
+    path: string,
+    opts: { method?: string; json?: unknown; form?: FormData; signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<{ buf: Buffer; mime: string }> {
     const res = await this.gatewayFetch(path, opts);
     if (!res.ok) {
       const text = await res.text().catch(() => '');

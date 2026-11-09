@@ -26,6 +26,8 @@ const CATALOG = {
     { id: 'not-chat', protocol: 'openai', mode: 'embedding' },
     { id: 'gemini-3-pro-image-preview', protocol: 'openai', mode: 'image_generation', pricing: { input_per_million: 2, output_per_million: 12, per_image: 0.134 } },
     { id: 'veo-4-preview', protocol: 'openai', mode: 'video_generation', pricing: { input_per_million: 1, output_per_million: 5, per_video_second: 0.13, per_video_second_by_resolution: { '720p': 0.13 } } },
+    { id: 'qwen-audio-3.0-tts-flash', protocol: 'openai', mode: 'audio_speech', pricing: { per_character: 0.000015 } },
+    { id: 'qwen-audio-3.0-asr-flash', protocol: 'openai', mode: 'audio_transcription', pricing: { per_audio_second: 0.000035 } },
   ],
 };
 
@@ -91,6 +93,8 @@ describe('模型清单与选择', () => {
     /* 媒体模型把按张 / 按秒的价格一起带出来，价目表才能照清单展示 */
     expect(sum.models.find((m) => m.id === 'gemini-3-pro-image-preview')).toMatchObject({ perImage: 0.134 });
     expect(sum.models.find((m) => m.id === 'veo-4-preview')).toMatchObject({ perVideoSecond: 0.13, perVideoSecondByResolution: { '720p': 0.13 } });
+    expect(sum.models.find((m) => m.id === 'qwen-audio-3.0-tts-flash')).toMatchObject({ perCharacter: 0.000015 });
+    expect(sum.models.find((m) => m.id === 'qwen-audio-3.0-asr-flash')).toMatchObject({ perAudioSecond: 0.000035 });
     /* 选了个清单里没有的模型：退回自动挑 */
     expect(pickChatModel(sum.models as never, 'gone-model')).toBe('deepseek-v4.1-flash-1017');
   });
@@ -141,12 +145,14 @@ describe('网关调用', () => {
 });
 
 describe('平台媒体模型与生成', () => {
-  it('清单里的 image_generation / video_generation 变成可生成的模型，聊天与 embedding 不混进来', () => {
+  it('清单里的 image_generation / video_generation / audio_speech 变成可生成的模型，转写、聊天与 embedding 不混进来', () => {
     const models = platformMediaModels(CATALOG.data as never);
     expect(models.map((m) => [m.id, m.type, m.upstream, m.usageBilling])).toEqual([
       ['cloud:gemini-3-pro-image-preview', 'image', 'gemini-3-pro-image-preview', true],
       ['cloud:veo-4-preview', 'video', 'veo-4-preview', true],
+      ['cloud:qwen-audio-3.0-tts-flash', 'audio', 'qwen-audio-3.0-tts-flash', true],
     ]);
+    expect(models.find((m) => m.type === 'audio')?.uses).toEqual(['tts']);
     expect(videoSize('16:9', '720p')).toBe('1280x720');
     expect(videoSize('9:16', '1080p')).toBe('1080x1920');
   });
@@ -193,6 +199,80 @@ describe('平台媒体模型与生成', () => {
     expect(req[0].body).toMatchObject({ model: 'gemini-3-pro-image-preview', n: 1, response_format: 'b64_json' });
   });
 
+  it('图片：有参考素材时走 /v1/images/edits，multipart 上传 image[]，不退化成文生图', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const calls: { url: string; form?: FormData }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        calls.push({ url: u, form: init?.body instanceof FormData ? init.body : undefined });
+        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/edits')) {
+          return jsonRes(200, { data: [{ b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64') }] });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    const job = {
+      id: 'j5', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '保留主体，把背景改成雪山', refs: [
+        { src: '/files/uploads/a.png', w: 0.6 },
+        { src: '/files/uploads/b.png', w: 0.4 },
+      ],
+      ratio: '1:1', count: 2, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const saved: string[] = [];
+    const ctx: RunContext = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf, mime) => {
+        saved.push(mime);
+        return { src: '/files/media/e.png', mime };
+      },
+      resolveRef: async (src) => ({ dataUrl: `data:image/png;base64,${Buffer.from(`img:${src}`).toString('base64')}`, mime: 'image/png' }),
+      setUpstream: () => {},
+    };
+    const out = await core.platformMedia.run(job, model, ctx);
+    expect(out).toHaveLength(1);
+    expect(saved).toEqual(['image/png']);
+    const edit = calls.find((c) => c.url.endsWith('/v1/images/edits'))!;
+    expect(edit.form).toBeTruthy();
+    expect(edit.form!.get('model')).toBe('gemini-3-pro-image-preview');
+    expect(edit.form!.get('n')).toBe('2');
+    expect(String(edit.form!.get('prompt'))).toContain('保留主体');
+    expect(String(edit.form!.get('prompt'))).toContain('画幅 1:1');
+    const files = edit.form!.getAll('image[]');
+    expect(files).toHaveLength(2);
+    expect((files[0] as File).name).toBe('reference-1.png');
+    expect((files[0] as File).type).toBe('image/png');
+    expect((files[1] as File).name).toBe('reference-2.png');
+    expect(calls.some((c) => c.url.endsWith('/v1/images/generations'))).toBe(false);
+  });
+
+  it('图片：参考素材读不出来时拒绝提交，不偷偷退回文生图', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const fetchMock = vi.fn(async (url: string) => (String(url).endsWith('/models') ? jsonRes(200, CATALOG) : jsonRes(404, { error: { message: 'unexpected' } })));
+    vi.stubGlobal('fetch', fetchMock);
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    const job = {
+      id: 'j6', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '改成雪山', refs: [{ src: '/files/uploads/a.png', w: 0.6 }],
+      ratio: '1:1', count: 1, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf: Buffer, mime: string) => ({ src: '/x', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    } as RunContext;
+    await expect(core.platformMedia.run(job, model, ctx)).rejects.toThrow('参考素材读取失败');
+    expect(fetchMock.mock.calls.some((c) => /\/v1\/images\/(generations|edits)$/.test(String(c[0])))).toBe(false);
+  });
+
   it('视频：创建时传 seconds/size、不传 resolution；轮询后取 content 落盘', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
@@ -235,6 +315,68 @@ describe('平台媒体模型与生成', () => {
     expect(create.body).toMatchObject({ model: 'veo-4-preview', seconds: '5', size: '1280x720' });
     expect(create.body).not.toHaveProperty('resolution');
     expect(calls.some((c) => c.url.endsWith('/v1/videos/vid1/content'))).toBe(true);
+  });
+
+  it('语音：POST /v1/audio/speech，音频落盘，音色走共享映射', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const calls: { url: string; auth?: string; body?: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        calls.push({ url: u, auth: (init?.headers as Record<string, string> | undefined)?.Authorization, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/audio/speech')) return new Response(Buffer.from('ID3fake-mp3'), { status: 200, headers: { 'Content-Type': 'audio/mpeg' } });
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'audio')!;
+    const job = {
+      id: 'j3', name: 't', type: 'audio' as const, ws: 'w1', model: model.id, prompt: '你好，欢迎使用创作台。', refs: [],
+      use: 'tts' as const, voice: 'lan', dur: 30, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const saved: string[] = [];
+    const ctx: RunContext = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf, mime) => {
+        saved.push(mime);
+        return { src: '/files/media/x.mp3', mime };
+      },
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    };
+    const out = await core.platformMedia.run(job, model, ctx);
+    expect(out).toHaveLength(1);
+    expect(out[0].mime).toBe('audio/mpeg');
+    expect(saved).toEqual(['audio/mpeg']);
+    const req = calls.filter((c) => c.url.endsWith('/v1/audio/speech'));
+    expect(req).toHaveLength(1);
+    expect(req[0].auth).toBe('Bearer sk-test');
+    expect(req[0].body).toMatchObject({ model: 'qwen-audio-3.0-tts-flash', voice: 'nova', response_format: 'mp3', input: '你好，欢迎使用创作台。' });
+  });
+
+  it('语音：音乐 / 音效用途没有平台模型时明确报不支持，不发请求', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const fetchMock = vi.fn(async (url: string) => (String(url).endsWith('/models') ? jsonRes(200, CATALOG) : jsonRes(200, { key: 'sk-test' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'audio')!;
+    const job = {
+      id: 'j4', name: 't', type: 'audio' as const, ws: 'w1', model: model.id, prompt: '一段音乐', refs: [],
+      use: 'music' as const, dur: 30, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf: Buffer, mime: string) => ({ src: '/x', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    } as RunContext;
+    await expect(core.platformMedia.run(job, model, ctx)).rejects.toThrow('暂不支持音乐');
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith('/v1/audio/speech'))).toBe(false);
   });
 });
 

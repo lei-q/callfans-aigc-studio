@@ -281,7 +281,7 @@ function Composer() {
                 参考素材
               </span>
               <span className="field-hint">
-                {refs.length} / {MAX_REFS} · 从画布拖过来，或点缩略图切换参考强度
+                {refs.length} / {MAX_REFS} · {t === 'image' && m.usageBilling ? '从画布拖过来；上传顺序就是参考顺序' : '从画布拖过来，或点缩略图切换参考强度'}
               </span>
             </div>
             <div className="ref-row">
@@ -313,7 +313,7 @@ function Composer() {
               {m.channel === 'direct' && t === 'image' && m.maxInputImages === 0
                 ? '当前模型不支持参考图，生成时会忽略参考素材。'
                 : t === 'image' && m.usageBilling
-                  ? '平台渠道的图片生成暂不支持参考图，生成时不会发送参考素材。'
+                  ? '参考图会通过平台图片编辑接口（/v1/images/edits）一起上传，最多 4 张，按顺序参与编辑；结果张数以平台返回为准。'
                   : t === 'video'
                     ? '第一张参考图会作为首帧（可在下面切换为纯文生视频）；参考图只用于本次生成，不会进入素材库。'
                     : '参考图只用于本次生成，不会进入素材库。'}
@@ -581,10 +581,13 @@ function Advanced({ t }: { t: MediaType }) {
             </span>
             <input className="form-input" value={p.seed || ''} onChange={(e) => setParam('seed', e.target.value.replace(/\D/g, ''))} placeholder="例如 88213" />
           </div>
-          <div className="form-row">
-            <span className="form-label">参考强度</span>
-            <Pills k="refWeight" value={p.refWeight} opts={[0.3, 0.6, 0.9].map((v) => [v, String(v)] as [number, string])} />
-          </div>
+          {/* 平台图片编辑按上传顺序参考，没有强度参数；只有自定义渠道还会用到 */}
+          {s.settings?.channel === 'direct' && (
+            <div className="form-row">
+              <span className="form-label">参考强度</span>
+              <Pills k="refWeight" value={p.refWeight} opts={[0.3, 0.6, 0.9].map((v) => [v, String(v)] as [number, string])} />
+            </div>
+          )}
           <div className="form-row">
             <span className="form-label">导出格式</span>
             <Pills k="format" value={p.format} opts={['PNG', 'JPG', 'WEBP'].map((f) => [f, f] as [string, string])} />

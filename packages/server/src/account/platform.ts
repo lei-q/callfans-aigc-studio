@@ -21,6 +21,8 @@ export interface PlatformModel {
     per_image?: number;
     per_video_second?: number;
     per_video_second_by_resolution?: Record<string, number>;
+    per_character?: number;
+    per_audio_second?: number;
   } | null;
 }
 
@@ -136,6 +138,8 @@ export class PlatformCatalog {
         perImage: m.pricing?.per_image ?? null,
         perVideoSecond: m.pricing?.per_video_second ?? null,
         perVideoSecondByResolution: m.pricing?.per_video_second_by_resolution ?? null,
+        perCharacter: m.pricing?.per_character ?? null,
+        perAudioSecond: m.pricing?.per_audio_second ?? null,
       })),
       at: Date.now(),
     };

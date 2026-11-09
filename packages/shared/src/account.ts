@@ -60,6 +60,18 @@ export function platformModeType(mode?: string): 'chat' | 'image' | 'video' | 'a
   return null;
 }
 
+/**
+ * 平台清单里「创作台能直接生成」的类型：图像、视频、语音合成。
+ * 音频转写（audio_transcription）与实时语音（realtime）只是清单条目，不走音频创作。
+ */
+export function platformGenerationType(mode?: string): 'image' | 'video' | 'audio' | null {
+  const t = platformModeType(mode);
+  if (t === 'image' || t === 'video') return t;
+  if (t !== 'audio') return null;
+  const m = (mode || '').toLowerCase();
+  return m === 'audio_speech' || m === 'tts' || m === 'speech' ? 'audio' : null;
+}
+
 export interface PlatformModelInfo {
   id: string;
   /** openai = /v1/chat/completions；anthropic = /v1/messages */
@@ -74,6 +86,9 @@ export interface PlatformModelInfo {
   perImage?: number | null;
   perVideoSecond?: number | null;
   perVideoSecondByResolution?: Record<string, number> | null;
+  /** 语音合成：每个字符多少美元；音频转写：每秒多少美元 */
+  perCharacter?: number | null;
+  perAudioSecond?: number | null;
 }
 
 export interface PlatformModelsReply {

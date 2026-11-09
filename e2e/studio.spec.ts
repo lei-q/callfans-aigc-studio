@@ -133,6 +133,19 @@ test('生成 → 收件箱 → 放进画布 → 保存到素材库', async ({ pa
   await expect(page.locator('.result-card.draft')).not.toHaveCount(0);
 });
 
+test('音频创作：配音模型能选到，音乐 / 音效没有模型时给出明确提示', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await page.locator('.side-item', { hasText: '音频创作' }).click();
+  /* 平台配音模型必须出现在模型下拉里，而不是「当前账号下没有可用的音频模型」 */
+  await expect(page.locator('.composer-card .form-select').first()).toContainText('TTS');
+  await expect(page.locator('.composer-card .channel-note')).toHaveCount(0);
+  /* 平台没有音乐模型：切换用途后给提示，不能静默失败 */
+  await page.locator('.composer-card .opt-pill', { hasText: '音乐' }).click();
+  await expect(page.locator('.composer-card .channel-note')).toContainText('没有可用的音频模型');
+  await page.locator('.side-item', { hasText: '图像创作' }).click();
+});
+
 test('画布：框选、右键对齐、连线、撤销，刷新后仍在', async ({ page }) => {
   await open(page);
   await ensureLogin(page);

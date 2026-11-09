@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { MediaType, PlatformModelInfo, PlatformModelsReply, UsageRequest, UsageSummary } from '@aigc/shared';
-import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, platformModeType, round1, timeLabel } from '@aigc/shared';
+import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, platformGenerationType, platformModeType, round1, timeLabel } from '@aigc/shared';
 import { Empty, Icon, TaskIc } from '../components/common';
 import { UpdateStatus } from '../components/Update';
 import { setState, useStore } from '../store';
@@ -198,6 +198,15 @@ function priceOf(m: PlatformModelInfo) {
       </span>
     );
   }
+  if (t === 'audio') {
+    return (
+      <span className="plat-price">
+        <span>
+          {m.perCharacter != null ? `${usd(m.perCharacter)} / 字` : m.perAudioSecond != null ? `${usd(m.perAudioSecond)} / 秒` : '—'}
+        </span>
+      </span>
+    );
+  }
   return (
     <span className="plat-price">
       <span>
@@ -244,7 +253,8 @@ export function ModelsPage() {
     void patchSettings({ models: { cloud: { [t]: id } } }, id ? '默认模型已更新' : '已改为自动选择');
 
   /* 平台清单按 mode 分组：chat 是文本模型，image_generation 等是各类型的生成模型 */
-  const platOf = (t: 'chat' | MediaType) => (cat?.models || []).filter((m) => modeType(m.mode) === t);
+  const platOf = (t: 'chat' | MediaType) =>
+    (cat?.models || []).filter((m) => (t === 'chat' ? modeType(m.mode) === 'chat' : platformGenerationType(m.mode) === t));
   const kw = q.trim().toLowerCase();
   const platList = (cat?.models || []).filter((m) => !kw || m.id.toLowerCase().includes(kw));
   /* 底部清单里标出当前选中的默认模型（媒体模型按 cloud:<id> 存） */
