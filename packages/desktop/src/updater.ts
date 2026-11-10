@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { app, BrowserWindow, dialog, net, Notification } from 'electron';
 import { isNewerVersion, pickUpdateAsset, type UpdateAsset, type UpdateState } from '@aigc/shared';
+import { installerLaunch } from './update-launch';
 
 /* ============================================================================
    自动更新（GitHub Release）
@@ -267,7 +268,7 @@ export class Updater {
     }
     if (this.nativePrompt) this.notify('正在安装更新', '应用即将退出，安装程序会自动打开，装完会重新启动。');
     try {
-      launchInstaller(this.downloadFile);
+      await launchInstaller(this.downloadFile);
     } catch (e) {      const message = `启动安装程序失败：${(e as Error).message}`;
       this.patch({ stage: 'error', message });
       if (this.nativePrompt) this.errorBox(message);
@@ -412,28 +413,18 @@ export class Updater {
   }
 }
 
-function spawnDetached(cmd: string, args: string[]) {
-  const p = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-  p.unref();
+function spawnDetached(cmd: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const p = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    p.once('error', reject);
+    p.once('spawn', () => {
+      p.unref();
+      resolve();
+    });
+  });
 }
 
-function launchInstaller(file: string) {
-  if (process.platform === 'darwin') {
-    /* .pkg 交给系统安装器；装完（安装器关闭）后重新打开应用 */
-    spawnDetached('sh', ['-c', 'sleep 1; open -W "$1"; open "/Applications/AIGC Studio.app"', 'sh', file]);
-    return;
-  }
-  if (process.platform === 'win32') {
-    /* 静默安装，装完再拉起新版本；本进程会先退出，避免文件被占用 */
-    const cmd = `"${file}" /S & start "" "${process.execPath}"`;
-    spawnDetached('cmd.exe', ['/c', cmd]);
-    return;
-  }
-  const appImage = process.env.APPIMAGE;
-  if (appImage) {
-    /* 退出后用新 AppImage 覆盖旧文件并启动 */
-    spawnDetached('sh', ['-c', 'sleep 1; mv "$1" "$2"; chmod +x "$2"; "$2" >/dev/null 2>&1 &', 'sh', file, appImage]);
-    return;
-  }
-  spawnDetached('xdg-open', [file]);
+async function launchInstaller(file: string) {
+  const { cmd, args } = installerLaunch(process.platform, file, process.env.APPIMAGE);
+  await spawnDetached(cmd, args);
 }
