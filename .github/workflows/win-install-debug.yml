@@ -1,0 +1,122 @@
+name: Win install debug
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  silent:
+    name: Silent install + launch
+    runs-on: windows-2022
+    steps:
+      - name: Download installer
+        shell: pwsh
+        run: |
+          $u = 'https://github.com/lei-q/callfans-aigc-studio/releases/download/v0.4.20/AIGC-Studio-0.4.20-win-x64.exe'
+          Invoke-WebRequest -Uri $u -OutFile "$env:TEMP\aigc.exe"
+          Get-Item "$env:TEMP\aigc.exe" | Select-Object Length
+
+      - name: Silent install
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "$env:TEMP\aigc.exe" -ArgumentList '/S' -Wait -PassThru
+          "exit=$($p.ExitCode)"
+          $dir = "$env:LOCALAPPDATA\Programs\AIGC Studio"
+          "exe exists: $(Test-Path "$dir\AIGC Studio.exe")"
+          Get-ChildItem $dir -ErrorAction SilentlyContinue | Select-Object -First 20 Name, Length | Format-Table -AutoSize
+          "pending: $(Test-Path "$env:APPDATA\AIGC Studio\pending-mode.json")"
+
+      - name: Shortcut targets
+        shell: pwsh
+        run: |
+          $sh = New-Object -ComObject WScript.Shell
+          $links = @()
+          $links += Get-ChildItem "$env:USERPROFILE\Desktop\*.lnk" -ErrorAction SilentlyContinue
+          $links += Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue
+          if (-not $links) { 'no shortcuts' }
+          foreach ($l in $links) {
+            $s = $sh.CreateShortcut($l.FullName)
+            "$($l.FullName) -> [$($s.TargetPath)] [$($s.Arguments)]"
+          }
+
+      - name: Launch installed app (web mode)
+        shell: pwsh
+        run: |
+          $env:AIGC_NO_BROWSER = '1'
+          $exe = "$env:LOCALAPPDATA\Programs\AIGC Studio\AIGC Studio.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList '--mode=web' -PassThru
+          Start-Sleep -Seconds 15
+          '--- windows ---'
+          Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle | Format-Table -AutoSize
+          '--- http ---'
+          try { (Invoke-WebRequest 'http://127.0.0.1:5780/' -UseBasicParsing -TimeoutSec 5).StatusCode } catch { "ERR $($_.Exception.Message)" }
+          '--- launch file ---'
+          Get-Content "$env:APPDATA\AIGC Studio\launch-mode.json" -ErrorAction SilentlyContinue
+          '--- app log ---'
+          Get-ChildItem "$env:APPDATA\AIGC Studio" -ErrorAction SilentlyContinue | Select-Object Name, Length
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+
+  interactive:
+    name: Interactive install (keyboard)
+    runs-on: windows-2022
+    steps:
+      - name: Download installer
+        shell: pwsh
+        run: |
+          $u = 'https://github.com/lei-q/callfans-aigc-studio/releases/download/v0.4.20/AIGC-Studio-0.4.20-win-x64.exe'
+          Invoke-WebRequest -Uri $u -OutFile "$env:TEMP\aigc.exe"
+          Get-Item "$env:TEMP\aigc.exe" | Select-Object Length
+
+      - name: Run wizard and take screenshots
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $path = "$env:TEMP\$name.png"
+            $bmp.Save($path)
+            $g.Dispose(); $bmp.Dispose()
+            "shot: $path"
+          }
+
+          $p = Start-Process -FilePath "$env:TEMP\aigc.exe" -PassThru
+          Start-Sleep -Seconds 4
+          $sh = New-Object -ComObject WScript.Shell
+          Shot 'wizard-0'
+          for ($i = 1; $i -le 8; $i++) {
+            $null = $sh.AppActivate($p.Id)
+            Start-Sleep -Milliseconds 600
+            $sh.SendKeys('{ENTER}')
+            Start-Sleep -Milliseconds 1200
+            Shot "wizard-$i"
+            '--- windows ---'
+            Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.ProcessName) | $($_.MainWindowTitle)" }
+            if ($p.HasExited) { "installer exited code=$($p.ExitCode)"; break }
+          }
+          Start-Sleep -Seconds 10
+          '--- final windows ---'
+          Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.ProcessName) | $($_.MainWindowTitle)" }
+          '--- install dir ---'
+          Get-ChildItem "$env:LOCALAPPDATA\Programs\AIGC Studio" -ErrorAction SilentlyContinue | Select-Object -First 10 Name, Length | Format-Table -AutoSize
+          '--- pending-mode ---'
+          Get-Content "$env:APPDATA\AIGC Studio\pending-mode.json" -ErrorAction SilentlyContinue
+          '--- shortcuts ---'
+          $wsh = New-Object -ComObject WScript.Shell
+          $links = @()
+          $links += Get-ChildItem "$env:USERPROFILE\Desktop\*.lnk" -ErrorAction SilentlyContinue
+          $links += Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue
+          foreach ($l in $links) { $s = $wsh.CreateShortcut($l.FullName); "$($l.Name) -> [$($s.TargetPath)]" }
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: screenshots
+          path: ${{ runner.temp }}\wizard-*.png
+          if-no-files-found: warn
