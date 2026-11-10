@@ -31,27 +31,29 @@ jobs:
             $p = "$env:RUNNER_TEMP\$name.png"
             $bmp.Save($p); $g.Dispose(); $bmp.Dispose()
           }
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public class Win32 {
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+          }
+          '@
           $p = Start-Process -FilePath "$env:TEMP\aigc.exe" -PassThru
           Start-Sleep -Seconds 4
+          $sh = New-Object -ComObject WScript.Shell
           $auto = [System.Windows.Automation.AutomationElement]
           for ($step = 0; $step -lt 10; $step++) {
             $cond = New-Object System.Windows.Automation.PropertyCondition($auto::ProcessIdProperty, $p.Id)
             $win = $auto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
             if (-not $win) { "step ${step}: no window"; Start-Sleep -Seconds 2; continue }
-            $wname = $win.Current.Name
-            $texts = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-              (New-Object System.Windows.Automation.PropertyCondition($auto::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)))
-            $labels = @($texts | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
-            "step $step window=[$wname] texts=$($labels -join ' / ')"
+            "step ${step} window=[$($win.Current.Name)]"
             Shot "wiz-$step"
-            $buttons = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-              (New-Object System.Windows.Automation.PropertyCondition($auto::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
-            $names = @($buttons | ForEach-Object { $_.Current.Name })
-            "  buttons: $($names -join ', ')"
-            $next = $buttons | Where-Object { $_.Current.Name -match '下一步|Next|安装|Install|完成|Finish' } | Select-Object -First 1
-            if (-not $next) { "  no next button; abort step"; break }
-            $pat = $next.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-            $pat.Invoke()
+            $hwnd = [IntPtr]$win.Current.NativeWindowHandle
+            [void][Win32]::ShowWindow($hwnd, 5)
+            [void][Win32]::SetForegroundWindow($hwnd)
+            Start-Sleep -Milliseconds 700
+            $sh.SendKeys('{ENTER}')
             Start-Sleep -Seconds 2
             if ($p.HasExited) { "installer exited code=$($p.ExitCode) at step $step"; break }
           }
