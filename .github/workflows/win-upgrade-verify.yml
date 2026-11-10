@@ -1,0 +1,68 @@
+name: Win upgrade verify
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    steps:
+      - name: Install old version (0.4.20)
+        shell: pwsh
+        run: |
+          $u = 'https://github.com/lei-q/callfans-aigc-studio/releases/download/v0.4.20/AIGC-Studio-0.4.20-win-x64.exe'
+          Invoke-WebRequest -Uri $u -OutFile "$env:TEMP\old.exe"
+          $p = Start-Process -FilePath "$env:TEMP\old.exe" -ArgumentList '/S' -Wait -PassThru
+          "old install exit=$($p.ExitCode)"
+          (Get-Item "$env:LOCALAPPDATA\Programs\AIGC Studio\AIGC Studio.exe").VersionInfo.ProductVersion
+
+      - name: Launch new installer exactly like the fixed updater
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $p = "$env:RUNNER_TEMP\$name.png"
+            $bmp.Save($p); $g.Dispose(); $bmp.Dispose()
+          }
+
+          $u = 'https://github.com/lei-q/callfans-aigc-studio/releases/download/v0.4.21/AIGC-Studio-0.4.21-win-x64.exe'
+          $dir = "$env:TEMP\aigc-studio-update"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $file = "$dir\AIGC-Studio-0.4.21-win-x64.exe"
+          Invoke-WebRequest -Uri $u -OutFile $file
+
+          # 和 packages/desktop/src/update-launch.ts 的 Windows 分支完全一致
+          @'
+          const { spawn } = require('node:child_process');
+          const file = process.argv[2];
+          const p = spawn(file, ['/S', '--force-run'], { detached: true, stdio: 'ignore' });
+          p.once('error', (e) => { console.error('spawn error', e); process.exit(1); });
+          p.once('spawn', () => { p.unref(); console.log('installer started'); });
+          '@ | Set-Content -Encoding UTF8 "$env:TEMP\newlaunch.cjs"
+          node "$env:TEMP\newlaunch.cjs" $file
+
+          Start-Sleep -Seconds 50
+          Shot 'verify-final'
+          '--- version after update ---'
+          (Get-Item "$env:LOCALAPPDATA\Programs\AIGC Studio\AIGC Studio.exe").VersionInfo.ProductVersion
+          '--- windows ---'
+          Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.ProcessName) | $($_.MainWindowTitle)" }
+          '--- processes ---'
+          Get-Process | Where-Object { $_.ProcessName -like '*AIGC*' } | Select-Object Id, ProcessName | Format-Table -AutoSize
+          Stop-Process -Name 'AIGC Studio' -Force -ErrorAction SilentlyContinue
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: verify-screens
+          path: ${{ runner.temp }}\verify-*.png
+          if-no-files-found: warn
