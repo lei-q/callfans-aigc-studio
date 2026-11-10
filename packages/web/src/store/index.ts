@@ -185,7 +185,7 @@ export const initialState: State = {
   refs: { image: [], video: [], audio: [] },
   params: {
     image: { model: '', ratio: '1:1', count: 4, res: '2k', seed: '', refWeight: 0.6, format: 'PNG' },
-    video: { model: '', ratio: '9:16', dur: 5, cam: '推近', fps: 24, firstFrame: true, loop: false, vres: '720p' },
+    video: { model: '', ratio: '9:16', dur: 5, cam: '推近', firstFrame: true, loop: false, vres: '720p' },
     audio: { model: '', use: 'tts', dur: 30, voice: 'lan', mood: 'morning', lang: '中文', volume: 80 },
   },
   optimize: null,

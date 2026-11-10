@@ -28,6 +28,7 @@ import {
   affordable,
   agentParamText,
   paramsBrief,
+  pickVideoResolution,
   resoOf,
   unitPrice,
   uid,
@@ -151,6 +152,9 @@ export function changeModel(id: string) {
     if (s.type === 'video' && m?.durs?.length && p.dur && !m.durs.includes(p.dur)) {
       p.dur = m.durs.filter((d) => d <= (p.dur || 5)).pop() || m.durs[0];
     }
+    if (s.type === 'video' && m?.minDur && (p.dur || 0) < m.minDur) p.dur = m.minDur;
+    /* 平台模型按分辨率分档：换成不支持的档位时就近落到模型支持的档位 */
+    if (s.type === 'video' && m?.videoRes?.length) p.vres = pickVideoResolution(p.vres, m.videoRes);
   });
   const s = getState();
   const m = modelOf(s, id);
@@ -281,7 +285,7 @@ export function jobBody(s: State, t: MediaType): CreateJobBody {
   const p = s.params[t];
   const base = { type: t, ws: s.ws, model: p.model, prompt: s.prompt[t], negative: s.negative[t] || undefined, refs: s.refs[t] };
   if (t === 'image') return { ...base, ratio: p.ratio, count: p.count, res: p.res, seed: p.seed || undefined, format: p.format, refWeight: p.refWeight };
-  if (t === 'video') return { ...base, ratio: p.ratio, dur: p.dur, cam: p.cam, fps: p.fps, loop: p.loop, firstFrame: p.firstFrame, vres: p.vres };
+  if (t === 'video') return { ...base, ratio: p.ratio, dur: p.dur, cam: p.cam, loop: p.loop, firstFrame: p.firstFrame, vres: p.vres };
   return { ...base, use: p.use, dur: p.dur, voice: p.voice, mood: p.mood, lang: p.lang, volume: p.volume };
 }
 

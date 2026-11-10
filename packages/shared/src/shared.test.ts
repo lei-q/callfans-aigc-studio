@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { affordable, dailyFreeLeft } from './wallet';
-import { applyFix, pickImageSize, unitPrice, validateJob, maxResFromSizes } from './pricing';
+import { applyFix, pickImageSize, pickVideoResolution, unitPrice, validateJob, maxResFromSizes, videoResLabel } from './pricing';
 import { agentReadBoard } from './agent';
 import type { Job, ModelInfo, WalletDto } from './cloud';
 
@@ -54,6 +54,17 @@ describe('pricing & validation', () => {
     expect(j.cost).toBe(0.6);
     expect(log[0]).toBe('4K → 2K');
     expect(j.name).not.toMatch(/4K/);
+  });
+  it('视频清晰度落到模型支持的档位', () => {
+    expect(pickVideoResolution('768p', ['2k', '768p'])).toBe('768p');
+    expect(pickVideoResolution('720p', ['2k', '768p'])).toBe('768p');
+    expect(pickVideoResolution('720p', ['480p', '1080p'])).toBe('480p');
+    expect(pickVideoResolution('1080p', ['2k', '768p'])).toBe('768p');
+    expect(pickVideoResolution('4k', ['480p', '1080p'])).toBe('1080p');
+    /* 没有档位信息时不擅自改用户的选择 */
+    expect(pickVideoResolution('1080p', undefined)).toBe('1080p');
+    expect(videoResLabel('2k')).toBe('2K');
+    expect(videoResLabel('768p')).toBe('768p');
   });
   it('尺寸落到模型支持的最接近一档', () => {
     expect(pickImageSize('16:9', '2k', ['1024x1024', '1536x1024', '1024x1536'])).toBe('1536x1024');

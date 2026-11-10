@@ -1,5 +1,5 @@
 import type { AudioUse, Channel, Job, ModelInfo } from '@aigc/shared';
-import { estSeconds, platformGenerationType, VOICES } from '@aigc/shared';
+import { estSeconds, platformGenerationType, pickVideoResolution, videoResEdge, VOICES } from '@aigc/shared';
 import type { AccountSession } from '../account/session';
 import type { PlatformModel } from '../account/platform';
 import { PlatformError } from '../account/platform';
@@ -11,7 +11,8 @@ import { ProviderError, type Provider, type ProviderOutput, type RunContext } fr
    平台生成 Provider：用账号会话里的 LiteLLM 密钥调 https://api.callfansai.com
    - 图片：无参考素材走 POST /v1/images/generations（b64_json 落本机）；
            有参考素材走 POST /v1/images/edits（multipart image[]，最多 4 张）；不自动重试
-   - 视频：POST /v1/videos（model / prompt / seconds / size；有首帧时改用 multipart 带 input_reference）
+   - 视频：POST /v1/videos（multipart：model / prompt / seconds / size / ratio / resolution；
+           有首帧时附 input_reference，标准接口只接受一张参考图）
            → 原样保存返回的 id → 每 3–5 秒 GET /v1/videos/{id}（最多 10 分钟）
            → GET /v1/videos/{id}/content 取 mp4
    - 语音：POST /v1/audio/speech（OpenAI 兼容），二进制音频落本机
@@ -28,6 +29,11 @@ export function platformMediaModelInfo(m: PlatformModel): ModelInfo | null {
   const type = platformMediaType(m.mode);
   if (!type) return null;
   const audio = type === 'audio';
+  /* 平台按分辨率分档计价，pricing 的键就是上游真正支持的清晰度档位 */
+  const videoRes =
+    type === 'video'
+      ? Object.keys(m.pricing?.per_video_second_by_resolution || {}).sort((a, b) => videoResEdge(a) - videoResEdge(b))
+      : [];
   return {
     id: `cloud:${m.id}`,
     name: m.id,
@@ -44,6 +50,8 @@ export function platformMediaModelInfo(m: PlatformModel): ModelInfo | null {
     caps: m.protocol ? [m.protocol] : [],
     limit: audio ? '单条文案 ≤ 4096 字' : '',
     ...(audio ? { uses: ['tts'] as AudioUse[] } : {}),
+    /* 平台目录没有时长清单：只声明已知的下限（MiniMax 最短 4 秒），不虚构上限 */
+    ...(type === 'video' ? { minDur: 4, ...(videoRes.length ? { videoRes } : {}) } : {}),
   };
 }
 
@@ -51,13 +59,20 @@ export function platformMediaModels(models: PlatformModel[]): ModelInfo[] {
   return models.map(platformMediaModelInfo).filter((m): m is ModelInfo => !!m);
 }
 
-/** 时长 + 分辨率 → 平台视频接口的 size（如 1280x720）；不传 resolution */
+/** 时长 + 分辨率 → 平台视频接口的 size（如 1280x720）；清晰度本身由 resolution 决定 */
 export function videoSize(ratio?: string, vres?: string): string {
-  const short = vres === '1080p' ? 1080 : vres === '480p' ? 480 : 720;
+  const q = (vres || '').toLowerCase();
+  const short = q === '1080p' ? 1080 : q === '480p' ? 480 : 720;
   const [rw, rh] = (ratio || '16:9').split(':').map(Number);
   const ar = rw && rh ? rw / rh : 16 / 9;
   const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
   return ar >= 1 ? `${even(short * ar)}x${short}` : `${short}x${even(short / ar)}`;
+}
+
+/** 上游 resolution 的写法：MiniMax 用大写 768P / 2K，其余按小写 */
+export function videoResolutionParam(upstream: string, tier?: string): string | undefined {
+  if (!tier) return undefined;
+  return /minimax/i.test(upstream) ? tier.toUpperCase() : tier.toLowerCase();
 }
 
 const VIDEO_TIMEOUT_MS = 10 * 60_000;
@@ -290,8 +305,17 @@ export class PlatformMediaProvider implements Provider {
     else if (job.cam === '固定') prompt += '，固定机位';
     if (job.loop) prompt += '，首尾可无缝循环';
     if (job.negative?.trim()) prompt += `。避免：${job.negative.trim()}`;
-    const seconds = String(Math.max(1, Math.round(job.dur || 5)));
-    const size = videoSize(job.ratio, job.vres);
+    /* 上游有最短时长时先抬到下限（例如 MiniMax 最短 4 秒，传 3 会被上游悄悄改成 4） */
+    const wantSec = Math.max(1, Math.round(job.dur || 5));
+    const minSec = model.minDur ?? (model.durs?.length ? Math.min(...model.durs) : 1);
+    const seconds = String(Math.max(minSec, wantSec));
+    const ratio = job.ratio || '16:9';
+    /* 除了 size，还要单独传 ratio / resolution：LiteLLM 的上游映射只认这两个字段，
+       只给 size 时首帧参考、画幅和清晰度都会被忽略（MiniMax 实测会回到 16:9 / 2K）。 */
+    const tier = pickVideoResolution(job.vres, model.videoRes);
+    const size = videoSize(ratio, tier || job.vres);
+    /* 模型没有按分辨率计价时无法确认档位名，只靠 size 表达清晰度 */
+    const resolution = model.videoRes?.length ? videoResolutionParam(upstream, tier) : undefined;
     /* 首帧参考图按平台约定用 multipart 的 input_reference 上传；
        不支持首帧的模型会在创建阶段返回 400（此时还没有计费）。 */
     const first = job.firstFrame !== false ? job.refs[0] : undefined;
@@ -300,29 +324,24 @@ export class PlatformMediaProvider implements Provider {
     /* 选了首帧却读不出来时不要悄悄退回纯文生视频，否则成片和用户预期完全无关 */
     if (first && !image) throw new ProviderError('E-PRM-04', '首帧参考图读取失败，未提交生成', '重新拖入图片后再试；本次没有提交，不会扣点');
     ctx.progress(3, '提交到平台…');
-    let created: VideoReply;
+    /* 一律用 multipart：该网关对 JSON 创建请求会直接返回 502，纯文生视频也一样 */
+    const form = new FormData();
+    form.append('model', upstream);
+    form.append('prompt', prompt);
+    form.append('seconds', seconds);
+    form.append('size', size);
+    form.append('ratio', ratio);
+    if (resolution) form.append('resolution', resolution);
     if (image) {
-      const form = new FormData();
-      form.append('model', upstream);
-      form.append('prompt', prompt);
-      form.append('seconds', seconds);
-      form.append('size', size);
       form.append('input_reference', new Blob([image.buf], { type: image.mime }), `first-frame.${image.mime.includes('jpeg') ? 'jpg' : 'png'}`);
-      created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
-        method: 'POST',
-        form,
-        signal: ctx.signal,
-        /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
-        timeoutMs: 130_000,
-      });
-    } else {
-      created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
-        method: 'POST',
-        json: { model: upstream, prompt, seconds, size },
-        signal: ctx.signal,
-        timeoutMs: 130_000,
-      });
     }
+    const created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
+      method: 'POST',
+      form,
+      signal: ctx.signal,
+      /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
+      timeoutMs: 130_000,
+    });
     const id = created?.id;
     if (!id) throw new ProviderError('E-UPS-52', '平台没有返回视频任务 ID', '稍后重试；如果已被计费请联系支持');
     job.upstreamTaskId = id;

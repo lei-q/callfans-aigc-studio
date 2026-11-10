@@ -131,8 +131,9 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 
 - 模型目录：仍来自免令牌 `GET {gatewayBase}/models`，`mode` 以 `image` / `video` 开头的归到对应类型；价目表在「模型与价格」页面最下方统一展示。
 - 图片：`POST {gatewayBase}/v1/images/generations`（`model`、`prompt`、`n`；**不传 `response_format`**，部分上游不支持该参数会直接报 `UnsupportedParamsError`），返回的 `b64_json` 或 `url` 都保存到本机媒体目录；有参考素材时改用 `POST /v1/images/edits`（multipart，重复的 `image[]`，最多 4 张）。**不自动重试**。
-- 视频：`POST {gatewayBase}/v1/videos`，请求体只有 `model / prompt / seconds / size`（**不传 `resolution`**）；把返回的 `id` 原样存为上游任务 ID，每 3–5 秒 `GET /v1/videos/{id}`，最多等 10 分钟，成功后 `GET /v1/videos/{id}/content` 取 mp4。
+- 视频：`POST {gatewayBase}/v1/videos`，统一用 multipart 提交 `model / prompt / seconds / size / ratio / resolution`（网关对 JSON 创建请求返回 502；`resolution` 取该模型 `pricing.per_video_second_by_resolution` 的档位键，如 `768p` / `2k`；`ratio` 必须单独传，只给 `size` 时上游会忽略画幅）；有首帧参考时再附 `input_reference`（标准接口只接受一张）。把返回的 `id` 原样存为上游任务 ID，每 3–5 秒 `GET /v1/videos/{id}`，最多等 10 分钟，成功后 `GET /v1/videos/{id}/content` 取 mp4。
 - 计费：视频创建返回 200 即已按秒扣费，任务失败也不退；因此失败后**不会自动重建**，重跑需要用户手动确认。应用内这些模型显示「按实际用量」，余额每 10 秒自动刷新。
+- 参数边界：`ratio` / `seconds` / `resolution` / 首帧 `input_reference` 是真实接口字段；运镜、循环点、负面提示会拼进 `prompt`；`fps` 没有对应字段，不发送。
 - 密钥：复用账号会话里的长期 LiteLLM key，只在后端使用；401 时丢本地副本重换一次，422 = 积分不足。
 
 ## 音频

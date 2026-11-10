@@ -111,6 +111,49 @@ export function pickImageSize(ratio: string | undefined, res: string | undefined
   return best.s;
 }
 
+/** 视频清晰度换算成短边像素：2K / 4K 在视频里通常按长边命名，这里取常见短边值参与比较 */
+const VIDEO_RES_EDGE: Record<string, number> = {
+  '480p': 480,
+  '720p': 720,
+  '768p': 768,
+  '1080p': 1080,
+  '2k': 1440,
+  '4k': 2160,
+};
+
+export function videoResEdge(r?: string): number {
+  return VIDEO_RES_EDGE[(r || '').toLowerCase()] || 0;
+}
+
+/** 界面上展示的清晰度标签：2k → 2K、4k → 4K，其余按小写（480p / 768p） */
+export function videoResLabel(r: string): string {
+  return /^\d+k$/i.test(r) ? r.toUpperCase() : r.toLowerCase();
+}
+
+/**
+ * 把用户选的清晰度落到模型支持的档位：有同档就用同档，
+ * 否则取短边像素最接近的一档；距离相同时取更低的一档（少扣点）
+ */
+export function pickVideoResolution(want: string | undefined, tiers: string[] | undefined): string | undefined {
+  if (!tiers || !tiers.length) return want;
+  if (want) {
+    const exact = tiers.find((t) => t.toLowerCase() === want.toLowerCase());
+    if (exact) return exact;
+  }
+  const target = videoResEdge(want) || 720;
+  let best = tiers[0];
+  let bestDiff = Infinity;
+  for (const t of tiers) {
+    const edge = videoResEdge(t);
+    const diff = Math.abs(edge - target);
+    if (diff < bestDiff || (diff === bestDiff && edge < videoResEdge(best))) {
+      bestDiff = diff;
+      best = t;
+    }
+  }
+  return best;
+}
+
 /** 按图像尺寸列表推断分辨率上限 */
 export function maxResFromSizes(sizes?: string[]) {
   if (!sizes || !sizes.length) return undefined;

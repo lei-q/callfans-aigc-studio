@@ -50,7 +50,11 @@ export interface ModelInfo {
   /** 视频：可选时长与上限 */
   durs?: number[];
   maxDur?: number;
+  /** 视频：上游最短时长（平台未公布可选档位时只约束下限） */
+  minDur?: number;
   ratios?: string[];
+  /** 视频：上游支持的清晰度档位（来自平台按分辨率计时价的键，如 480p / 768p / 2k） */
+  videoRes?: string[];
   /** 音频：支持的用途 */
   uses?: AudioUse[];
   /** 图像能力（来自上游 capabilities.limits） */

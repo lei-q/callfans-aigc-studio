@@ -1,5 +1,5 @@
 import type { Board, Bootstrap, MediaType, ServerEvent, WalletDto } from '@aigc/shared';
-import { TYPE_KEYS } from '@aigc/shared';
+import { TYPE_KEYS, pickVideoResolution } from '@aigc/shared';
 import { api, subscribe } from '../lib/api';
 import { getState, setState, useStore, type State } from './index';
 import { emptyBoard, modelsFor } from './selectors';
@@ -32,7 +32,11 @@ export function fixParams(s: State) {
       p.model = list.some((m) => m.id === want) ? want : list[0].id;
     }
     const m = s.models.find((x) => x.id === p.model);
-    if (t === 'video' && m?.durs?.length && p.dur && !m.durs.includes(p.dur) && m.maxDur && p.dur > m.maxDur) p.dur = m.durs[m.durs.length - 1];
+    if (t === 'video' && m?.durs?.length && p.dur && !m.durs.includes(p.dur)) {
+      p.dur = m.durs.filter((d) => d <= (p.dur || 5)).pop() || m.durs[0];
+    }
+    if (t === 'video' && m?.minDur && (p.dur || 0) < m.minDur) p.dur = m.minDur;
+    if (t === 'video' && m?.videoRes?.length) p.vres = pickVideoResolution(p.vres, m.videoRes);
   }
 }
 

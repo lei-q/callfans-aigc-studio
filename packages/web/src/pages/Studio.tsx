@@ -15,7 +15,9 @@ import {
   VIDEO_RES,
   VOICES,
   estTimeText,
+  pickVideoResolution,
   resoOf,
+  videoResLabel,
 } from '@aigc/shared';
 import { Icon, TaskIc, jobIconCls } from '../components/common';
 import { AgentDock } from '../canvas/AgentDock';
@@ -315,7 +317,9 @@ function Composer() {
                 : t === 'image' && m.usageBilling
                   ? '参考图会通过平台图片编辑接口（/v1/images/edits）一起上传，最多 4 张，按顺序参与编辑；结果张数以平台返回为准。'
                   : t === 'video'
-                    ? '第一张参考图会作为首帧（可在下面切换为纯文生视频）；参考图只用于本次生成，不会进入素材库。'
+                    ? m.channel === 'cloud'
+                      ? '平台视频接口只支持一张参考图：第一张会作为首帧（可在下面切换为纯文生视频），其余参考图不参与本次生成。'
+                      : '第一张参考图作为首帧，第二张作为参考图（最多 2 张）；参考图只用于本次生成，不会进入素材库。'
                     : '参考图只用于本次生成，不会进入素材库。'}
             </div>
           </div>
@@ -358,7 +362,7 @@ function Composer() {
 
         <div className={`adv-toggle ${s.adv ? 'open' : ''}`} onClick={toggleAdv}>
           <Icon name="chev-right" />
-          高级参数{s.adv ? '' : t === 'image' ? '（负面提示 · 种子 · 导出格式）' : t === 'video' ? '（负面提示 · 清晰度 · 帧率 · 循环点）' : '（负面提示 · 输出音量）'}
+          高级参数{s.adv ? '' : t === 'image' ? '（负面提示 · 种子 · 导出格式）' : t === 'video' ? '（负面提示 · 清晰度 · 循环点）' : '（负面提示 · 输出音量）'}
         </div>
         {s.adv && <Advanced t={t} />}
 
@@ -480,7 +484,7 @@ function Params({ t }: { t: MediaType }) {
     );
   }
   if (t === 'video') {
-    const durs = m.durs && m.durs.length ? m.durs : [3, 5, 8];
+    const durs = m.durs && m.durs.length ? m.durs : [4, 5, 8];
     return (
       <>
         <div className="form-row">
@@ -489,12 +493,14 @@ function Params({ t }: { t: MediaType }) {
         </div>
         <div className="form-row">
           <span className="form-label">
-            时长<span className="fl-hint">{m.maxDur ? `上限 ${m.maxDur} 秒` : '上限见模型说明'}</span>
+            时长<span className="fl-hint">{m.maxDur ? `上限 ${m.maxDur} 秒` : m.minDur ? `最短 ${m.minDur} 秒 · 平台会就近取整` : '上限见模型说明'}</span>
           </span>
           <Pills k="dur" value={p.dur} opts={durs.map((d) => [d, `${d} 秒`] as [number, string])} />
         </div>
         <div className="form-row">
-          <span className="form-label">运镜</span>
+          <span className="form-label">
+            运镜<span className="fl-hint">写进提示词</span>
+          </span>
           <Pills k="cam" value={p.cam} icon="camera" opts={CAMS.map((c) => [c, c] as [string, string])} />
         </div>
         <div className="form-row">
@@ -565,11 +571,14 @@ function Params({ t }: { t: MediaType }) {
 function Advanced({ t }: { t: MediaType }) {
   const s = useStore();
   const p = s.params[t];
+  const m = modelOf(s, p.model);
+  const vresTiers = m.videoRes && m.videoRes.length ? m.videoRes : VIDEO_RES;
+  const vresNow = pickVideoResolution(p.vres, vresTiers);
   return (
     <div className="adv-body">
       <div className="form-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
         <span className="form-label">
-          负面提示<span className="fl-hint">不想出现的元素，逗号分隔；留空即可</span>
+          负面提示<span className="fl-hint">{t === 'video' ? '视频接口没有单独字段，会写进提示词' : '不想出现的元素，逗号分隔；留空即可'}</span>
         </span>
         <textarea className="prompt-input neg-input" value={s.negative[t]} onChange={(e) => setNegative(e.target.value)} placeholder="例如：模糊, 多余文字, 水印" />
       </div>
@@ -598,16 +607,14 @@ function Advanced({ t }: { t: MediaType }) {
         <>
           <div className="form-row">
             <span className="form-label">
-              清晰度<span className="fl-hint">真实渠道生效</span>
+              清晰度<span className="fl-hint">{m.videoRes?.length ? '按模型支持的档位' : '真实渠道生效'}</span>
             </span>
-            <Pills k="vres" value={p.vres} opts={VIDEO_RES.map((r) => [r, r] as [string, string])} />
+            <Pills k="vres" value={vresNow} opts={vresTiers.map((r) => [r, videoResLabel(r)] as [string, string])} />
           </div>
           <div className="form-row">
-            <span className="form-label">帧率</span>
-            <Pills k="fps" value={p.fps} opts={[24, 30].map((f) => [f, `${f} fps`] as [number, string])} />
-          </div>
-          <div className="form-row">
-            <span className="form-label">循环点</span>
+            <span className="form-label">
+              循环点<span className="fl-hint">写进提示词</span>
+            </span>
             <Pills
               k="loop"
               value={p.loop}
@@ -617,6 +624,7 @@ function Advanced({ t }: { t: MediaType }) {
               ]}
             />
           </div>
+          <div className="tiny dim">帧率由上游决定，平台视频接口不接受单独的 fps 参数。</div>
         </>
       )}
       {t === 'audio' && (

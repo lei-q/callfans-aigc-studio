@@ -154,8 +154,11 @@ describe('平台媒体模型与生成', () => {
       ['cloud:qwen-audio-3.0-tts-flash', 'audio', 'qwen-audio-3.0-tts-flash', true],
     ]);
     expect(models.find((m) => m.type === 'audio')?.uses).toEqual(['tts']);
+    expect(models.find((m) => m.id === 'cloud:veo-4-preview')).toMatchObject({ minDur: 4, videoRes: ['720p'] });
     expect(videoSize('16:9', '720p')).toBe('1280x720');
     expect(videoSize('9:16', '1080p')).toBe('1080x1920');
+    /* 768P / 2K 这类档位由 resolution 表达，size 只负责画幅 */
+    expect(videoSize('9:16', '768p')).toBe('720x1280');
   });
 
   it('图片：POST /v1/images/generations，b64_json 落盘，只请求一次', async () => {
@@ -275,16 +278,18 @@ describe('平台媒体模型与生成', () => {
     expect(fetchMock.mock.calls.some((c) => /\/v1\/images\/(generations|edits)$/.test(String(c[0])))).toBe(false);
   });
 
-  it('视频：创建时传 seconds/size、不传 resolution；轮询后取 content 落盘', async () => {
+  it('视频：创建时传 seconds / size / ratio / resolution，轮询后取 content 落盘', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
     let polls = 0;
-    const calls: { url: string; body?: Record<string, unknown> }[] = [];
+    const urls: string[] = [];
+    const forms: FormData[] = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
-        calls.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        urls.push(u);
+        if (init?.body instanceof FormData) forms.push(init.body);
         if (u.endsWith('/models')) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid1', status: 'queued' });
@@ -313,10 +318,71 @@ describe('平台媒体模型与生成', () => {
     const out = await core.platformMedia.run(job, model, ctx);
     expect(out).toHaveLength(1);
     expect(out[0].mime).toBe('video/mp4');
-    const create = calls.find((c) => c.url.endsWith('/v1/videos') && c.body)!;
-    expect(create.body).toMatchObject({ model: 'veo-4-preview', seconds: '5', size: '1280x720' });
-    expect(create.body).not.toHaveProperty('resolution');
-    expect(calls.some((c) => c.url.endsWith('/v1/videos/vid1/content'))).toBe(true);
+    /* 纯文生视频也走 multipart：网关对 JSON 创建请求直接返回 502 */
+    const entries = Object.fromEntries(forms[0].entries()) as Record<string, string | File>;
+    expect(entries).toMatchObject({ model: 'veo-4-preview', seconds: '5', size: '1280x720', ratio: '16:9', resolution: '720p' });
+    expect(entries).not.toHaveProperty('input_reference');
+    expect(urls.some((u) => u.endsWith('/v1/videos/vid1/content'))).toBe(true);
+  });
+
+  it('视频带首帧：multipart 同时带 input_reference / ratio / resolution，清晰度落到模型支持的档位', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const catalog = {
+      ...CATALOG,
+      data: [
+        ...CATALOG.data,
+        { id: 'minimax-h3', protocol: 'openai', mode: 'video_generation', pricing: { per_video_second_by_resolution: { '2k': 0.2, '768p': 0.1 } } },
+      ],
+    };
+    let polls = 0;
+    const forms: FormData[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (init?.body instanceof FormData) forms.push(init.body);
+        if (u.endsWith('/models')) return jsonRes(200, catalog);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid-mini', status: 'queued' });
+        if (u.endsWith('/v1/videos/vid-mini/content')) return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'Content-Type': 'video/mp4' } });
+        if (u.endsWith('/v1/videos/vid-mini')) {
+          polls += 1;
+          return jsonRes(200, polls < 2 ? { id: 'vid-mini', status: 'queued' } : { id: 'vid-mini', status: 'completed', seconds: 4 });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    const model = platformMediaModels(catalog.data as never).find((m) => m.upstream === 'minimax-h3')!;
+    expect(model).toMatchObject({ minDur: 4, videoRes: ['768p', '2k'] });
+    const job = {
+      id: 'j4', name: 't', type: 'video' as const, ws: 'w1', model: model.id, prompt: '挥舞兵器', refs: [{ src: 'ref.png', w: 1 }],
+      ratio: '9:16', dur: 3, vres: '720p', cam: '推近', loop: true, negative: '模糊', fps: 30, firstFrame: true,
+      cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx: RunContext = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf, mime) => ({ src: '/files/media/x.mp4', mime }),
+      resolveRef: async () => ({ dataUrl: `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')}`, mime: 'image/png' }),
+      setUpstream: () => {},
+    };
+    const out = await core.platformMedia.run(job, model, ctx);
+    expect(out).toHaveLength(1);
+    const form = forms[0];
+    expect(form).toBeTruthy();
+    const entries = Object.fromEntries(form.entries()) as Record<string, string | File>;
+    expect(entries.model).toBe('minimax-h3');
+    expect(entries.ratio).toBe('9:16');
+    expect(entries.resolution).toBe('768P');
+    expect(entries.size).toBe('720x1280');
+    /* 最短 4 秒：3 秒会被上游悄悄改成 4，这里提前抬到下限 */
+    expect(entries.seconds).toBe('4');
+    expect((entries.input_reference as File).type).toBe('image/png');
+    expect(entries.prompt).toContain('运镜：推近');
+    expect(entries.prompt).toContain('首尾可无缝循环');
+    expect(entries.prompt).toContain('避免：模糊');
+    expect(entries).not.toHaveProperty('fps');
   });
 
   it('语音：POST /v1/audio/speech，音频落盘，音色走共享映射', async () => {
