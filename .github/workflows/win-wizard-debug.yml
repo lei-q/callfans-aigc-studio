@@ -1,0 +1,75 @@
+name: Win wizard debug
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wizard:
+    runs-on: windows-2022
+    steps:
+      - name: Download
+        shell: pwsh
+        run: |
+          $u = 'https://github.com/lei-q/callfans-aigc-studio/releases/download/v0.4.20/AIGC-Studio-0.4.20-win-x64.exe'
+          Invoke-WebRequest -Uri $u -OutFile "$env:TEMP\aigc.exe"
+
+      - name: Drive wizard with UI Automation
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $p = "$env:RUNNER_TEMP\$name.png"
+            $bmp.Save($p); $g.Dispose(); $bmp.Dispose()
+          }
+          $p = Start-Process -FilePath "$env:TEMP\aigc.exe" -PassThru
+          Start-Sleep -Seconds 4
+          $auto = [System.Windows.Automation.AutomationElement]
+          for ($step = 0; $step -lt 10; $step++) {
+            $cond = New-Object System.Windows.Automation.PropertyCondition($auto::ProcessIdProperty, $p.Id)
+            $win = $auto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+            if (-not $win) { "step $step: no window"; Start-Sleep -Seconds 2; continue }
+            $wname = $win.Current.Name
+            $texts = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+              (New-Object System.Windows.Automation.PropertyCondition($auto::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)))
+            $labels = @($texts | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
+            "step $step window=[$wname] texts=$($labels -join ' / ')"
+            Shot "wiz-$step"
+            $buttons = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+              (New-Object System.Windows.Automation.PropertyCondition($auto::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
+            $names = @($buttons | ForEach-Object { $_.Current.Name })
+            "  buttons: $($names -join ', ')"
+            $next = $buttons | Where-Object { $_.Current.Name -match '下一步|Next|安装|Install|完成|Finish' } | Select-Object -First 1
+            if (-not $next) { "  no next button; abort step"; break }
+            $pat = $next.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            $pat.Invoke()
+            Start-Sleep -Seconds 2
+            if ($p.HasExited) { "installer exited code=$($p.ExitCode) at step $step"; break }
+          }
+          Start-Sleep -Seconds 8
+          Shot 'wiz-final'
+          '--- windows ---'
+          Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.ProcessName) | $($_.MainWindowTitle)" }
+          '--- install dir ---'
+          Get-ChildItem "$env:LOCALAPPDATA\Programs\AIGC Studio" -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table -AutoSize
+          '--- pending-mode ---'
+          Get-Content "$env:APPDATA\AIGC Studio\pending-mode.json" -ErrorAction SilentlyContinue
+          '--- launch-mode ---'
+          Get-Content "$env:APPDATA\AIGC Studio\launch-mode.json" -ErrorAction SilentlyContinue
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: wizard-screens
+          path: ${{ runner.temp }}\wiz-*.png
+          if-no-files-found: warn
