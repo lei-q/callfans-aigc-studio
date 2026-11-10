@@ -37,7 +37,7 @@ jobs:
           for ($step = 0; $step -lt 10; $step++) {
             $cond = New-Object System.Windows.Automation.PropertyCondition($auto::ProcessIdProperty, $p.Id)
             $win = $auto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-            if (-not $win) { "step $step: no window"; Start-Sleep -Seconds 2; continue }
+            if (-not $win) { "step ${step}: no window"; Start-Sleep -Seconds 2; continue }
             $wname = $win.Current.Name
             $texts = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
               (New-Object System.Windows.Automation.PropertyCondition($auto::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)))
