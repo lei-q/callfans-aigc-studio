@@ -1,0 +1,60 @@
+name: Win lnk debug
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: windows-2022
+    steps:
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $u = 'https://github.com/lei-q/callfans-aigc-studio/releases/download/v0.4.20/AIGC-Studio-0.4.20-win-x64.exe'
+          Invoke-WebRequest -Uri $u -OutFile "$env:TEMP\aigc.exe"
+          $p = Start-Process -FilePath "$env:TEMP\aigc.exe" -ArgumentList '/S' -Wait -PassThru
+          "exit=$($p.ExitCode)"
+
+      - name: Dump shortcut + registry
+        shell: pwsh
+        run: |
+          $sh = New-Object -ComObject WScript.Shell
+          $lnks = @()
+          $lnks += Get-ChildItem "$env:USERPROFILE\Desktop\*.lnk" -ErrorAction SilentlyContinue
+          $lnks += Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\AIGC*.lnk" -ErrorAction SilentlyContinue
+          foreach ($l in $lnks) {
+            "=== $($l.FullName) ($($l.Length) bytes) ==="
+            $s = $sh.CreateShortcut($l.FullName)
+            $s | Format-List TargetPath, Arguments, WorkingDirectory, IconLocation, Description
+            # UTF-16LE strings 里能看到 .lnk 实际保存的路径
+            $bytes = [System.IO.File]::ReadAllBytes($l.FullName)
+            $text = [System.Text.Encoding]::Unicode.GetString($bytes)
+            [regex]::Matches($text, '[ -~]{4,}') | ForEach-Object { "u16: $($_.Value)" }
+          }
+
+          '=== registry ==='
+          Get-ChildItem 'HKCU:\Software' -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSChildName -match '^\{' } |
+            ForEach-Object {
+              $k = $_
+              $v = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+              if ($v.InstallLocation -ne $null) { "$($k.PSChildName): InstallLocation=[$($v.InstallLocation)] ShortcutName=[$($v.ShortcutName)]" }
+            }
+          Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like '*AIGC*' } |
+            Select-Object DisplayName, InstallLocation, DisplayIcon, UninstallString | Format-List
+
+      - name: Try launching the shortcut
+        shell: pwsh
+        run: |
+          $lnk = "$env:USERPROFILE\Desktop\AIGC 创作台.lnk"
+          $before = Get-Process | Where-Object { $_.ProcessName -like '*AIGC*' } | Select-Object -ExpandProperty Id
+          Start-Process -FilePath $lnk
+          Start-Sleep -Seconds 5
+          'windows:'
+          Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.ProcessName) | $($_.MainWindowTitle)" }
+          'processes:'
+          Get-Process | Where-Object { $_.ProcessName -like '*AIGC*' } | Select-Object Id, ProcessName
