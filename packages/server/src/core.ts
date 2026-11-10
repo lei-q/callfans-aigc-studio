@@ -43,6 +43,9 @@ export interface LaunchConfig {
   lan?: boolean;
 }
 
+/** 平台明确说“没有为该模型配置可用通道”后，短期内不再把它列成可选（15 分钟） */
+const MODEL_DOWN_TTL_MS = 15 * 60_000;
+
 const MIME_EXT: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -106,10 +109,12 @@ export class Core {
     );
     this.platformMedia = new PlatformMediaProvider({
       accounts: () => this.accounts,
-      models: () => platformMediaModels(this.platform.cachedModels()),
+      models: () => this.platformModels(),
       loggedIn: () => this.accounts.loggedIn,
       concurrency: () => this.store.settings.runner.concurrency,
       pollMs: opts.platformPollMs,
+      onModelDown: (id, reason) => this.markModelDown(id, reason),
+      onModelUp: (id) => this.markModelUp(id),
     });
     this.direct = new TreeCloudProvider(
       () => {
@@ -191,9 +196,34 @@ export class Core {
   models(): ModelInfo[] {
     if (this.channel === 'direct') return this.store.settings.direct.keyEnc ? this.direct.models() : [];
     /* 平台渠道：媒体模型来自 /models 清单（免令牌，启动时预热）；Mock 云另有一套自己的目录 */
-    if (this.provider !== 'mock') return platformMediaModels(this.platform.cachedModels());
+    if (this.provider !== 'mock') return this.platformModels();
     const cloudCached = this.session.loggedIn ? this.session.models : this.store.cloudModelsCache;
     return cloudCached.map((g) => gatewayModelToModelInfo(g));
+  }
+
+  /** 平台媒体模型；网关最近明确拒绝过（没有可用通道）的模型暂时标成不可用 */
+  private platformModels(): ModelInfo[] {
+    const health = this.store.modelHealth();
+    const now = Date.now();
+    return platformMediaModels(this.platform.cachedModels()).map((m) => {
+      const h = health[m.id];
+      return h && now - h.at < MODEL_DOWN_TTL_MS
+        ? { ...m, status: 'off' as const, note: `平台暂时没有开通这个模型：${h.reason}` }
+        : m;
+    });
+  }
+
+  /** 平台明确说模型没有可用通道：短期内隐藏它，界面会自动换到另一个可用模型 */
+  markModelDown(id: string, reason: string) {
+    this.store.setModelHealth(id, { at: Date.now(), reason });
+    this.emitModels();
+  }
+
+  /** 同一个模型又能生成了：恢复可选状态 */
+  markModelUp(id: string) {
+    if (!this.store.modelHealth()[id]) return;
+    this.store.clearModelHealth(id);
+    this.emitModels();
   }
 
   modelById(id: string) {

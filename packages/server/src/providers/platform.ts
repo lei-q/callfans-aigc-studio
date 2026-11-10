@@ -86,6 +86,10 @@ export class PlatformMediaProvider implements Provider {
       concurrency: () => number;
       /** 测试 / 调整轮询间隔 */
       pollMs?: number;
+      /** 网关说模型没有可用通道：让上层把它暂时从可选列表里拿掉 */
+      onModelDown?: (id: string, reason: string) => void;
+      /** 同一个模型又能用了 */
+      onModelUp?: (id: string) => void;
     },
   ) {}
 
@@ -112,38 +116,62 @@ export class PlatformMediaProvider implements Provider {
     return this.deps.pollMs ?? VIDEO_POLL_MS;
   }
 
-  private toProviderError(e: unknown): ProviderError {
+  private toProviderError(e: unknown, model?: ModelInfo): ProviderError {
     if (e instanceof ProviderError) return e;
     if (e instanceof PlatformError) {
       if (e.status === 422) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用微信 / 支付宝充值');
       if (e.status === 401) return new ProviderError('E-AUTH-01', e.message || '模型密钥已失效', '重新登录后重试');
       if (e.status === 429) return new ProviderError('E-RATE-29', e.message, '稍后重试');
       if (e.status === 400) return new ProviderError('E-PRM-04', e.message, '检查提示词与模型参数后重试');
+      if (e.status === 403) {
+        /* 平台把“模型没绑到可用上游”报成 403 GROUP_ROUTING_FAILED；换个模型就能继续，
+           所以把原因和下一步说清楚，并让上层把这个模型暂时标成不可用 */
+        const noRoute = /GROUP_ROUTING_FAILED|No authorized bound group/i.test(e.message);
+        return new ProviderError(
+          'E-MOD-06',
+          noRoute ? `平台暂时没有为 ${model?.name || '这个模型'} 开通可用通道` : `平台拒绝使用 ${model?.name || '这个模型'}：当前账号没有权限`,
+          '换一个模型再试；如果必须用这个模型，请联系平台开通',
+        );
+      }
       if (e.status === 504 || e.code === 'timeout') return new ProviderError('E-NET-05', e.message, '稍后重试；不要在超时后重复提交');
-      return new ProviderError('E-UPS-50', e.message || '平台生成失败', '稍后重试；持续失败请带上模型与时间联系支持');
+      return new ProviderError('E-UPS-50', e.message || '平台生成失败', '稍后重试；如果反复失败，换一个模型');
     }
     return new ProviderError('E-UPS-50', `平台生成失败：${(e as Error)?.message || String(e)}`, '稍后重试');
   }
 
   async run(job: Job, model: ModelInfo, ctx: RunContext): Promise<ProviderOutput[]> {
     try {
-      if (job.type === 'image') return await this.runImage(job, model, ctx);
-      if (job.type === 'video') return await this.runVideo(job, model, ctx);
-      if (job.type === 'audio') return await this.runSpeech(job, model, ctx);
-      throw new ProviderError('E-MOD-05', '平台渠道暂不支持这个类型', '改用图像、视频或配音');
+      const out =
+        job.type === 'image'
+          ? await this.runImage(job, model, ctx)
+          : job.type === 'video'
+            ? await this.runVideo(job, model, ctx)
+            : job.type === 'audio'
+              ? await this.runSpeech(job, model, ctx)
+              : (() => {
+                  throw new ProviderError('E-MOD-05', '平台渠道暂不支持这个类型', '改用图像、视频或配音');
+                })();
+      this.deps.onModelUp?.(model.id);
+      return out;
     } catch (e) {
       if (ctx.signal.aborted) throw abortError();
-      throw this.toProviderError(e);
+      const err = this.toProviderError(e, model);
+      if (err.code === 'E-MOD-06') this.deps.onModelDown?.(model.id, '平台没有为该模型配置可用通道');
+      throw err;
     }
   }
 
   async resume(job: Job, model: ModelInfo, ctx: RunContext): Promise<ProviderOutput[]> {
     if (job.type === 'video' && job.upstreamTaskId) {
       try {
-        return await this.pollVideo(job, model, job.upstreamTaskId, ctx);
+        const out = await this.pollVideo(job, model, job.upstreamTaskId, ctx);
+        this.deps.onModelUp?.(model.id);
+        return out;
       } catch (e) {
         if (ctx.signal.aborted) throw abortError();
-        throw this.toProviderError(e);
+        const err = this.toProviderError(e, model);
+        if (err.code === 'E-MOD-06') this.deps.onModelDown?.(model.id, '平台没有为该模型配置可用通道');
+        throw err;
       }
     }
     throw new ProviderError('E-NET-03', '应用退出时请求还没完成，结果未知', '为避免重复扣费不会自动重试；可在任务记录里重跑');

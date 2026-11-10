@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Job } from '@aigc/shared';
 import { pickChatModel, PlatformCatalog, platformChat } from '../src/account/platform';
 import { buildApp } from '../src/app';
 import { Core } from '../src/core';
@@ -378,6 +379,92 @@ describe('平台媒体模型与生成', () => {
     } as RunContext;
     await expect(core.platformMedia.run(job, model, ctx)).rejects.toThrow('暂不支持音乐');
     expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith('/v1/audio/speech'))).toBe(false);
+  });
+
+  it('模型没有可用通道：403 变成可执行的提示，并暂时从可选列表里隐藏', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/generations')) {
+          return jsonRes(403, {
+            error: {
+              message: 'litellm.APIError: APIError: OpenAIException - {"code":"GROUP_ROUTING_FAILED","message":"No authorized bound group supports this request"}',
+              type: 'permission_error',
+              code: '403',
+            },
+          });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    await core.platform.models();
+    const model = core.models().find((m) => m.type === 'image')!;
+    const job = {
+      id: 'j403', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '一杯咖啡', refs: [],
+      ratio: '1:1', count: 1, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf: Buffer, mime: string) => ({ src: '/x', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    } as RunContext;
+
+    const err = await core.platformMedia.run(job, model, ctx).then(
+      () => null,
+      (e: { code: string; reason: string; fix: string }) => e,
+    );
+    if (!err) throw new Error('应该返回 E-MOD-06');
+    expect(err).toMatchObject({ code: 'E-MOD-06' });
+    expect(err.reason).toContain('没有为');
+    expect(err.fix).toContain('换一个模型');
+
+    const after = core.models().find((m) => m.id === model.id)!;
+    expect(after.status).toBe('off');
+    expect(after.note).toContain('没有开通');
+
+    /* 已经下掉的模型不能再「原样重试」 */
+    core.store.jobs.put({ ...job, status: 'failed', fail: { code: 'E-MOD-06', reason: err.reason, fix: err.fix } });
+    expect(() => core.runner.retry('j403')).toThrow(/当前不可用/);
+  });
+
+  it('修复重试：模型被平台下掉时自动换成同类型可用模型', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const catalog2 = {
+      ...CATALOG,
+      data: [...CATALOG.data, { id: 'gpt-image-2', protocol: 'openai', mode: 'image_generation', pricing: { per_image: 0.03 } }],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (u.endsWith('/models')) return jsonRes(200, catalog2);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/generations')) return jsonRes(400, { error: { message: 'Image request rejected' } });
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    await core.platform.models();
+    const gem = core.models().find((m) => m.id === 'cloud:gemini-3-pro-image-preview')!;
+    core.markModelDown(gem.id, '平台没有为该模型配置可用通道');
+    expect(core.modelById(gem.id)!.status).toBe('off');
+
+    const job: Job = {
+      id: 'jfix', name: '海报 · 1 张', type: 'image', ws: 'w1', model: gem.id, prompt: '海报', refs: [],
+      ratio: '1:1', count: 1, res: '2k', cost: 0, status: 'failed', createdAt: Date.now() - 1000, results: [],
+      fail: { code: 'E-MOD-06', reason: '平台暂时没有为该模型开通可用通道', fix: '换一个模型再试' },
+    };
+    core.store.jobs.put(job);
+    const { job: next, log } = core.runner.fix(job.id);
+    expect(next.model).toBe('cloud:gpt-image-2');
+    expect(log[0]).toContain('→');
   });
 });
 

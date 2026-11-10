@@ -170,6 +170,21 @@ export class Store {
     this.db.kvSet('llm_keys', all);
   }
 
+  /** 平台模型健康：网关明确拒绝（没有可用通道）后记一笔，短期内不再把它列成可选 */
+  modelHealth(): Record<string, { at: number; reason: string }> {
+    return this.db.kvGet<Record<string, { at: number; reason: string }>>('model_health') || {};
+  }
+  setModelHealth(id: string, v: { at: number; reason: string }) {
+    const all = { ...this.modelHealth(), [id]: v };
+    this.db.kvSet('model_health', all);
+  }
+  clearModelHealth(id: string) {
+    const all = this.modelHealth();
+    if (!all[id]) return;
+    delete all[id];
+    this.db.kvSet('model_health', all);
+  }
+
   /** 设备指纹：注册 / 签到风控用，只在本机生成一次 */
   get deviceFingerprint(): string {
     let fp = this.db.kvGet<string>('device_fp');

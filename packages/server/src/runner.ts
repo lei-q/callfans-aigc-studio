@@ -23,6 +23,8 @@ export class HttpError extends Error {
 export class JobRunner {
   private running = new Map<string, AbortController>();
   private timer: NodeJS.Timeout | null = null;
+  /** 应用退出后不再排新任务：正在跑的会在 finally 里再 pump 一次 */
+  private stopped = false;
 
   constructor(private readonly core: Core) {}
 
@@ -31,12 +33,14 @@ export class JobRunner {
   }
 
   start() {
+    this.stopped = false;
     this.recover();
     this.timer = setInterval(() => this.pump(), 400);
     this.pump();
   }
 
   stop() {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     for (const ac of this.running.values()) ac.abort();
@@ -65,7 +69,7 @@ export class JobRunner {
       throw new HttpError(400, '模型不存在', '到「模型与价格」里刷新模型列表');
     }
     if (model.type !== body.type) throw new HttpError(400, `${model.name} 不是${TYPES[body.type].name}模型`);
-    if (model.status !== 'on') throw new HttpError(400, `${model.name} 当前不可用`);
+    if (model.status !== 'on') throw new HttpError(400, `${model.name} 当前不可用`, '换一个模型再试');
     const prompt = (body.prompt || '').trim();
     if (!prompt) throw new HttpError(400, '提示词为空', '至少描述主体与用途');
     const { type, ws, negative, refs, name, divergeAxis, platform, fromCvsId, model: _m, prompt: _p, ...params } = body;
@@ -167,6 +171,8 @@ export class JobRunner {
     const job = this.store.jobs.get(id);
     if (!job) throw new HttpError(404, '任务不存在');
     if (job.status !== 'failed' && job.status !== 'canceled') throw new HttpError(400, '只有失败或已取消的任务可以重跑');
+    const model = this.core.modelById(job.model);
+    if (model && model.status !== 'on') throw new HttpError(400, `${model.name} 当前不可用`, '用「修复重试」换一个可用模型');
     return this.requeue(job, '重新排队');
   }
 
@@ -175,7 +181,18 @@ export class JobRunner {
     if (!job || !job.fail) throw new HttpError(404, '没有需要修复的失败任务');
     const model = this.core.modelById(job.model);
     if (!model) throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');
-    const log = applyFix(job, model);
+    /* 平台说这个模型没开通：换成同类型第一个可用模型，让「修复重试」真的能继续 */
+    let target = model;
+    let switched: string | null = null;
+    if (model.status !== 'on') {
+      const alt = this.siblings(model).find((m) => m.status === 'on' && m.type === model.type);
+      if (!alt) throw new HttpError(400, `${model.name} 当前不可用`, '暂时没有其他可用模型：稍后再试，或到「模型与价格」刷新清单');
+      job.model = alt.id;
+      target = alt;
+      switched = `${model.name} → ${alt.name}`;
+    }
+    const log = applyFix(job, target);
+    if (switched) log.unshift(`模型 ${switched}`);
     job.fixLog = log;
     job.fixed = true;
     this.requeue(job, '按建议修复后重新排队');
@@ -215,6 +232,7 @@ export class JobRunner {
   }
 
   pump() {
+    if (this.stopped) return;
     const all = this.store.jobs.all();
     const queued = all.filter((j) => j.status === 'queued').sort((a, b) => a.createdAt - b.createdAt);
     if (!queued.length) return;
