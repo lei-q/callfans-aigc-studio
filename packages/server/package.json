@@ -1,6 +1,6 @@
 {
   "name": "@aigc/server",
-  "version": "0.4.22",
+  "version": "0.4.23",
   "private": true,
   "main": "dist/server.cjs",
   "scripts": {
@@ -13,6 +13,7 @@
     "@fastify/multipart": "10.1.2",
     "@fastify/static": "10.1.5",
     "fastify": "5.12.5",
+    "jimp": "0.22.12",
     "sql.js": "1.14.2",
     "zod": "4.6.5"
   },

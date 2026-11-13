@@ -1,5 +1,6 @@
 import type { AudioUse, Channel, Job, ModelInfo } from '@aigc/shared';
 import { estSeconds, platformGenerationType, pickVideoResolution, videoResEdge, VOICES } from '@aigc/shared';
+import Jimp from 'jimp';
 import type { AccountSession } from '../account/session';
 import type { PlatformModel } from '../account/platform';
 import { PlatformError } from '../account/platform';
@@ -11,8 +12,9 @@ import { ProviderError, type Provider, type ProviderOutput, type RunContext } fr
    平台生成 Provider：用账号会话里的 LiteLLM 密钥调 https://api.callfansai.com
    - 图片：无参考素材走 POST /v1/images/generations（b64_json 落本机）；
            有参考素材走 POST /v1/images/edits（multipart image[]，最多 4 张）；不自动重试
-   - 视频：POST /v1/videos（multipart：model / prompt / seconds / size / ratio / resolution；
-           有首帧时附 input_reference，标准接口只接受一张参考图）
+   - 视频：POST /v1/videos（文生视频用 JSON 传 model / prompt / seconds / size / ratio / resolution；
+           有首帧时改用 multipart：网关会忽略 ratio / size，所以在本地把首帧裁成目标画幅后
+           用 input_reference 上传，resolution 仍照常透传）
            → 原样保存返回的 id → 每 3–5 秒 GET /v1/videos/{id}（最多 10 分钟）
            → GET /v1/videos/{id}/content 取 mp4
    - 语音：POST /v1/audio/speech（OpenAI 兼容），二进制音频落本机
@@ -73,6 +75,34 @@ export function videoSize(ratio?: string, vres?: string): string {
 export function videoResolutionParam(upstream: string, tier?: string): string | undefined {
   if (!tier) return undefined;
   return /minimax/i.test(upstream) ? tier.toUpperCase() : tier.toLowerCase();
+}
+
+/**
+ * 把首帧参考图统一裁成目标画幅。
+ * 该网关的 multipart 会丢掉 ratio / size，但会按 input_reference 的比例生成视频，
+ * 所以必须在本地先把参考图裁成用户选的画幅，再上传。
+ * 同时压成 720–1440 短边的 JPEG，避免大 PNG 触发网关 413。
+ */
+export async function fitFirstFrame(
+  image: { buf: Buffer; mime: string },
+  ratio: string,
+  tier?: string,
+): Promise<{ buf: Buffer; mime: string }> {
+  const [rw, rh] = ratio.split(':').map(Number);
+  const ar = rw && rh ? rw / rh : 16 / 9;
+  const short = tier === '1080p' ? 1080 : tier === '2k' || tier === '4k' ? 1440 : 720;
+  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
+  const w = even(ar >= 1 ? short * ar : short);
+  const h = even(ar >= 1 ? short : short / ar);
+  try {
+    const img = await Jimp.read(image.buf);
+    img.cover(w, h);
+    img.quality(85);
+    return { buf: await img.getBufferAsync(Jimp.MIME_JPEG), mime: 'image/jpeg' };
+  } catch {
+    /* 罕见格式（如 WebP）读不了时退回原图：画幅可能不准，但至少不会因为预处理直接失败 */
+    return image;
+  }
 }
 
 const VIDEO_TIMEOUT_MS = 10 * 60_000;
@@ -324,24 +354,36 @@ export class PlatformMediaProvider implements Provider {
     /* 选了首帧却读不出来时不要悄悄退回纯文生视频，否则成片和用户预期完全无关 */
     if (first && !image) throw new ProviderError('E-PRM-04', '首帧参考图读取失败，未提交生成', '重新拖入图片后再试；本次没有提交，不会扣点');
     ctx.progress(3, '提交到平台…');
-    /* 一律用 multipart：该网关对 JSON 创建请求会直接返回 502，纯文生视频也一样 */
-    const form = new FormData();
-    form.append('model', upstream);
-    form.append('prompt', prompt);
-    form.append('seconds', seconds);
-    form.append('size', size);
-    form.append('ratio', ratio);
-    if (resolution) form.append('resolution', resolution);
+    let created: VideoReply;
     if (image) {
-      form.append('input_reference', new Blob([image.buf], { type: image.mime }), `first-frame.${image.mime.includes('jpeg') ? 'jpg' : 'png'}`);
+      /* 有首帧：multipart 上传 input_reference。网关在 multipart 下会忽略 ratio / size，
+         所以画幅靠本地裁图保证；resolution 仍会生效。 */
+      const framed = await fitFirstFrame(image, ratio, tier);
+      const form = new FormData();
+      form.append('model', upstream);
+      form.append('prompt', prompt);
+      form.append('seconds', seconds);
+      form.append('size', size);
+      form.append('ratio', ratio);
+      if (resolution) form.append('resolution', resolution);
+      form.append('input_reference', new Blob([framed.buf], { type: framed.mime }), 'first-frame.jpg');
+      created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
+        method: 'POST',
+        form,
+        signal: ctx.signal,
+        /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
+        timeoutMs: 130_000,
+      });
+    } else {
+      /* 纯文生视频走 JSON：multipart 会丢掉 ratio / size，JSON 才会真正按画幅生成。
+         不能在这里带 data URL 参考图：该网关只接受 multipart 文件或公网 URL。 */
+      created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
+        method: 'POST',
+        json: { model: upstream, prompt, seconds, size, ratio, ...(resolution ? { resolution } : {}) },
+        signal: ctx.signal,
+        timeoutMs: 130_000,
+      });
     }
-    const created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
-      method: 'POST',
-      form,
-      signal: ctx.signal,
-      /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
-      timeoutMs: 130_000,
-    });
     const id = created?.id;
     if (!id) throw new ProviderError('E-UPS-52', '平台没有返回视频任务 ID', '稍后重试；如果已被计费请联系支持');
     job.upstreamTaskId = id;

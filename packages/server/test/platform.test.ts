@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Job } from '@aigc/shared';
+import Jimp from 'jimp';
 import { pickChatModel, PlatformCatalog, platformChat } from '../src/account/platform';
 import { buildApp } from '../src/app';
 import { Core } from '../src/core';
@@ -278,18 +279,18 @@ describe('平台媒体模型与生成', () => {
     expect(fetchMock.mock.calls.some((c) => /\/v1\/images\/(generations|edits)$/.test(String(c[0])))).toBe(false);
   });
 
-  it('视频：创建时传 seconds / size / ratio / resolution，轮询后取 content 落盘', async () => {
+  it('文生视频：走 JSON，创建时传 seconds / size / ratio / resolution', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
     let polls = 0;
     const urls: string[] = [];
-    const forms: FormData[] = [];
+    const bodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         urls.push(u);
-        if (init?.body instanceof FormData) forms.push(init.body);
+        if (typeof init?.body === 'string') bodies.push(JSON.parse(init.body));
         if (u.endsWith('/models')) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid1', status: 'queued' });
@@ -318,14 +319,14 @@ describe('平台媒体模型与生成', () => {
     const out = await core.platformMedia.run(job, model, ctx);
     expect(out).toHaveLength(1);
     expect(out[0].mime).toBe('video/mp4');
-    /* 纯文生视频也走 multipart：网关对 JSON 创建请求直接返回 502 */
-    const entries = Object.fromEntries(forms[0].entries()) as Record<string, string | File>;
-    expect(entries).toMatchObject({ model: 'veo-4-preview', seconds: '5', size: '1280x720', ratio: '16:9', resolution: '720p' });
-    expect(entries).not.toHaveProperty('input_reference');
+    /* multipart 会丢掉 ratio / size，纯文生视频必须走 JSON 才能按画幅生成 */
+    expect(bodies.find((b) => b.model === 'veo-4-preview')).toMatchObject({
+      seconds: '5', size: '1280x720', ratio: '16:9', resolution: '720p',
+    });
     expect(urls.some((u) => u.endsWith('/v1/videos/vid1/content'))).toBe(true);
   });
 
-  it('视频带首帧：multipart 同时带 input_reference / ratio / resolution，清晰度落到模型支持的档位', async () => {
+  it('视频带首帧：multipart 上传裁成目标画幅的 input_reference，resolution 照常透传', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
     const catalog = {
@@ -360,11 +361,12 @@ describe('平台媒体模型与生成', () => {
       ratio: '9:16', dur: 3, vres: '720p', cam: '推近', loop: true, negative: '模糊', fps: 30, firstFrame: true,
       cost: 0, status: 'running' as const, createdAt: 0, results: [],
     };
+    const refPng = await new Jimp(200, 200, 0xff00ffff).getBufferAsync(Jimp.MIME_PNG);
     const ctx: RunContext = {
       signal: new AbortController().signal,
       progress: () => {},
       save: async (_buf, mime) => ({ src: '/files/media/x.mp4', mime }),
-      resolveRef: async () => ({ dataUrl: `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')}`, mime: 'image/png' }),
+      resolveRef: async () => ({ dataUrl: `data:image/png;base64,${refPng.toString('base64')}`, mime: 'image/png' }),
       setUpstream: () => {},
     };
     const out = await core.platformMedia.run(job, model, ctx);
@@ -378,7 +380,12 @@ describe('平台媒体模型与生成', () => {
     expect(entries.size).toBe('720x1280');
     /* 最短 4 秒：3 秒会被上游悄悄改成 4，这里提前抬到下限 */
     expect(entries.seconds).toBe('4');
-    expect((entries.input_reference as File).type).toBe('image/png');
+    const first = entries.input_reference as File;
+    expect(first.type).toBe('image/jpeg');
+    expect(first.name).toBe('first-frame.jpg');
+    /* multipart 下网关忽略 ratio / size，画幅靠本地裁图保证 */
+    const framed = await Jimp.read(Buffer.from(await first.arrayBuffer()));
+    expect([framed.bitmap.width, framed.bitmap.height]).toEqual([720, 1280]);
     expect(entries.prompt).toContain('运镜：推近');
     expect(entries.prompt).toContain('首尾可无缝循环');
     expect(entries.prompt).toContain('避免：模糊');
