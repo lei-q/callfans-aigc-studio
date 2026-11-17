@@ -477,7 +477,8 @@ export function QueueRow({ j }: { j: Job }) {
 function QueueDrawer() {
   const s = useStore();
   const all = queueJobs(s);
-  const running = all.filter((j) => j.status === 'running');
+  /* 正在跑的排最上面：那才是用户此刻唯一要看的东西 */
+  const running = all.filter((j) => j.status === 'running').sort((a, b) => (a.startedAt || a.createdAt) - (b.startedAt || b.createdAt));
   const queued = all.filter((j) => j.status === 'queued').sort((a, b) => a.createdAt - b.createdAt);
   const failed = all.filter((j) => j.status === 'failed');
   const onlyFailed = s.queueFilter === 'failed';
@@ -517,11 +518,12 @@ function QueueDrawer() {
           <Empty icon="check" title="没有失败任务" desc="当前没有需要处理的失败任务，切回「全部」可看队列里的其他任务。" />
         ) : (
           <div className="qd-list">
+            {/* 顺序：生成中 → 排队 → 失败。失败放在最后，不挡正在进行的工作 */}
+            {!onlyFailed && running.map((j) => <QueueRow key={j.id} j={j} />)}
+            {!onlyFailed && queued.map((j) => <QueueRow key={j.id} j={j} />)}
             {failed.map((j) => (
               <QueueRow key={j.id} j={j} />
             ))}
-            {!onlyFailed && running.map((j) => <QueueRow key={j.id} j={j} />)}
-            {!onlyFailed && queued.map((j) => <QueueRow key={j.id} j={j} />)}
           </div>
         )}
       </div>
