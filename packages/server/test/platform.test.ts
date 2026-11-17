@@ -7,7 +7,7 @@ import Jimp from 'jimp';
 import { pickChatModel, PlatformCatalog, PlatformError, platformChat } from '../src/account/platform';
 import { buildApp } from '../src/app';
 import { Core } from '../src/core';
-import { platformMediaModels, videoSize } from '../src/providers/platform';
+import { REF_MAX_EACH_BYTES, platformMediaModels, shrinkReference, videoSize } from '../src/providers/platform';
 import type { RunContext } from '../src/providers/types';
 
 /* 平台模型接入的契约测试：模型清单 → 换 key → 调网关。
@@ -454,6 +454,77 @@ describe('平台媒体模型与生成', () => {
     } as RunContext;
     await expect(core.platformMedia.run(job, model, ctx)).rejects.toThrow('参考素材读取失败');
     expect(fetchMock.mock.calls.some((c) => /\/v1\/images\/(generations|edits)$/.test(String(c[0])))).toBe(false);
+  });
+
+  it('参考图体积：上传前压到单张 300KB 以内，base64 后仍安全', async () => {
+    /* 造一张大 PNG：真实照片的复杂度，压缩后应远小于上限 */
+    const big = new Jimp(2000, 1500);
+    big.scan(0, 0, 2000, 1500, function (x, y, idx) {
+      const base = Math.round(128 + 80 * Math.sin(x / 200) * Math.cos(y / 150));
+      this.bitmap.data[idx] = Math.min(255, base + ((x % 7) + (y % 5)) * 2);
+      this.bitmap.data[idx + 1] = Math.min(255, base + 15);
+      this.bitmap.data[idx + 2] = Math.max(0, base - 20);
+      this.bitmap.data[idx + 3] = 255;
+    });
+    const png = await big.getBufferAsync(Jimp.MIME_PNG);
+    expect(png.length).toBeGreaterThan(REF_MAX_EACH_BYTES);
+    const out = await shrinkReference({ buf: png, mime: 'image/png' });
+    expect(out.mime).toBe('image/jpeg');
+    expect(out.buf.length).toBeLessThanOrEqual(REF_MAX_EACH_BYTES);
+    /* base64 膨胀 33%，压缩后仍要在上游 1MB 以内 */
+    expect(Math.ceil((out.buf.length * 4) / 3)).toBeLessThan(1024 * 1024);
+    /* 长边不超过 1280：参考图不需要更大 */
+    const back = await Jimp.read(out.buf);
+    expect(Math.max(back.bitmap.width, back.bitmap.height)).toBeLessThanOrEqual(1280);
+  });
+
+  it('参考图体积：已经够小的图原样返回，不做无谓重编码', async () => {
+    const small = await new Jimp(320, 240, 0x3366ffff).getBufferAsync(Jimp.MIME_JPEG);
+    const out = await shrinkReference({ buf: small, mime: 'image/jpeg' });
+    expect(out.buf.length).toBe(small.length);
+    expect(out.mime).toBe('image/jpeg');
+  });
+
+  it('参考图合计超 700KB：提交前拦下，不产生扣费', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const fetchMock = vi.fn(async (url: string) =>
+      isCatalog(String(url)) ? jsonRes(200, CATALOG) : jsonRes(200, { data: [{ b64_json: Buffer.from([0x89, 0x50]).toString('base64') }] }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    /* 1 像素棋盘最难压：压到 300KB 以内后每张仍约 280KB，4 张合计会超 700KB */
+    const busy = await Promise.all(
+      Array.from({ length: 4 }, async () => {
+        const img = new Jimp(1400, 1000);
+        img.scan(0, 0, 1400, 1000, function (x, y, idx) {
+          const v = (x + y) & 1 ? 255 : 0;
+          this.bitmap.data[idx] = v;
+          this.bitmap.data[idx + 1] = v;
+          this.bitmap.data[idx + 2] = v;
+          this.bitmap.data[idx + 3] = 255;
+        });
+        return img.getBufferAsync(Jimp.MIME_PNG);
+      }),
+    );
+    const job = {
+      id: 'j-bulk', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '合成背景',
+      refs: busy.map((_, i) => ({ src: `/files/uploads/n${i}.png`, w: 0.5 })),
+      ratio: '1:1', count: 1, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf: Buffer, mime: string) => ({ src: '/x', mime }),
+      resolveRef: async (src: string) => {
+        const i = Number(/n(\d+)/.exec(src)?.[1] || 0);
+        return { dataUrl: `data:image/png;base64,${busy[i].toString('base64')}`, mime: 'image/png' };
+      },
+      setUpstream: () => {},
+    } as RunContext;
+    await expect(core.platformMedia.run(job, model, ctx)).rejects.toThrow('超过平台 700KB 上限');
+    /* 一次都没有提交到上游：拦在本地，不扣费 */
+    expect(fetchMock.mock.calls.some((c) => /\/v1\/images\/edits$/.test(String(c[0])))).toBe(false);
   });
 
   it('文生视频：走 JSON，创建时传 seconds / size / ratio / resolution', async () => {

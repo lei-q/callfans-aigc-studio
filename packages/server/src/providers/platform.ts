@@ -87,6 +87,60 @@ export function videoResolutionParam(tier?: string): string | undefined {
   return tier.toUpperCase();
 }
 
+/** 参考图上传的体积上限：上游按 base64 计（膨胀 33%），单张 300KB / 合计 700KB */
+export const REF_MAX_EACH_BYTES = 300 * 1024;
+export const REF_MAX_TOTAL_BYTES = 700 * 1024;
+
+/** 逐级降质重编码，直到落进目标体积；尺寸本身已经先缩过，这里只调质量 */
+const JPEG_QUALITY_STEPS = [82, 74, 66, 58, 50, 42];
+
+/**
+ * 把参考图压到上传体积以内。
+ *
+ * 上游按 base64 后的体积算，比原图大 33%，而且限得比 10MB 严得多——单张 1MB
+ * 就可能被拒。这里先把长边缩到不超过 1280（参考图不需要更大），再逐级降质，
+ * 直到单张落进 300KB。缩尺寸比降质更影响观感，所以先缩再降。
+ *
+ * 读不了的格式（罕见 WebP 变体）原样返回：宁可在提交前按体积拦下并给出明确
+ * 提示，也不要因为预处理失败把一次正常请求变成错误。
+ */
+export async function shrinkReference(
+  image: { buf: Buffer; mime: string },
+  limit = REF_MAX_EACH_BYTES,
+): Promise<{ buf: Buffer; mime: string }> {
+  if (image.buf.length <= limit) return image;
+  let img: Jimp;
+  try {
+    img = await Jimp.read(image.buf);
+  } catch {
+    return image;
+  }
+  /* 透明通道的图转 JPEG 会变黑底，先铺白底 */
+  if (typeof (img as unknown as { hasAlpha?: () => boolean }).hasAlpha === 'function' && (img as unknown as { hasAlpha: () => boolean }).hasAlpha()) {
+    const flat = new Jimp(img.bitmap.width, img.bitmap.height, 0xffffffff);
+    flat.composite(img, 0, 0);
+    img = flat;
+  }
+  scaleLongSide(img, 1280);
+  for (const q of JPEG_QUALITY_STEPS) {
+    img.quality(q);
+    const buf = await img.getBufferAsync(Jimp.MIME_JPEG);
+    if (buf.length <= limit) return { buf, mime: 'image/jpeg' };
+  }
+  /* 最低质量仍超标：长边再砍到 640 试一次，还不行就交给调用方按体积报错 */
+  scaleLongSide(img, 640);
+  img.quality(JPEG_QUALITY_STEPS[JPEG_QUALITY_STEPS.length - 1]);
+  return { buf: await img.getBufferAsync(Jimp.MIME_JPEG), mime: 'image/jpeg' };
+}
+
+/** 把长边缩到不超过 edge（已经更小就不放大）；另一边按比例走 */
+function scaleLongSide(img: { bitmap: { width: number; height: number }; resize: (w: number, h: number) => unknown }, edge: number) {
+  const { width: w, height: h } = img.bitmap;
+  if (Math.max(w, h) <= edge) return;
+  if (w >= h) img.resize(edge, Jimp.AUTO);
+  else img.resize(Jimp.AUTO, edge);
+}
+
 /**
  * 把首帧参考图统一裁成目标画幅。
  * 上游在「首帧模式」下会跟随输入图片的比例，所以先把参考图裁成用户选的画幅，
@@ -258,8 +312,17 @@ export class PlatformMediaProvider implements Provider {
       if (images.length !== refs.length) {
         throw new ProviderError('E-PRM-04', '参考素材读取失败，未提交生成', '重新拖入参考图后再试；本次没有提交，不会扣点');
       }
-      if (images.some((im) => im.buf.length > 10 * 1024 * 1024)) {
-        throw new ProviderError('E-PRM-04', '参考图超过 10MB', '换一张小一点的参考图；本次没有提交，不会扣点');
+      /* 上游按 base64 算体积并限得比 10MB 严得多：本地先压到单张 300KB，
+         合计超 700KB 就在提交前拦下（此时还没计费），而不是等上游 400。 */
+      const shrunk = await Promise.all(images.map((im) => shrinkReference(im)));
+      const total = shrunk.reduce((n, im) => n + im.buf.length, 0);
+      if (total > REF_MAX_TOTAL_BYTES) {
+        const kb = Math.round(total / 1024);
+        throw new ProviderError(
+          'E-PRM-04',
+          `参考图合计 ${kb}KB，超过平台 700KB 上限`,
+          '减少参考图数量（最多 4 张），或换更简单的图；本次没有提交，不会扣点',
+        );
       }
       ctx.progress(6, '提交到平台…');
       /* 编辑接口也带 size：不传时上游按参考图尺寸出图，和用户选的分辨率对不上 */
@@ -269,7 +332,7 @@ export class PlatformMediaProvider implements Provider {
         form.append('prompt', prompt);
         form.append('n', String(count));
         if (withSize && size) form.append('size', size);
-        images.forEach((im, i) => {
+        shrunk.forEach((im, i) => {
           form.append('image[]', new Blob([im.buf], { type: im.mime }), `reference-${i + 1}.${imageExt(im.mime)}`);
         });
         return this.deps.accounts().gatewayJson<ImageReply>('/v1/images/edits', {

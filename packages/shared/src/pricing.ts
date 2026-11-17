@@ -143,13 +143,22 @@ export const snapLongEdge = (n: number) => Math.max(SIZE_STEP, Math.floor(n / SI
 export const snapShortEdge = (n: number) => Math.max(SIZE_STEP, Math.round(n / SIZE_STEP) * SIZE_STEP);
 
 /**
+ * 图像的最小像素面积：1024 × 900 = 921600。
+ * 上游对太小或太扁的尺寸直接拒绝（16:9 的 1080p 只有 1072×608，
+ * 面积刚过半），本地先放大到合规，别等上游 400。
+ */
+export const MIN_IMAGE_AREA = 921_600;
+
+/**
  * 比例 + 分辨率档位 → 平台图像接口的像素尺寸。
  * 平台图像接口没有「档位名」字段，只有 size（如 1024x1536），所以必须自己算。
- * 两条硬约束：
+ * 三条硬约束：
  * - 宽高都要能被 16 整除，否则上游直接 400（`1080x608`、`1920x1080` 都不行）；
  * - 档位固定**长边**（1080 / 2048 / 4096）：2K、4K 这类叫法本就按长边命名，
- *   固定短边会让 9:16 面积翻倍。
- * 所以长边与短边都吸附到 16 的倍数，比例误差在 1% 以内。
+ *   固定短边会让 9:16 面积翻倍；
+ * - 面积不小于 {@link MIN_IMAGE_AREA}：宽画幅（16:9 / 9:16）在 1080p 档位下面积偏小，
+ *   按同一比例整体放大到够为止，而不是把尺寸交给上游去拒绝。
+ * 吸附都落在 16 的倍数上，比例误差在 1.5% 以内。
  */
 export function imageSizeOf(ratio: string | undefined, res: string | undefined): string | undefined {
   const [rw, rh] = (ratio || '1:1').split(':').map(Number);
@@ -157,7 +166,41 @@ export function imageSizeOf(ratio: string | undefined, res: string | undefined):
   const long = snapLongEdge((RESOS.find((x) => x.k === res) || RESOS[1]).edge);
   /* 长边固定，短边 = 长边 × 短边比例。横版乘 (h/w)，竖版乘 (w/h)，两种写法都 < 1 */
   const short = snapShortEdge(rw >= rh ? long * (rh / rw) : long * (rw / rh));
-  return rw >= rh ? `${long}x${short}` : `${short}x${long}`;
+  if (long * short >= MIN_IMAGE_AREA) return rw >= rh ? `${long}x${short}` : `${short}x${long}`;
+
+  /* 面积不足：按同一比例整体放大（只放大短边会改变画幅）。
+     两个维度都向上取整到 16 的倍数会双双偏大，比例也跟着歪，所以再试一次
+     以短边为主、长边按比例补的写法，取比例更准的那个候选。 */
+  const scale = Math.sqrt(MIN_IMAGE_AREA / (long * short));
+  const up = (n: number) => Math.ceil(n / SIZE_STEP) * SIZE_STEP;
+  const candidates: [number, number][] = [];
+  /* 候选一：两边同倍率放大 */
+  const a = up(long * scale);
+  const b = up(short * scale);
+  candidates.push([Math.max(a, b), Math.min(a, b)]);
+  /* 候选二：长边只按面积需求量补齐，短边取整后再回头修正长边 */
+  const a2 = up(MIN_IMAGE_AREA / b);
+  candidates.push([Math.max(a2, b), Math.min(a2, b)]);
+  /* 候选三：反过来以长边为准 */
+  const b3 = up(MIN_IMAGE_AREA / a);
+  candidates.push([Math.max(a, b3), Math.min(a, b3)]);
+
+  const [big, small] = pickClosest(candidates, Math.max(rw, rh) / Math.min(rw, rh));
+  return rw >= rh ? `${big}x${small}` : `${small}x${big}`;
+}
+
+/** 在候选尺寸里挑面积达标、且长宽比最接近目标的一个 */
+function pickClosest(candidates: [number, number][], targetAr: number): [number, number] {
+  const valid = candidates.filter(([big, small]) => big * small >= MIN_IMAGE_AREA && big % SIZE_STEP === 0 && small % SIZE_STEP === 0);
+  if (!valid.length) {
+    /* 兜底：按面积硬算一个必然达标的方形，至少不会把非法尺寸交给上游 */
+    const edge = Math.ceil(Math.sqrt(MIN_IMAGE_AREA) / SIZE_STEP) * SIZE_STEP;
+    return [edge, edge];
+  }
+  return valid.reduce((best, cur) => {
+    const err = (c: [number, number]) => Math.abs(c[0] / c[1] / targetAr - 1);
+    return err(cur) < err(best) ? cur : best;
+  });
 }
 
 /** 视频清晰度换算成短边像素：2K / 4K 在视频里通常按长边命名，这里取常见短边值参与比较 */
