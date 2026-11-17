@@ -80,12 +80,14 @@
 
 | 能力 | 平台接口 | 说明 |
 | --- | --- | --- |
-| 图像 | `POST /v1/images/generations` | 返回的 `b64_json` 立即保存到本机；**不自动重试**，超时不代表没执行 |
-| 视频 | `POST /v1/videos` → 轮询 `GET /v1/videos/{id}` → `GET /v1/videos/{id}/content` | 文生视频用 JSON 传 `model / prompt / seconds / size / ratio / resolution`。有首帧参考时改用 multipart：该网关在 multipart 下会忽略 `ratio` / `size`，所以先把首帧裁成目标画幅再作为 `input_reference` 上传（`resolution` 仍会生效）。返回的 `id` 原样保存，每 3–5 秒查一次，最多等 10 分钟，最后取 mp4 |
+| 图像 | `POST /v1/images/generations`；有参考图时 `POST /v1/images/edits` | 比例 + 分辨率换算成真实 `size`（如 `1024x1536`）随请求一起提交；返回的 `b64_json` / `url` 立即保存到本机。**不自动重试**，超时不代表没执行（只有网关在派发前明确拒绝 `size` 时才会去掉它重发一次） |
+| 视频 | `POST /v1/videos` → 轮询 `GET /v1/videos/{id}` → `GET /v1/videos/{id}/content` | 画幅只由 `ratio` 表达、清晰度由 `resolution` 表达，**两者不同时传 `size`**：同传 `size` 与 `resolution` 时上游以档位为准，而档位不含宽高比，会退回 16:9。有首帧参考时改用 multipart，并先把首帧裁成目标画幅再作为 `input_reference` 上传。返回的 `id` 原样保存，每 3–5 秒查一次，最多等 10 分钟，最后取 mp4 |
 
-平台的计费规则：视频任务创建成功（HTTP 200）即按秒扣费，生成失败也不退，所以**失败后不会自动重建**；点数余额每 10 秒自动刷新，以平台账本为准。应用内不再为这类模型展示假的预估点数，统一显示「按实际用量」。
+平台的计费规则：视频任务创建成功（HTTP 200）即按秒扣费，生成失败也不退，所以**失败后不会自动重建**；点数余额每 10 秒自动刷新，以平台账本为准。
 
-视频参数里 `ratio`、`seconds`、`resolution` 和首帧 `input_reference` 是接口字段；其中 multipart 创建会丢掉 `ratio` / `size`，所以带首帧时由本地先把参考图裁成目标画幅。运镜、循环点、负面提示没有独立参数，会拼进 `prompt`；帧率由上游决定，接口不接受 `fps`。清晰度档位取自模型 `pricing.per_video_second_by_resolution` 的键，界面只展示该模型真正支持的档位。
+**每个任务花了多少点**：界面用清单里的美元标价给出预估（按 1 USD ≈ 7.2 点折算），同时订阅账号流水中 `reason = litellm usage` 的扣点条目——对上了就换成平台实际扣点，没对上先显示「待结算」，后台每分钟、任务结束后以及打开任务记录时各补对一次。
+
+视频参数里 `ratio`、`seconds`、`resolution` 和首帧 `input_reference` 是接口字段；时长是**自定义整秒**（默认 3 秒，超过模型上限时收回到上限）。运镜、循环点、负面提示没有独立参数，会拼进 `prompt`；帧率由上游决定，接口不接受 `fps`。清晰度档位取自模型 `pricing.per_video_second_by_resolution` 的键，界面只展示该模型真正支持的档位。
 
 ### 自定义渠道（TreeCloud 兼容）
 

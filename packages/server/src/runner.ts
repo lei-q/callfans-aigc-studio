@@ -1,8 +1,12 @@
 import type { CreateJobBody, Job, ModelInfo, Result } from '@aigc/shared';
-import { applyFix, durationText, resultTags, TYPES, uid, unitPrice, validateJob } from '@aigc/shared';
+import { applyFix, durationText, estPoints, resultTags, TYPES, uid, unitPrice, validateJob } from '@aigc/shared';
 import type { Core } from './core';
+import { scheduleSettle, settlePoints } from './points';
 import type { ProviderOutput, RunContext } from './providers/types';
 import { ProviderError } from './providers/types';
+
+/** 平台渠道的点数对账节拍：流水晚到也能在几分钟内补上 */
+const SETTLE_POLL_MS = 60_000;
 
 export class HttpError extends Error {
   constructor(
@@ -23,6 +27,7 @@ export class HttpError extends Error {
 export class JobRunner {
   private running = new Map<string, AbortController>();
   private timer: NodeJS.Timeout | null = null;
+  private settleTimer: NodeJS.Timeout | null = null;
   /** 应用退出后不再排新任务：正在跑的会在 finally 里再 pump 一次 */
   private stopped = false;
 
@@ -37,12 +42,29 @@ export class JobRunner {
     this.recover();
     this.timer = setInterval(() => this.pump(), 400);
     this.pump();
+    this.startSettleLoop();
+  }
+
+  /**
+   * 平台渠道的对账循环：任务记录里的「实际消耗」来自账号流水，
+   * 流水可能晚到很久（甚至上次退出前没回来），所以定期补一次。
+   */
+  private startSettleLoop() {
+    if (this.settleTimer) clearInterval(this.settleTimer);
+    this.settleTimer = setInterval(() => {
+      void settlePoints(this.core)
+        .then((jobs) => jobs.forEach((j) => this.core.events.emit({ type: 'job', job: j })))
+        .catch(() => {});
+    }, SETTLE_POLL_MS);
+    this.settleTimer.unref?.();
   }
 
   stop() {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.settleTimer) clearInterval(this.settleTimer);
     this.timer = null;
+    this.settleTimer = null;
     for (const ac of this.running.values()) ac.abort();
   }
 
@@ -84,6 +106,10 @@ export class JobRunner {
       negative: negative || undefined,
       refs: (refs || []).slice(0, 4),
       cost: unitPrice(type, params, model),
+      /* 平台渠道不按本地价扣点：记下计费方式与预估，实际消耗在完成后从账号流水对上 */
+      ...(model.usageBilling
+        ? { usageBilling: true, pointsEst: estPoints(type, params, model) ?? undefined }
+        : {}),
       status: 'queued',
       queueNote: '即将开始',
       createdAt: Date.now(),
@@ -136,6 +162,7 @@ export class JobRunner {
     job.status = 'canceled';
     delete job.eta;
     delete job.queueNote;
+    job.finishedAt = Date.now();
     if (ac) {
       ac.abort();
       this.running.delete(id);
@@ -143,6 +170,8 @@ export class JobRunner {
       if (model) void this.core.providerOf(model).cancel?.(job);
     }
     this.save(job);
+    /* 平台渠道：已提交的任务即使取消也照样计费，实际消耗仍然要靠流水对回来 */
+    if (job.usageBilling && job.upstreamTaskId) this.settleLater();
     this.refreshNotes();
     return { job, refunded: job.cost > 0 };
   }
@@ -161,6 +190,10 @@ export class JobRunner {
     delete job.startedAt;
     delete job.finishedAt;
     delete job.durText;
+    /* 重跑是另一次运行：累计消耗保留，只重置「这次运行」的对账窗口与待结算提示 */
+    job.runStartedAt = Date.now();
+    delete job.pointsNote;
+    if (job.usageBilling) job.pointsEst = estPoints(job.type, job, model) ?? undefined;
     this.save(job);
     this.refreshNotes();
     this.pump();
@@ -289,6 +322,8 @@ export class JobRunner {
     job.status = 'running';
     job.progress = resume ? job.progress || 4 : 4;
     job.startedAt = resume ? job.startedAt || Date.now() : Date.now();
+    /* 每次（重新）运行都有自己的对账窗口：重跑要能再算一笔 */
+    if (!resume || !job.runStartedAt) job.runStartedAt = job.startedAt;
     job.eta = '生成中…';
     delete job.queueNote;
     this.save(job);
@@ -319,7 +354,8 @@ export class JobRunner {
     delete job.queueNote;
     job.finishedAt = Date.now();
     this.save(job);
-    const usage = this.core.modelById(job.model)?.usageBilling;
+    if (job.usageBilling) this.settleLater();
+    const usage = job.usageBilling;
     this.core.events.notice(
       'warn',
       '生成失败',
@@ -339,6 +375,11 @@ export class JobRunner {
       }
     }
     return n;
+  }
+
+  /** 任务结束（成功 / 失败 / 取消）后安排一次账号流水对账，把实际消耗补到任务上 */
+  private settleLater() {
+    scheduleSettle(this.core, (j) => this.core.events.emit({ type: 'job', job: j }));
   }
 
   private finish(job: Job, outs: ProviderOutput[]) {
@@ -382,10 +423,12 @@ export class JobRunner {
     job.durText = durationText(now - (job.startedAt || now));
     job.results = results.map((r) => r.id);
     this.save(job);
+    if (job.usageBilling) this.settleLater();
+    const spent = job.pointsSpent != null ? ` · 消耗 ${job.pointsSpent} 点` : '';
     this.core.events.notice(
       'success',
       '生成完成',
-      `${job.name} · 产出 ${results.length} 项，已送到画布顶部${settled ? `；上一批 ${settled} 项未取用，已进草稿箱` : ''}`,
+      `${job.name} · 产出 ${results.length} 项${spent}，已送到画布顶部${settled ? `；上一批 ${settled} 项未取用，已进草稿箱` : ''}`,
     );
   }
 

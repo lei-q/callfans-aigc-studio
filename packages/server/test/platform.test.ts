@@ -155,11 +155,14 @@ describe('平台媒体模型与生成', () => {
       ['cloud:qwen-audio-3.0-tts-flash', 'audio', 'qwen-audio-3.0-tts-flash', true],
     ]);
     expect(models.find((m) => m.type === 'audio')?.uses).toEqual(['tts']);
-    expect(models.find((m) => m.id === 'cloud:veo-4-preview')).toMatchObject({ minDur: 4, videoRes: ['720p'] });
+    /* 时长由用户自定义，不再声明平台没公布的下限 */
+    expect(models.find((m) => m.id === 'cloud:veo-4-preview')).toMatchObject({ videoRes: ['720p'] });
+    expect(models.find((m) => m.id === 'cloud:veo-4-preview')!.minDur).toBeUndefined();
     expect(videoSize('16:9', '720p')).toBe('1280x720');
     expect(videoSize('9:16', '1080p')).toBe('1080x1920');
-    /* 768P / 2K 这类档位由 resolution 表达，size 只负责画幅 */
-    expect(videoSize('9:16', '768p')).toBe('720x1280');
+    /* 竖版短边按档位取，长边按画幅推——画幅只由 ratio 决定 */
+    expect(videoSize('9:16', '768p')).toBe('768x1366');
+    expect(videoSize('9:16', '2k')).toBe('1440x2560');
   });
 
   it('图片：POST /v1/images/generations，b64_json 落盘，只请求一次', async () => {
@@ -319,11 +322,56 @@ describe('平台媒体模型与生成', () => {
     const out = await core.platformMedia.run(job, model, ctx);
     expect(out).toHaveLength(1);
     expect(out[0].mime).toBe('video/mp4');
-    /* multipart 会丢掉 ratio / size，纯文生视频必须走 JSON 才能按画幅生成 */
-    expect(bodies.find((b) => b.model === 'veo-4-preview')).toMatchObject({
-      seconds: '5', size: '1280x720', ratio: '16:9', resolution: '720p',
-    });
+    /* 纯文生视频走 JSON：画幅与清晰度分开传，且不带 size（size 会和 resolution 打架） */
+    const body = bodies.find((b) => b.model === 'veo-4-preview')!;
+    expect(body).toMatchObject({ seconds: '5', ratio: '16:9', resolution: '720P' });
+    expect(body).not.toHaveProperty('size');
     expect(urls.some((u) => u.endsWith('/v1/videos/vid1/content'))).toBe(true);
+  });
+
+  it('竖版 9:16：只传 ratio + resolution，不同时传 size', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    let polls = 0;
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (typeof init?.body === 'string') {
+          try {
+            bodies.push(JSON.parse(init.body));
+          } catch {
+            /* multipart 不是 JSON */
+          }
+        }
+        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid9', status: 'queued' });
+        if (u.endsWith('/v1/videos/vid9/content')) return new Response(Buffer.from('mp4'), { status: 200, headers: { 'Content-Type': 'video/mp4' } });
+        if (u.endsWith('/v1/videos/vid9')) {
+          polls += 1;
+          return jsonRes(200, { id: 'vid9', status: polls < 2 ? 'in_progress' : 'completed', seconds: 3 });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'video')!;
+    const job = {
+      id: 'j9', name: 't', type: 'video' as const, ws: 'w1', model: model.id, prompt: '竖版短片', refs: [],
+      ratio: '9:16', dur: 3, vres: '720p', cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx: RunContext = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf, mime) => ({ src: '/files/media/x.mp4', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    };
+    await core.platformMedia.run(job, model, ctx);
+    const body = bodies.find((b) => b.model === 'veo-4-preview')!;
+    expect(body).toMatchObject({ ratio: '9:16', resolution: '720P', seconds: '3' });
+    expect(body).not.toHaveProperty('size');
   });
 
   it('视频带首帧：multipart 上传裁成目标画幅的 input_reference，resolution 照常透传', async () => {
@@ -355,7 +403,7 @@ describe('平台媒体模型与生成', () => {
       }),
     );
     const model = platformMediaModels(catalog.data as never).find((m) => m.upstream === 'minimax-h3')!;
-    expect(model).toMatchObject({ minDur: 4, videoRes: ['768p', '2k'] });
+    expect(model).toMatchObject({ videoRes: ['768p', '2k'] });
     const job = {
       id: 'j4', name: 't', type: 'video' as const, ws: 'w1', model: model.id, prompt: '挥舞兵器', refs: [{ src: 'ref.png', w: 1 }],
       ratio: '9:16', dur: 3, vres: '720p', cam: '推近', loop: true, negative: '模糊', fps: 30, firstFrame: true,
@@ -376,16 +424,18 @@ describe('平台媒体模型与生成', () => {
     const entries = Object.fromEntries(form.entries()) as Record<string, string | File>;
     expect(entries.model).toBe('minimax-h3');
     expect(entries.ratio).toBe('9:16');
+    /* 档位用大写：小写 768p 会被 MiniMax 这类上游忽略，画幅随之失效 */
     expect(entries.resolution).toBe('768P');
-    expect(entries.size).toBe('720x1280');
-    /* 最短 4 秒：3 秒会被上游悄悄改成 4，这里提前抬到下限 */
-    expect(entries.seconds).toBe('4');
+    /* 不同时传 size：它会和 resolution 打架，导致画幅回落到 16:9 */
+    expect(entries).not.toHaveProperty('size');
+    /* 时长是用户自定义值：3 秒原样透传，上游自己取整 */
+    expect(entries.seconds).toBe('3');
     const first = entries.input_reference as File;
     expect(first.type).toBe('image/jpeg');
     expect(first.name).toBe('first-frame.jpg');
-    /* multipart 下网关忽略 ratio / size，画幅靠本地裁图保证 */
+    /* multipart 下画幅靠本地裁图保证：竖版就是竖版，短边按落到的档位（768p）取 */
     const framed = await Jimp.read(Buffer.from(await first.arrayBuffer()));
-    expect([framed.bitmap.width, framed.bitmap.height]).toEqual([720, 1280]);
+    expect([framed.bitmap.width, framed.bitmap.height]).toEqual([768, 1366]);
     expect(entries.prompt).toContain('运镜：推近');
     expect(entries.prompt).toContain('首尾可无缝循环');
     expect(entries.prompt).toContain('避免：模糊');

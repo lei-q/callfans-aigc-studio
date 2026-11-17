@@ -1,5 +1,5 @@
 import type { AudioUse, Channel, Job, ModelInfo } from '@aigc/shared';
-import { estSeconds, platformGenerationType, pickVideoResolution, videoResEdge, VOICES } from '@aigc/shared';
+import { estSeconds, imageSizeOf, platformGenerationType, pickVideoResolution, VIDEO_DUR_DEF, videoResEdge, VOICES } from '@aigc/shared';
 import Jimp from 'jimp';
 import type { AccountSession } from '../account/session';
 import type { PlatformModel } from '../account/platform';
@@ -36,11 +36,12 @@ export function platformMediaModelInfo(m: PlatformModel): ModelInfo | null {
     type === 'video'
       ? Object.keys(m.pricing?.per_video_second_by_resolution || {}).sort((a, b) => videoResEdge(a) - videoResEdge(b))
       : [];
+  const usdPerByRes = type === 'video' ? (m.pricing?.per_video_second_by_resolution ?? undefined) : undefined;
   return {
     id: `cloud:${m.id}`,
     name: m.id,
     type,
-    /* 实际扣点由平台按用量结算；本地不做假的点数预估 */
+    /* 实际扣点由平台按用量结算；这里带上美元标价，界面只用来做预估 */
     price: 0,
     basis: type === 'image' ? '张' : type === 'video' ? '秒' : '字',
     status: 'on',
@@ -48,12 +49,14 @@ export function platformMediaModelInfo(m: PlatformModel): ModelInfo | null {
     upstream: m.id,
     secPer: 30,
     usageBilling: true,
+    usdPer: type === 'image' ? (m.pricing?.per_image ?? undefined) : type === 'video' ? (m.pricing?.per_video_second ?? undefined) : undefined,
+    ...(usdPerByRes && Object.keys(usdPerByRes).length ? { usdPerByRes } : {}),
     note: '平台渠道 · 按平台实际用量扣点',
     caps: m.protocol ? [m.protocol] : [],
     limit: audio ? '单条文案 ≤ 4096 字' : '',
     ...(audio ? { uses: ['tts'] as AudioUse[] } : {}),
-    /* 平台目录没有时长清单：只声明已知的下限（MiniMax 最短 4 秒），不虚构上限 */
-    ...(type === 'video' ? { minDur: 4, ...(videoRes.length ? { videoRes } : {}) } : {}),
+    /* 平台目录没有时长清单：时长由用户自定义，不虚构上限与下限（上游可能自行取整） */
+    ...(type === 'video' && videoRes.length ? { videoRes } : {}),
   };
 }
 
@@ -61,26 +64,33 @@ export function platformMediaModels(models: PlatformModel[]): ModelInfo[] {
   return models.map(platformMediaModelInfo).filter((m): m is ModelInfo => !!m);
 }
 
-/** 时长 + 分辨率 → 平台视频接口的 size（如 1280x720）；清晰度本身由 resolution 决定 */
-export function videoSize(ratio?: string, vres?: string): string {
-  const q = (vres || '').toLowerCase();
-  const short = q === '1080p' ? 1080 : q === '480p' ? 480 : 720;
+/** 比例 + 短边像素 → `宽x高`（偶数）；size 与首帧裁切共用这一套换算 */
+export function ratioSize(ratio: string | undefined, short: number): string {
   const [rw, rh] = (ratio || '16:9').split(':').map(Number);
   const ar = rw && rh ? rw / rh : 16 / 9;
   const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
   return ar >= 1 ? `${even(short * ar)}x${short}` : `${short}x${even(short / ar)}`;
 }
 
-/** 上游 resolution 的写法：MiniMax 用大写 768P / 2K，其余按小写 */
-export function videoResolutionParam(upstream: string, tier?: string): string | undefined {
+/** 比例 + 清晰度档位 → 平台视频接口的 size（如 1280x720）；档位决定短边 */
+export function videoSize(ratio?: string, vres?: string): string {
+  return ratioSize(ratio, videoResEdge(vres) || 720);
+}
+
+/**
+ * 上游 resolution 的写法：参考协议是 720P / 1080P / 2K（大写 P / K）。
+ * 之前按小写 768p 传，MiniMax 之类只认大写档位的上游会忽略这个字段，
+ * 画幅和清晰度就一起失效了。
+ */
+export function videoResolutionParam(tier?: string): string | undefined {
   if (!tier) return undefined;
-  return /minimax/i.test(upstream) ? tier.toUpperCase() : tier.toLowerCase();
+  return tier.toUpperCase();
 }
 
 /**
  * 把首帧参考图统一裁成目标画幅。
- * 该网关的 multipart 会丢掉 ratio / size，但会按 input_reference 的比例生成视频，
- * 所以必须在本地先把参考图裁成用户选的画幅，再上传。
+ * 上游在「首帧模式」下会跟随输入图片的比例，所以先把参考图裁成用户选的画幅，
+ * 让画幅在两种上游行为下都成立。
  * 同时压成 720–1440 短边的 JPEG，避免大 PNG 触发网关 413。
  */
 export async function fitFirstFrame(
@@ -88,12 +98,10 @@ export async function fitFirstFrame(
   ratio: string,
   tier?: string,
 ): Promise<{ buf: Buffer; mime: string }> {
-  const [rw, rh] = ratio.split(':').map(Number);
-  const ar = rw && rh ? rw / rh : 16 / 9;
-  const short = tier === '1080p' ? 1080 : tier === '2k' || tier === '4k' ? 1440 : 720;
-  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
-  const w = even(ar >= 1 ? short * ar : short);
-  const h = even(ar >= 1 ? short : short / ar);
+  /* 尺寸换算与文本请求共用一套公式；首帧再压到 720–1440 短边，避免大图触发网关 413 */
+  const short = Math.min(1440, Math.max(720, videoResEdge(tier) || 720));
+  const [w, h] = ratioSize(ratio, short).split('x').map(Number);
+  if (!w || !h) return image;
   try {
     const img = await Jimp.read(image.buf);
     img.cover(w, h);
@@ -225,6 +233,8 @@ export class PlatformMediaProvider implements Provider {
   private async runImage(job: Job, model: ModelInfo, ctx: RunContext): Promise<ProviderOutput[]> {
     const upstream = model.upstream || model.id.replace(/^cloud:/, '');
     let prompt = job.prompt.trim();
+    /* 尺寸是真实接口字段（size），提示词里再写一遍画幅方便上游理解构图 */
+    const size = imageSizeOf(job.ratio, job.res);
     if (job.ratio) prompt += `。画幅 ${job.ratio}`;
     if (job.negative?.trim()) prompt += `。避免出现：${job.negative.trim()}`;
     const count = Math.max(1, job.count || 1);
@@ -249,31 +259,59 @@ export class PlatformMediaProvider implements Provider {
         throw new ProviderError('E-PRM-04', '参考图超过 10MB', '换一张小一点的参考图；本次没有提交，不会扣点');
       }
       ctx.progress(6, '提交到平台…');
-      const form = new FormData();
-      form.append('model', upstream);
-      form.append('prompt', prompt);
-      form.append('n', String(count));
-      images.forEach((im, i) => {
-        form.append('image[]', new Blob([im.buf], { type: im.mime }), `reference-${i + 1}.${imageExt(im.mime)}`);
-      });
-      const reply = await this.deps.accounts().gatewayJson<ImageReply>('/v1/images/edits', {
-        method: 'POST',
-        form,
-        signal: ctx.signal,
-        timeoutMs: 600_000,
-      });
+      /* 编辑接口也带 size：不传时上游按参考图尺寸出图，和用户选的分辨率对不上 */
+      const submit = (withSize: boolean) => {
+        const form = new FormData();
+        form.append('model', upstream);
+        form.append('prompt', prompt);
+        form.append('n', String(count));
+        if (withSize && size) form.append('size', size);
+        images.forEach((im, i) => {
+          form.append('image[]', new Blob([im.buf], { type: im.mime }), `reference-${i + 1}.${imageExt(im.mime)}`);
+        });
+        return this.deps.accounts().gatewayJson<ImageReply>('/v1/images/edits', {
+          method: 'POST',
+          form,
+          signal: ctx.signal,
+          timeoutMs: 600_000,
+        });
+      };
+      let reply: ImageReply;
+      try {
+        reply = await submit(true);
+      } catch (e) {
+        /* 与文生图同一条原则：只有网关在派发前明确拒绝 size 才去掉它重发 */
+        if (!size || !isUnsupportedParam(e, 'size')) throw e;
+        reply = await submit(false);
+      }
       return this.saveImageReply(reply, ctx);
     }
 
     ctx.progress(6, '提交到平台…');
     /* 不传 response_format：部分上游（如 qwen-image 系列）不支持该参数，LiteLLM 会直接报
-       UnsupportedParamsError。默认返回结构里 url / b64_json 两种都已在 saveImageReply 处理。 */
-    const reply = await this.deps.accounts().gatewayJson<ImageReply>('/v1/images/generations', {
-      method: 'POST',
-      json: { model: upstream, prompt, n: count },
-      signal: ctx.signal,
-      timeoutMs: 600_000,
-    });
+       UnsupportedParamsError。默认返回结构里 url / b64_json 两种都已在 saveImageReply 处理。
+
+       size 同理：有的上游不认这个参数。先在提交前报错、没有产生扣费时才去掉它重试一次；
+       已经提交过（可能已计费）就绝不再提交。 */
+    const body = { model: upstream, prompt, n: count, ...(size ? { size } : {}) };
+    let reply: ImageReply;
+    try {
+      reply = await this.deps.accounts().gatewayJson<ImageReply>('/v1/images/generations', {
+        method: 'POST',
+        json: body,
+        signal: ctx.signal,
+        timeoutMs: 600_000,
+      });
+    } catch (e) {
+      if (!size || !isUnsupportedParam(e, 'size')) throw e;
+      const { size: _drop, ...rest } = body;
+      reply = await this.deps.accounts().gatewayJson<ImageReply>('/v1/images/generations', {
+        method: 'POST',
+        json: rest,
+        signal: ctx.signal,
+        timeoutMs: 600_000,
+      });
+    }
     return this.saveImageReply(reply, ctx);
   }
 
@@ -335,17 +373,16 @@ export class PlatformMediaProvider implements Provider {
     else if (job.cam === '固定') prompt += '，固定机位';
     if (job.loop) prompt += '，首尾可无缝循环';
     if (job.negative?.trim()) prompt += `。避免：${job.negative.trim()}`;
-    /* 上游有最短时长时先抬到下限（例如 MiniMax 最短 4 秒，传 3 会被上游悄悄改成 4） */
-    const wantSec = Math.max(1, Math.round(job.dur || 5));
-    const minSec = model.minDur ?? (model.durs?.length ? Math.min(...model.durs) : 1);
-    const seconds = String(Math.max(minSec, wantSec));
-    const ratio = job.ratio || '16:9';
-    /* 除了 size，还要单独传 ratio / resolution：LiteLLM 的上游映射只认这两个字段，
-       只给 size 时首帧参考、画幅和清晰度都会被忽略（MiniMax 实测会回到 16:9 / 2K）。 */
+    /* 时长是用户自定义的整秒；上游会自行取整或截到自己的档位，这里不做本地猜测 */
+    const seconds = String(Math.max(1, Math.round(job.dur || VIDEO_DUR_DEF)));
     const tier = pickVideoResolution(job.vres, model.videoRes);
-    const size = videoSize(ratio, tier || job.vres);
-    /* 模型没有按分辨率计价时无法确认档位名，只靠 size 表达清晰度 */
-    const resolution = model.videoRes?.length ? videoResolutionParam(upstream, tier) : undefined;
+    const ratio = job.ratio || '16:9';
+    /* 画幅与清晰度分开传，且不传 size：
+       - 文档 §6.3：同传 size 与 resolution 时以档位为准，而 720P / 1080P / 2K 不含宽高比，
+         上游会退回默认 16:9 —— 这正是「选 9:16 出 16:9」的直接原因；
+       - 实测画幅丢失时还会随机落到 768x768 / 2560x1440，说明 size 与 resolution 在互相打架。
+       按文档 §6.2 的写法只给 `resolution` + `ratio`，两者互补、互不覆盖。 */
+    const resolution = tier ? videoResolutionParam(tier) : undefined;
     /* 首帧参考图按平台约定用 multipart 的 input_reference 上传；
        不支持首帧的模型会在创建阶段返回 400（此时还没有计费）。 */
     const first = job.firstFrame !== false ? job.refs[0] : undefined;
@@ -354,32 +391,32 @@ export class PlatformMediaProvider implements Provider {
     /* 选了首帧却读不出来时不要悄悄退回纯文生视频，否则成片和用户预期完全无关 */
     if (first && !image) throw new ProviderError('E-PRM-04', '首帧参考图读取失败，未提交生成', '重新拖入图片后再试；本次没有提交，不会扣点');
     ctx.progress(3, '提交到平台…');
+    const base: Record<string, string> = {
+      model: upstream,
+      prompt,
+      seconds,
+      ratio,
+      ...(resolution ? { resolution } : {}),
+    };
     let created: VideoReply;
     if (image) {
-      /* 有首帧：multipart 上传 input_reference。网关在 multipart 下会忽略 ratio / size，
-         所以画幅靠本地裁图保证；resolution 仍会生效。 */
+      /* 首帧模式下上游会跟随参考图比例，所以先按所选画幅裁好再上传，双重保证画幅 */
       const framed = await fitFirstFrame(image, ratio, tier);
       const form = new FormData();
-      form.append('model', upstream);
-      form.append('prompt', prompt);
-      form.append('seconds', seconds);
-      form.append('size', size);
-      form.append('ratio', ratio);
-      if (resolution) form.append('resolution', resolution);
+      for (const [k, v] of Object.entries(base)) form.append(k, v);
       form.append('input_reference', new Blob([framed.buf], { type: framed.mime }), 'first-frame.jpg');
       created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
         method: 'POST',
         form,
         signal: ctx.signal,
-        /* 网关侧对创建请求的超时是 120 秒；比它再宽一点，让网关自己报 504，而不是本地先断开留下未知状态 */
         timeoutMs: 130_000,
       });
     } else {
-      /* 纯文生视频走 JSON：multipart 会丢掉 ratio / size，JSON 才会真正按画幅生成。
+      /* 纯文生视频走 JSON：multipart 会丢掉 ratio / resolution，只有 JSON 才能按画幅出片。
          不能在这里带 data URL 参考图：该网关只接受 multipart 文件或公网 URL。 */
       created = await this.deps.accounts().gatewayJson<VideoReply>('/v1/videos', {
         method: 'POST',
-        json: { model: upstream, prompt, seconds, size, ratio, ...(resolution ? { resolution } : {}) },
+        json: base,
         signal: ctx.signal,
         timeoutMs: 130_000,
       });
@@ -445,6 +482,17 @@ export class PlatformMediaProvider implements Provider {
       });
     }
   }
+}
+
+/**
+ * 网关是否明确因为「不认识这个参数」拒了请求。
+ * 只认这类错误才敢去掉参数重发：400 是网关在派发上游之前做的校验，没有产生扣费；
+ * 超时、5xx 等情况可能已经执行，绝不能重发。
+ */
+function isUnsupportedParam(e: unknown, param: string): boolean {
+  if (!(e instanceof PlatformError) || e.status !== 400) return false;
+  const msg = e.message || '';
+  return /unsupported|unrecognized|unknown|invalid|not support/i.test(msg) && new RegExp(param, 'i').test(msg);
 }
 
 /** 参考图可能是本机 data URL，也可能是远程地址；统一取成字节再上传 */

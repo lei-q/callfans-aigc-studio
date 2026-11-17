@@ -1,13 +1,34 @@
-import { resoOf, resRank, RESOS } from './constants';
-import { round1 } from './format';
+import { resoOf, resRank, RESOS, USD_TO_POINTS, VIDEO_DUR_DEF } from './constants';
+import { round1, round2 } from './format';
 import type { Job, JobFail, JobParams, MediaType, ModelInfo } from './types';
 
-/** 单价与预估消耗：和原型同一套算法 */
+/** 单价与预估消耗：分辨率不再有价格倍率，图像按张、视频按秒 */
 export function unitPrice(type: MediaType, p: JobParams, m: Pick<ModelInfo, 'price'>) {
-  if (type === 'image') return round1(m.price * resoOf(p.res).mul * (p.count || 1));
-  if (type === 'video') return round1(m.price * (p.dur || 5));
+  if (type === 'image') return round1(m.price * (p.count || 1));
+  if (type === 'video') return round1(m.price * (p.dur || VIDEO_DUR_DEF));
   if (p.use === 'sfx') return m.price;
   return round1(m.price * Math.max(1, Math.ceil((p.dur || 30) / 30)));
+}
+
+/**
+ * 平台渠道的预估点数：清单里是美元标价，按 USD_TO_POINTS 折成点。
+ * 保留两位小数——便宜模型单张不到 0.2 点，只留一位会把差异抹平。
+ * 实际扣点以平台账本为准；拿不到标价时返回 null（界面显示「按实际用量」）。
+ */
+export function estPoints(type: MediaType, p: JobParams, m: ModelInfo): number | null {
+  if (!m.usageBilling) return unitPrice(type, p, m);
+  if (type === 'image') {
+    if (m.usdPer == null) return null;
+    return round2(m.usdPer * USD_TO_POINTS * (p.count || 1));
+  }
+  if (type === 'video') {
+    const tiers = m.usdPerByRes && Object.keys(m.usdPerByRes).length ? m.usdPerByRes : undefined;
+    const tier = pickVideoResolution(p.vres, tiers ? Object.keys(tiers) : undefined);
+    const per = (tier ? tiers?.[tier] : undefined) ?? m.usdPer;
+    if (per == null) return null;
+    return round2(per * USD_TO_POINTS * (p.dur || VIDEO_DUR_DEF));
+  }
+  return null;
 }
 
 /** 发散 / 适配：单个方向的花费，图像按 1 张算 */
@@ -23,7 +44,7 @@ export function estSeconds(type: MediaType, p: JobParams, m?: Pick<ModelInfo, 's
     const qmul = p.res === '4k' ? 2.2 : p.res === '1080p' ? 0.7 : 1;
     sec = per * (p.count || 1) * qmul;
   } else if (type === 'video') {
-    sec = (m?.secPer ?? 44) * (p.dur || 5);
+    sec = (m?.secPer ?? 44) * (p.dur || VIDEO_DUR_DEF);
   } else {
     sec = p.use === 'sfx' ? 10 : Math.round((p.dur || 30) * 1.2);
   }
@@ -109,6 +130,21 @@ export function pickImageSize(ratio: string | undefined, res: string | undefined
     }
   }
   return best.s;
+}
+
+/**
+ * 比例 + 分辨率档位 → 平台图像接口的像素尺寸。
+ * 平台图像接口没有「档位名」字段，只有 size（如 1024x1536），所以必须自己算。
+ * 档位固定的是**长边**（1080 / 2048 / 4096）：2K、4K 这类叫法本来就是按长边命名，
+ * 固定短边会让 9:16 的面积翻倍（2K 竖版会到 3640 高），既超出预期也更容易被上游拒绝。
+ */
+export function imageSizeOf(ratio: string | undefined, res: string | undefined): string | undefined {
+  const [rw, rh] = (ratio || '1:1').split(':').map(Number);
+  if (!rw || !rh) return undefined;
+  const ar = rw / rh;
+  const long = (RESOS.find((x) => x.k === res) || RESOS[1]).edge;
+  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
+  return ar >= 1 ? `${even(long)}x${even(long / ar)}` : `${even(long * ar)}x${even(long)}`;
 }
 
 /** 视频清晰度换算成短边像素：2K / 4K 在视频里通常按长边命名，这里取常见短边值参与比较 */

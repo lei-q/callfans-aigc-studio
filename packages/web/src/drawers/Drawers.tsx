@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import type { AccountDocuments, ForgotReply, Job, OrderDto, RegisterStartReply, Result } from '@aigc/shared';
-import { HELP_TOPICS, MAX_REFS, POST_PLATFORMS, TYPES, mmss, paramsBrief, timeLabel } from '@aigc/shared';
+import { HELP_TOPICS, MAX_REFS, POST_PLATFORMS, TYPES, mmss, paramsBrief, pointsOf, pointsText, timeLabel } from '@aigc/shared';
 import { useStore } from '../store';
 import {
   addRefItem,
@@ -237,7 +237,20 @@ function ResultDrawer({ id }: { id: string }) {
             </div>
             <div className="snap-row">
               <span className="sk">点数消耗</span>
-              <span className="sv">{j ? (m.usageBilling ? '按平台实际用量计费' : `${j.cost} 点（任务级）`) : '——'} · {m.usageBilling ? '生成失败不退' : '失败自动退回'}</span>
+              <span className="sv">
+                {(() => {
+                  if (!j) return '——';
+                  const v = pointsOf(j);
+                  return v.kind === 'actual'
+                    ? `${pointsText(v.value!)} 点（平台实际扣点）`
+                    : v.kind === 'estimate'
+                      ? `约 ${pointsText(v.value!)} 点；平台流水到账后显示实际值`
+                      : v.kind === 'pending'
+                        ? '以平台流水为准'
+                        
+                        : `${pointsText(v.value!)} 点（任务级）`;
+                })()}
+              </span>
             </div>
             {j?.requestId && (
               <div className="snap-row">
@@ -400,7 +413,11 @@ export function QueueRow({ j }: { j: Job }) {
       <div style={{ minWidth: 0 }}>
         <div className="qr-name">{j.name}</div>
         <div className="qr-sub">
-          {m.name} · {paramsBrief(j)} · {m.usageBilling ? '按实际用量' : `${j.cost} 点`}
+          {m.name} · {paramsBrief(j)} ·{' '}
+          {(() => {
+            const v = pointsOf(j);
+            return v.kind === 'actual' ? `${pointsText(v.value!)} 点` : v.kind === 'estimate' ? `约 ${pointsText(v.value!)} 点` : v.kind === 'pending' ? '按实际用量' : `${pointsText(v.value!)} 点`;
+          })()}
         </div>
       </div>
       <div>

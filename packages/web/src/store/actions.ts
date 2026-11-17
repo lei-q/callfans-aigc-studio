@@ -25,6 +25,8 @@ import {
   MAX_REFS,
   POST_PLATFORMS,
   TYPES,
+  VIDEO_DUR_DEF,
+  VIDEO_DUR_MIN,
   affordable,
   agentParamText,
   paramsBrief,
@@ -149,10 +151,11 @@ export function changeModel(id: string) {
     const p = s.params[s.type];
     p.model = id;
     const m = s.models.find((x) => x.id === id);
-    if (s.type === 'video' && m?.durs?.length && p.dur && !m.durs.includes(p.dur)) {
-      p.dur = m.durs.filter((d) => d <= (p.dur || 5)).pop() || m.durs[0];
+    /* 时长是自定义输入：换模型只把超出新模型上限的值收回来 */
+    if (s.type === 'video') {
+      if (!Number.isFinite(p.dur) || (p.dur || 0) < VIDEO_DUR_MIN) p.dur = VIDEO_DUR_DEF;
+      else if (m?.maxDur && p.dur! > m.maxDur) p.dur = m.maxDur;
     }
-    if (s.type === 'video' && m?.minDur && (p.dur || 0) < m.minDur) p.dur = m.minDur;
     /* 平台模型按分辨率分档：换成不支持的档位时就近落到模型支持的档位 */
     if (s.type === 'video' && m?.videoRes?.length) p.vres = pickVideoResolution(p.vres, m.videoRes);
   });
@@ -339,7 +342,7 @@ export function reuseParams(rid: string) {
     st.cvsPop = null;
     const p = st.params[t];
     if (t === 'image') Object.assign(p, { model: j.model, ratio: j.ratio || '1:1', count: j.count || 4, res: j.res || '2k' });
-    else if (t === 'video') Object.assign(p, { model: j.model, ratio: j.ratio || '9:16', dur: j.dur || 5, cam: j.cam || '固定' });
+    else if (t === 'video') Object.assign(p, { model: j.model, ratio: j.ratio || '9:16', dur: j.dur || VIDEO_DUR_DEF, cam: j.cam || '固定' });
     else Object.assign(p, { model: j.model, use: j.use || 'tts', dur: j.dur || 30, voice: j.voice || p.voice, mood: j.mood || p.mood });
     fixParams(st);
   });
@@ -440,6 +443,18 @@ export function goJobs() {
     s.page = 'jobs';
     s.jobFilter = 'all';
   });
+}
+
+/**
+ * 主动对一次账：账号流水到的比任务完成晚，打开任务记录时补一次，
+ * 让「待结算」尽快换成实际消耗。
+ */
+export async function settleJobs() {
+  try {
+    await api.post('/api/jobs/settle');
+  } catch {
+    /* 对账是尽力而为：失败不影响任务本身，后台每分钟还会再对一次 */
+  }
 }
 
 /* ---------------- 产出 ---------------- */

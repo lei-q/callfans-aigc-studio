@@ -196,6 +196,11 @@ export interface FssLedgerEntry {
   reason: string;
   occurredAt: string;
   appId?: string;
+  /** 模型调用的流水条目带这些字段，用来把扣点对回具体任务 */
+  operationId?: string;
+  lotId?: string;
+  model?: string;
+  requestId?: string;
 }
 
 /* ---------------- 映射 ---------------- */

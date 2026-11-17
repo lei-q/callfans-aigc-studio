@@ -25,6 +25,7 @@ import {
   type FssAppMe,
   type FssBalance,
   type FssChannels,
+  type FssLedgerEntry,
   type FssLlmKey,
   type FssMe,
   type FssOrder,
@@ -394,6 +395,19 @@ export class AccountSession {
       if (e instanceof ConsumerError && e.isAuth) this.setLoggedOut('登录已失效');
       throw e;
     }
+  }
+
+  /**
+   * 账号流水（含模型调用扣点）。reason 为 `litellm usage` 的 debit 条目就是一次生成 /
+   * 对话的实际消耗，是「每个任务花了多少点」的唯一权威来源。
+   */
+  async ledger(limit = 50): Promise<FssLedgerEntry[]> {
+    if (!this.loggedIn) return [];
+    const list = await this.appRequest<FssLedgerEntry[]>(
+      `/app/entitlements/ledger?limit=${Math.min(200, Math.max(1, limit))}`,
+      `/consumer/entitlements/ledger?limit=${Math.min(200, Math.max(1, limit))}`,
+    );
+    return Array.isArray(list) ? list : [];
   }
 
   /** 统一契约优先；只有老版账号服务（404）的个人账号才退回 /consumer/** */

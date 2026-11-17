@@ -1,4 +1,4 @@
-import { TYPES, hostOf, postPlatformOf } from './constants';
+import { TYPES, VIDEO_DUR_DEF, hostOf, postPlatformOf } from './constants';
 import type { AudioUse, CanvasItem, CanvasLink, JobParams, MediaType, ResKey } from './types';
 
 /* ============================================================================
@@ -172,7 +172,7 @@ export function agentReadBoard(input: AgentInput): AgentResult {
     params.res = paramSrc?.res || '2k';
   } else if (mainType === 'video') {
     params.ratio = paramSrc?.ratio || '9:16';
-    params.dur = paramSrc?.dur || 5;
+    params.dur = paramSrc?.dur || VIDEO_DUR_DEF;
     params.cam = paramSrc?.cam || '推近';
   } else {
     params.use = paramSrc?.use || 'tts';

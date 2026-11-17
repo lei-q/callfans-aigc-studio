@@ -11,12 +11,19 @@ import {
   RESOS,
   SFX_DURS,
   TYPES,
+  VIDEO_DUR_DEF,
+  VIDEO_DUR_MAX,
+  VIDEO_DUR_MIN,
   VIDEO_RATIOS,
   VIDEO_RES,
   VOICES,
+  estPoints,
   estTimeText,
+  imageSizeOf,
   pickVideoResolution,
   resoOf,
+  pointsText,
+  round2,
   videoResLabel,
 } from '@aigc/shared';
 import { Icon, TaskIc, jobIconCls } from '../components/common';
@@ -169,11 +176,19 @@ function Composer() {
   const m = modelOf(s, p.model);
   const cost = estCost(s);
   const usageBilling = !!m?.usageBilling;
+  /* 平台渠道：清单里是美元标价，换算成预估点数；拿不到标价就只能按实际用量 */
+  const est = estPoints(t, p, m);
   const fastsso = s.settings?.account.provider === 'fastsso';
   const route = routeInfo(s, t, t === 'audio' ? p.use : undefined);
   const directChannel = s.settings?.channel === 'direct';
   const needLogin = route.kind === null && !s.session?.loggedIn && !directChannel;
-  const enough = usageBilling ? route.kind === 'cloud' : route.kind === 'direct' ? true : route.kind === 'cloud' ? canAfford(s, cost) : false;
+  const enough = usageBilling
+    ? route.kind === 'cloud' && (est == null || canAfford(s, est))
+    : route.kind === 'direct'
+      ? true
+      : route.kind === 'cloud'
+        ? canAfford(s, cost)
+        : false;
   const opt = s.optimize;
   const prompt = s.prompt[t];
   const plen = prompt.trim().length;
@@ -318,7 +333,7 @@ function Composer() {
                   ? '参考图会通过平台图片编辑接口（/v1/images/edits）一起上传，最多 4 张，按顺序参与编辑；结果张数以平台返回为准。'
                   : t === 'video'
                     ? m.channel === 'cloud'
-                      ? '平台视频接口只支持一张参考图：第一张会按所选画幅居中裁切后作为首帧（可在下面切换为纯文生视频），其余参考图不参与本次生成。'
+                      ? '平台视频接口只支持一张参考图：第一张会先按所选画幅居中裁切，再作为首帧上传（可在下面切换为纯文生视频），其余参考图不参与本次生成。'
                       : '第一张参考图作为首帧，第二张作为参考图（最多 2 张）；参考图只用于本次生成，不会进入素材库。'
                     : '参考图只用于本次生成，不会进入素材库。'}
             </div>
@@ -368,10 +383,19 @@ function Composer() {
 
         <div className="cost-row">
           <div className="cost-box">
-            <span className="ck">本次消耗</span>
-            <span className="cv num" style={{ color: enough ? 'var(--t1)' : 'var(--red)', fontSize: usageBilling ? 14 : undefined }}>
-              {usageBilling ? '按实际用量' : `${cost} 点`}
+            <span className="ck">{usageBilling ? '预估消耗' : '本次消耗'}</span>
+            <span className="cv num" style={{ color: enough ? 'var(--t1)' : 'var(--red)', fontSize: usageBilling && est == null ? 14 : undefined }}>
+              {usageBilling ? (est == null ? '按实际用量' : `约 ${pointsText(est)} 点`) : `${cost} 点`}
             </span>
+            {/* 计价口径写清楚：图像按张、视频按秒，避免「为什么改了分辨率价格没变」的疑问 */}
+            {est != null && (t === 'image' || t === 'video') && (
+              <span className="ck" style={{ fontWeight: 500 }}>
+                {t === 'image'
+                  ? `按张 · ${pointsText(round2(est / Math.max(1, p.count || 1)))} 点 × ${p.count} 张`
+                  
+                  : `按秒 · ${pointsText(round2(est / Math.max(1, p.dur || VIDEO_DUR_DEF)))} 点 × ${p.dur}s`}
+              </span>
+            )}
           </div>
           <div className="cost-sep" />
           <div className="cost-box">
@@ -388,7 +412,7 @@ function Composer() {
           <span className="grow" />
           <span className="tiny dim">
             {usageBilling
-              ? '平台渠道按实际用量扣点，以平台账本为准'
+              ? '按平台标价预估；实际扣点由平台结算，完成后在任务记录里核对'
               : route.kind === 'direct'
                 ? '自定义渠道：费用由你自己的上游结算，不扣平台点数'
                 : free > 0
@@ -414,7 +438,7 @@ function Composer() {
           <button className="btn primary gen-btn" onClick={() => void gen()}>
             <Icon name="send" />
             生成{t === 'image' ? ` ${p.count} 张` : ` ${p.dur}s`}
-            {usageBilling ? ' · 按实际用量' : ` · ${cost} 点`}
+            {usageBilling ? (est == null ? ' · 按实际用量' : ` · 约 ${pointsText(est)} 点`) : ` · ${cost} 点`}
           </button>
         ) : (
           <button className="btn primary gen-btn" onClick={() => openDrawer(s.session?.accountMode === 'enterprise' ? 'account' : 'topup')} style={{ background: 'var(--amber)' }}>
@@ -473,18 +497,20 @@ function Params({ t }: { t: MediaType }) {
           </span>
           <div className="opt-pills">
             {RESOS.map((q) => (
-              <button key={q.k} className={`opt-pill ${p.res === q.k ? 'on' : ''}`} title={q.px} onClick={() => setParam('res', q.k)}>
+              <button key={q.k} className={`opt-pill ${p.res === q.k ? 'on' : ''}`} title={`输出 ${imageSizeOf(p.ratio, q.k) || q.px}`} onClick={() => setParam('res', q.k)}>
                 {q.n}
-                {q.mul !== 1 ? ` ×${q.mul}` : ''}
               </button>
             ))}
+            <span className="tiny dim" style={{ alignSelf: 'center', marginLeft: 4 }}>
+              {p.ratio} → {imageSizeOf(p.ratio, p.res) || resoOf(p.res).px}
+            </span>
           </div>
         </div>
       </>
     );
   }
   if (t === 'video') {
-    const durs = m.durs && m.durs.length ? m.durs : [4, 5, 8];
+    const durs = m.durs && m.durs.length ? m.durs : [];
     return (
       <>
         <div className="form-row">
@@ -493,9 +519,37 @@ function Params({ t }: { t: MediaType }) {
         </div>
         <div className="form-row">
           <span className="form-label">
-            时长<span className="fl-hint">{m.maxDur ? `上限 ${m.maxDur} 秒` : m.minDur ? `最短 ${m.minDur} 秒 · 平台会就近取整` : '上限见模型说明'}</span>
+            时长<span className="fl-hint">{m.maxDur ? `上限 ${m.maxDur} 秒` : '自定义秒数，默认 3 秒'}</span>
           </span>
-          <Pills k="dur" value={p.dur} opts={durs.map((d) => [d, `${d} 秒`] as [number, string])} />
+          {/* 自定义时长：不同模型支持的长度不一样，所以不写死档位 */}
+          <div className="dur-row">
+            <div className="form-suffix dur-input">
+              <input
+                className="form-input"
+                type="number"
+                min={VIDEO_DUR_MIN}
+                max={m.maxDur ?? VIDEO_DUR_MAX}
+                step={1}
+                value={p.dur ?? VIDEO_DUR_DEF}
+                onChange={(e) => {
+                  const raw = Number(e.target.value);
+                  if (!Number.isFinite(raw)) return;
+                  const cap = m.maxDur ?? VIDEO_DUR_MAX;
+                  setParam('dur', Math.max(VIDEO_DUR_MIN, Math.min(cap, Math.round(raw))));
+                }}
+              />
+              <span className="unit">秒</span>
+            </div>
+            {durs.length > 0 && (
+              <div className="opt-pills">
+                {durs.map((d) => (
+                  <button key={d} className={`opt-pill ${p.dur === d ? 'on' : ''}`} onClick={() => setParam('dur', d)}>
+                    {d}s
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className="form-row">
           <span className="form-label">

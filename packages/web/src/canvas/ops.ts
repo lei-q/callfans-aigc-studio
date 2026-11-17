@@ -6,6 +6,7 @@ import {
   PLATFORM_DEFAULT,
   PLATFORMS,
   TYPES,
+  VIDEO_DUR_DEF,
   agentParamText,
   agentReadBoard,
   clamp,
@@ -820,7 +821,7 @@ export function anchorToggle(id: string) {
     it.type === 'image'
       ? { type: 'image' as const, ratio: j?.ratio || r?.ratio || p.ratio || '1:1', res: j?.res || p.res || '2k' }
       : it.type === 'video'
-        ? { type: 'video' as const, ratio: j?.ratio || p.ratio || '9:16', dur: j?.dur || p.dur || 5, cam: j?.cam || p.cam || '固定' }
+        ? { type: 'video' as const, ratio: j?.ratio || p.ratio || '9:16', dur: j?.dur || p.dur || VIDEO_DUR_DEF, cam: j?.cam || p.cam || '固定' }
         : { type: 'audio' as const, use: j?.use || p.use || 'tts', dur: j?.dur || p.dur || 30 };
   mutateBoard((bd) => void (bd.anchor = { cvsId: id, params }));
   toast('success', '已设为风格基准', `${it.t} · 后续生成会自动带上它，保证系列一致`);

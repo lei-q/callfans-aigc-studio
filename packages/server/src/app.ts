@@ -14,6 +14,7 @@ import { OidcError } from './account/oidc';
 import type { Core } from './core';
 import { mimeOfExt } from './core';
 import { linkPreview } from './linkPreview';
+import { settlePoints } from './points';
 import { registerOpenApi } from './openapi';
 import { HttpError } from './runner';
 import { safeEqual, sha256 } from './secrets';
@@ -384,6 +385,12 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.post('/api/jobs', async (req) => {
     const body = S.createJobsSchema.parse(req.body);
     return { jobs: core.runner.createMany(body.jobs, 'web') };
+  });
+  /* 主动对一次账：任务记录页打开时调用，把「待结算」补成实际消耗 */
+  app.post('/api/jobs/settle', async () => {
+    const jobs = await settlePoints(core);
+    for (const job of jobs) core.events.emit({ type: 'job', job });
+    return { settled: jobs.filter((j) => j.pointsSpent != null).length };
   });
   app.post('/api/jobs/:id/cancel', async (req) => core.runner.cancel((req.params as { id: string }).id));
   app.post('/api/jobs/:id/retry', async (req) => ({ job: core.runner.retry((req.params as { id: string }).id) }));

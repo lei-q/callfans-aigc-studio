@@ -130,9 +130,10 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 ## 平台模型（图像 / 视频生成）
 
 - 模型目录：仍来自免令牌 `GET {gatewayBase}/models`，`mode` 以 `image` / `video` 开头的归到对应类型；价目表在「模型与价格」页面最下方统一展示。
-- 图片：`POST {gatewayBase}/v1/images/generations`（`model`、`prompt`、`n`；**不传 `response_format`**，部分上游不支持该参数会直接报 `UnsupportedParamsError`），返回的 `b64_json` 或 `url` 都保存到本机媒体目录；有参考素材时改用 `POST /v1/images/edits`（multipart，重复的 `image[]`，最多 4 张）。**不自动重试**。
-- 视频：`POST {gatewayBase}/v1/videos`。文生视频用 JSON 传 `model / prompt / seconds / size / ratio / resolution`（`resolution` 取该模型 `pricing.per_video_second_by_resolution` 的档位键，如 `768p` / `2k`）；有首帧参考时改用 multipart，并先把参考图裁成目标画幅再作为 `input_reference` 上传——该网关在 multipart 下会忽略 `ratio` / `size`，输出画幅跟随参考图比例，`resolution` 仍生效。把返回的 `id` 原样存为上游任务 ID，每 3–5 秒 `GET /v1/videos/{id}`，最多等 10 分钟，成功后 `GET /v1/videos/{id}/content` 取 mp4。
-- 计费：视频创建返回 200 即已按秒扣费，任务失败也不退；因此失败后**不会自动重建**，重跑需要用户手动确认。应用内这些模型显示「按实际用量」，余额每 10 秒自动刷新。
+- 图片：`POST {gatewayBase}/v1/images/generations`（`model`、`prompt`、`n`、`size`；**不传 `response_format`**，部分上游不支持该参数会直接报 `UnsupportedParamsError`），`size` 由比例 + 分辨率档位算出（如 `1024x1536`）；返回的 `b64_json` 或 `url` 都保存到本机媒体目录；有参考素材时改用 `POST /v1/images/edits`（multipart，重复的 `image[]`，最多 4 张，同样带 `size`）。**不自动重试**，唯一的例外是网关在派发前明确拒绝 `size`（400 且消息点名该参数）时去掉它重发一次。
+- 视频：`POST {gatewayBase}/v1/videos`。画幅只由 `ratio` 表达、清晰度只由 `resolution`（大写档位，如 `768P` / `2K`），**不传 `size`**：参考文档 §6.3 明确同传 `size` 与 `resolution` 时以上游档位为准，而档位不含宽高比，会退回 16:9——这是「选 9:16 出 16:9」的根因。有首帧参考时改用 multipart，并先把参考图裁成目标画幅再作为 `input_reference` 上传。时长由用户自定义（默认 3 秒），原样按整秒字符串传。把返回的 `id` 原样存为上游任务 ID，每 3–5 秒 `GET /v1/videos/{id}`，最多等 10 分钟，成功后 `GET /v1/videos/{id}/content` 取 mp4。
+- 计费：视频创建返回 200 即已按秒扣费，任务失败也不退；因此失败后**不会自动重建**，重跑需要用户手动确认。余额每 10 秒自动刷新。
+- 每个任务的消耗：清单里的美元标价折算成预估点数（1 USD ≈ 7.2 点），生成结束后从 `GET /app/entitlements/ledger`（`/consumer/entitlements/ledger` 回退）里把 `reason = litellm usage` 的扣点条目按时间窗一对一匹配到任务上；没匹配到先标「待结算」，后台每分钟补对一次。
 - 参数边界：`ratio` / `seconds` / `resolution` / 首帧 `input_reference` 是真实接口字段；运镜、循环点、负面提示会拼进 `prompt`；`fps` 没有对应字段，不发送。
 - 密钥：复用账号会话里的长期 LiteLLM key，只在后端使用；401 时丢本地副本重换一次，422 = 积分不足。
 

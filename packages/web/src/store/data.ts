@@ -1,5 +1,5 @@
 import type { Board, Bootstrap, MediaType, ServerEvent, WalletDto } from '@aigc/shared';
-import { TYPE_KEYS, pickVideoResolution } from '@aigc/shared';
+import { TYPE_KEYS, VIDEO_DUR_DEF, VIDEO_DUR_MIN, pickVideoResolution } from '@aigc/shared';
 import { api, subscribe } from '../lib/api';
 import { getState, setState, useStore, type State } from './index';
 import { emptyBoard, modelsFor } from './selectors';
@@ -32,10 +32,12 @@ export function fixParams(s: State) {
       p.model = list.some((m) => m.id === want) ? want : list[0].id;
     }
     const m = s.models.find((x) => x.id === p.model);
-    if (t === 'video' && m?.durs?.length && p.dur && !m.durs.includes(p.dur)) {
-      p.dur = m.durs.filter((d) => d <= (p.dur || 5)).pop() || m.durs[0];
+    /* 时长是自定义输入：只把超出模型上限的值收回来，不再往固定档位上对齐 */
+    if (t === 'video') {
+      const cap = m?.maxDur;
+      if (!Number.isFinite(p.dur) || (p.dur || 0) < VIDEO_DUR_MIN) p.dur = VIDEO_DUR_DEF;
+      else if (cap && p.dur! > cap) p.dur = cap;
     }
-    if (t === 'video' && m?.minDur && (p.dur || 0) < m.minDur) p.dur = m.minDur;
     if (t === 'video' && m?.videoRes?.length) p.vres = pickVideoResolution(p.vres, m.videoRes);
   }
 }

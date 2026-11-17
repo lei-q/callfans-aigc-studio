@@ -12,12 +12,20 @@ export const PROJECT_DOTS = ['#F97316', '#4F46E5', '#7C5CFC', '#059669', '#E11D4
 export const RATIOS = ['1:1', '4:5', '16:9', '9:16'];
 export const VIDEO_RATIOS: [string, string][] = [['9:16', '竖版 9:16'], ['16:9', '横版 16:9'], ['1:1', '方形 1:1']];
 
-/** 分辨率档位：画质在这里就是分辨率，倍率直接进单价 */
-export const RESOS: { k: ResKey; n: string; mul: number; px: string; edge: number }[] = [
-  { k: '1080p', n: '1080p', mul: 0.6, px: '1080 × 1080', edge: 1080 },
-  { k: '2k', n: '2K', mul: 1, px: '2048 × 2048', edge: 2048 },
-  { k: '4k', n: '4K', mul: 2.2, px: '4096 × 4096', edge: 4096 },
+/** 分辨率档位：只是输出尺寸，不再有价格倍率——单价一律按张 / 按秒算 */
+export const RESOS: { k: ResKey; n: string; px: string; edge: number }[] = [
+  { k: '1080p', n: '1080p', px: '1080 × 1080', edge: 1080 },
+  { k: '2k', n: '2K', px: '2048 × 2048', edge: 2048 },
+  { k: '4k', n: '4K', px: '4096 × 4096', edge: 4096 },
 ];
+
+/** 视频时长：自定义输入，默认 3 秒；模型声明了上限时以模型为准 */
+export const VIDEO_DUR_DEF = 3;
+export const VIDEO_DUR_MIN = 1;
+export const VIDEO_DUR_MAX = 60;
+
+/** 平台标价是美元；估算点数时按 1 USD ≈ 7.2 点（1 点 = ¥1）折算，实际消耗以平台账本为准 */
+export const USD_TO_POINTS = 7.2;
 export const resoOf = (k?: string) => RESOS.find((x) => x.k === k) || RESOS[1];
 export const resRank = (k?: string) => RESOS.findIndex((x) => x.k === k);
 

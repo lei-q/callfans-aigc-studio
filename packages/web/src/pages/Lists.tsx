@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import type { Job, Result } from '@aigc/shared';
-import { TYPES, mmss, paramsBrief, promptBrief, round1, timeLabel } from '@aigc/shared';
+import { TYPES, mmss, paramsBrief, pointsOf, pointsText, promptBrief, round2, timeLabel } from '@aigc/shared';
 import { DangerButton, Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, Wave } from '../components/common';
 import { setState, useStore } from '../store';
 import {
@@ -22,6 +23,7 @@ import {
   postNew,
   removeJob,
   retryJob,
+  settleJobs,
   toggleJob,
 } from '../store/actions';
 import { keepResult } from '../canvas/ops';
@@ -31,11 +33,31 @@ import { POST_PLATFORMS } from '@aigc/shared';
 
 /* ---------------- 任务记录 ---------------- */
 
+/** 任务的执行时间：按开始时间倒序，还没开始的按创建时间 */
+const jobAt = (j: Job) => j.startedAt || j.createdAt;
+
+/** 表格里一行的消耗文案 */
+function pointsCell(j: Job) {
+  if (j.status === 'queued' || j.status === 'running') return '—';
+  const v = pointsOf(j);
+  if (v.kind === 'actual') return pointsText(v.value!);
+  if (v.kind === 'estimate') return `≈ ${pointsText(v.value!)}`;
+  if (v.kind === 'pending') return '待结算';
+  return pointsText(v.value!);
+}
+
 export function JobsPage() {
   const s = useStore();
-  const all = s.jobs.filter((j) => j.ws === s.ws).sort((a, b) => b.createdAt - a.createdAt);
+  /* 每次打开任务记录对一次账：流水到账晚，这样不用等后台轮询 */
+  useEffect(() => {
+    void settleJobs();
+  }, []);
+  const all = s.jobs.filter((j) => j.ws === s.ws).sort((a, b) => jobAt(b) - jobAt(a));
   const jobs = all.filter((j) => (s.jobFilter === 'failed' ? j.status === 'failed' : s.jobFilter === 'running' ? j.status === 'running' || j.status === 'queued' : true));
-  const totalCost = round1(jobs.filter((j) => j.status === 'succeeded').reduce((n, j) => n + j.cost, 0));
+  /* 合计只算已经跑完的任务：实际值优先，还没对上流水的按预估计入 */
+  const done = jobs.filter((j) => j.status === 'succeeded' || j.status === 'failed');
+  const totalCost = pointsText(round2(done.reduce((n, j) => n + (pointsOf(j).value ?? 0), 0)));
+  const pending = done.filter((j) => pointsOf(j).kind === 'pending' || pointsOf(j).kind === 'estimate').length;
   const fails = failJobs(s).length;
   const project = s.projects.find((p) => p.id === s.ws);
   return (
@@ -44,7 +66,8 @@ export function JobsPage() {
         <div className="page-title-block">
           <span className="page-title">任务记录</span>
           <span className="page-sub">
-            {project?.name} · {jobs.length} 个任务 · 实际消耗 {totalCost} 点（不含失败与已取消）
+            {project?.name} · {jobs.length} 个任务 · 合计 {totalCost} 点
+            {pending ? `（${pending} 个待平台结算，暂按预估计入）` : '（按平台实际扣点）'}
           </span>
         </div>
         <span className="grow" />
@@ -86,8 +109,8 @@ export function JobsPage() {
           <span>任务</span>
           <span>提示词 / 参数</span>
           <span>状态</span>
-          <span>耗时</span>
-          <span className="th-right">点数</span>
+          <span>时长 / 耗时</span>
+          <span className="th-right">消耗点数</span>
           <span className="th-right">操作</span>
         </div>
         {jobs.length ? (
@@ -152,6 +175,12 @@ function JobRow({ j, open }: { j: Job; open: boolean }) {
                 </span>
               )}
               {j.source === 'api' && <span className="chip outline">API</span>}
+              {pointsOf(j).kind !== 'local' && pointsOf(j).kind !== 'actual' && (j.status === 'succeeded' || j.status === 'failed') && (
+                <span className="chip neutral" title="平台流水还没回来，稍后自动对账">
+                  <span className="cdot" />
+                  待结算
+                </span>
+              )}
             </div>
             <div className="task-meta">
               {m.name}
@@ -182,10 +211,12 @@ function JobRow({ j, open }: { j: Job; open: boolean }) {
         <div className="cell-time">
           <span className="time-line">{j.durText || (j.status === 'running' ? `${j.progress || 0}%` : '——')}</span>
           <span className="time-note">
-            {j.status === 'failed' ? <span className="fail-link">{j.fail?.code}</span> : j.status === 'queued' ? j.queueNote || '排队中' : ''}
+            {j.status === 'failed' ? <span className="fail-link">{j.fail?.code}</span> : j.status === 'queued' ? j.queueNote || '排队中' : timeLabel(jobAt(j))}
           </span>
         </div>
-        <div className="right num strong">{m.usageBilling ? '按量' : j.cost}</div>
+        <div className="right num strong" title={pointsOf(j).kind === 'actual' ? '平台流水对上的实际扣点' : pointsOf(j).kind === 'pending' ? '等平台流水到账' : '预估，平台流水到账后自动替换为实际值'}>
+          {pointsCell(j)}
+        </div>
         <div className="row-actions" onClick={(e) => e.stopPropagation()}>
           {j.status === 'failed' && (
             <>
@@ -221,9 +252,27 @@ function JobRow({ j, open }: { j: Job; open: boolean }) {
 function JobSub({ j }: { j: Job }) {
   const s = useStore();
   const items = resultsOfJob(s, j);
+  const m = modelOf(s, j.model);
+  const v = pointsOf(j);
   return (
     <div className="sub-wrap">
       <div className="sub-inner">
+        <div className="sub-toolbar">
+          <span className="hint">
+            {v.kind === 'actual'
+              ? `本任务实际消耗 ${pointsText(v.value!)} 点（来自平台流水）`
+              : v.kind === 'estimate'
+                ? `预计消耗约 ${pointsText(v.value!)} 点；平台流水到账后自动替换为实际值`
+                : v.kind === 'pending'
+                  ? '消耗以平台流水为准，到账后显示'
+                  
+                  : `本任务消耗 ${pointsText(v.value!)} 点`}
+          </span>
+          <span className="grow" />
+          <span className="tiny dim">
+            {m.name} · {paramsBrief(j)} · {timeLabel(jobAt(j))}
+          </span>
+        </div>
         {j.status === 'failed' && j.fail && (
           <div className="alert-bar" style={{ marginBottom: 10 }}>
             <Icon name="alert" />

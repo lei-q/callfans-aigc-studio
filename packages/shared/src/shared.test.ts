@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { affordable, dailyFreeLeft } from './wallet';
-import { applyFix, pickImageSize, pickVideoResolution, unitPrice, validateJob, maxResFromSizes, videoResLabel } from './pricing';
+import { applyFix, estPoints, imageSizeOf, pickImageSize, pickVideoResolution, unitPrice, validateJob, maxResFromSizes, videoResLabel } from './pricing';
+import { pointsText } from './format';
 import { agentReadBoard } from './agent';
 import type { Job, ModelInfo, WalletDto } from './cloud';
 
@@ -14,6 +15,9 @@ const job = (cost: number, type: Job['type'] = 'image'): Job => ({
 const U2: ModelInfo = { id: 'u2', name: 'U2', type: 'image', price: 0.3, basis: '张', status: 'on', channel: 'cloud', maxRes: '2k', note: '', caps: [], limit: '' };
 const X1: ModelInfo = { ...U2, id: 'x1', name: 'X1', price: 0.45, maxRes: '4k' };
 const C1: ModelInfo = { id: 'c1', name: 'C1', type: 'video', price: 0.8, basis: '秒', status: 'on', channel: 'cloud', durs: [3, 5, 8], note: '', caps: [], limit: '' };
+/* 平台渠道的两个模型：标价是美元，实际扣点以账本为准 */
+const IMG: ModelInfo = { ...U2, id: 'cloud:img', usageBilling: true, usdPer: 0.025 };
+const VID: ModelInfo = { ...C1, id: 'cloud:vid', usageBilling: true, usdPer: 0.04, usdPerByRes: { '720p': 0.025, '1080p': 0.041256 } };
 
 describe('wallet（云端钱包的本地展示计算）', () => {
   it('免费额度与可支付判断', () => {
@@ -26,16 +30,41 @@ describe('wallet（云端钱包的本地展示计算）', () => {
 });
 
 describe('pricing & validation', () => {
-  it('分辨率倍率直接进单价', () => {
+  it('图像按张计价，分辨率不再进单价', () => {
     expect(unitPrice('image', { count: 4, res: '2k' }, U2)).toBe(1.2);
-    expect(unitPrice('image', { count: 4, res: '1080p' }, U2)).toBe(0.7);
-    expect(unitPrice('image', { count: 2, res: '4k' }, X1)).toBe(2);
+    expect(unitPrice('image', { count: 4, res: '1080p' }, U2)).toBe(1.2);
+    expect(unitPrice('image', { count: 2, res: '4k' }, X1)).toBe(0.9);
   });
   it('音频按 30 秒向上取整，音效按条', () => {
     const tts = { price: 0.5 };
     expect(unitPrice('audio', { use: 'tts', dur: 15 }, tts)).toBe(0.5);
     expect(unitPrice('audio', { use: 'tts', dur: 60 }, tts)).toBe(1);
     expect(unitPrice('audio', { use: 'sfx', dur: 8 }, { price: 0.1 })).toBe(0.1);
+  });
+  it('平台渠道：美元标价折成预估点数，按张 / 按秒，便宜模型保留两位', () => {
+    /* $0.025/张 → 0.18 点；只留一位会被抹平成 0.2 */
+    expect(estPoints('image', { count: 1 }, IMG)).toBe(0.18);
+    expect(estPoints('image', { count: 4 }, IMG)).toBe(0.72);
+    /* 视频按所选清晰度档位的单价 × 秒数 */
+    expect(estPoints('video', { dur: 3, vres: '720p' }, VID)).toBe(0.54);
+    expect(estPoints('video', { dur: 3, vres: '1080p' }, VID)).toBe(0.89);
+    /* 清单没配价时没有预估，界面只能等平台流水 */
+    expect(estPoints('image', { count: 1 }, { ...IMG, usdPer: undefined })).toBeNull();
+    /* 自定义渠道按本地价，不走美元换算 */
+    expect(estPoints('image', { count: 2 }, U2)).toBe(0.6);
+  });
+  it('点数展示：最多两位小数且去掉尾零', () => {
+    expect(pointsText(0.18)).toBe('0.18');
+    expect(pointsText(1.5)).toBe('1.5');
+    expect(pointsText(2)).toBe('2');
+    expect(pointsText(0.555)).toBe('0.56');
+  });
+  it('图像尺寸：档位固定长边，比例决定另一边，长宽都是偶数', () => {
+    expect(imageSizeOf('1:1', '1080p')).toBe('1080x1080');
+    expect(imageSizeOf('16:9', '1080p')).toBe('1080x608');
+    expect(imageSizeOf('1:1', '2k')).toBe('2048x2048');
+    expect(imageSizeOf('9:16', '2k')).toBe('1152x2048');
+    expect(imageSizeOf('4:5', '4k')).toBe('3276x4096');
   });
   it('E-PRM-04：分辨率超过模型上限，并给出可用模型', () => {
     const fail = validateJob('image', { res: '4k', count: 2 }, U2, [U2, X1]);

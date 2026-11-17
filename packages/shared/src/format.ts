@@ -86,6 +86,32 @@ export function resultTags(job: Job) {
 
 export const promptBrief = (p: string, n = 44) => (p.length > n ? `${p.slice(0, n)}…` : p);
 
+/**
+ * 任务消耗点数的展示口径。
+ * - actual：平台流水已经对上（重跑会累加，所以是累计值）
+ * - estimate：平台渠道，流水还没回来，用清单标价折算的预估
+ * - pending：平台渠道，连预估都拿不到（清单没配价），只能等流水
+ * - local：自定义渠道 / Mock 云按本地价扣，任务结束即确定
+ */
+export type PointsView = { kind: 'actual' | 'estimate' | 'pending' | 'local'; value?: number };
+
+/** 点数展示：最多两位小数，去掉多余的尾零（0.18 → "0.18"、1.5 → "1.5"、2 → "2"） */
+export function pointsText(n: number): string {
+  return String(round2(n));
+}
+
+export function pointsOf(
+  job: Pick<Job, 'usageBilling' | 'pointsSpent' | 'pointsEst' | 'cost' | 'status' | 'settledRunAt' | 'runStartedAt'> & { model?: string },
+): PointsView {
+  /* 早期任务没有 usageBilling 字段：平台模型的 ID 前缀是稳定的兜底依据 */
+  const platform = job.usageBilling ?? !!job.model?.startsWith('cloud:');
+  if (!platform) return { kind: 'local', value: job.cost };
+  const settled = job.settledRunAt != null && job.settledRunAt === job.runStartedAt;
+  if (settled && job.pointsSpent != null) return { kind: 'actual', value: job.pointsSpent };
+  if (job.pointsEst != null) return { kind: 'estimate', value: job.pointsEst };
+  return { kind: 'pending' };
+}
+
 /** 生成短 id：时间 + 随机，避免恢复的数据和新建的撞 id */
 export function uid(prefix: string) {
   const t = Date.now().toString(36).slice(-5);

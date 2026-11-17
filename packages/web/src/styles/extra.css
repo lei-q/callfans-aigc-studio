@@ -172,3 +172,9 @@ button.avatar.sm { width: 28px; height: 28px; font-size: 12px; }
 .update-inline-bar { display: inline-block; width: 120px; height: 5px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .update-inline-bar > i { display: block; height: 100%; background: var(--primary); }
 @media (max-width: 520px) { .update-float { left: 18px; right: 18px; width: auto; } }
+
+/* 视频时长：自定义秒数输入 + 模型档位快捷键 */
+.dur-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dur-row .dur-input { flex: 0 0 96px; }
+.dur-row .dur-input .form-input { width: 100%; text-align: right; font-variant-numeric: tabular-nums; }
+.dur-row .opt-pills { flex: 1 1 auto; }

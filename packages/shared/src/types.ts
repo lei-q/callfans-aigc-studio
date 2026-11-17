@@ -63,8 +63,11 @@ export interface ModelInfo {
   maxInputImages?: number;
   /** 估算耗时：图像为秒/张，视频为秒/秒 */
   secPer?: number;
-  /** 平台网关按实际用量扣点：本地 price 只是占位，界面不展示预估点数 */
+  /** 平台网关按实际用量扣点：实际消耗以平台账本为准，本地只给预估 */
   usageBilling?: boolean;
+  /** 平台上游标价（USD）：图像每张、视频每秒；视频另有按清晰度档位的价 */
+  usdPer?: number;
+  usdPerByRes?: Record<string, number>;
   note: string;
   caps: string[];
   limit: string;
@@ -117,7 +120,25 @@ export interface Job extends JobParams {
   prompt: string;
   negative?: string;
   refs: RefInput[];
+  /** 本地点数价（自定义渠道 / Mock 云）：创建时即扣 */
   cost: number;
+  /**
+   * 平台渠道按实际用量计费。记在任务上而不是现查模型目录：
+   * 用户切到自定义渠道后目录里就没有平台模型了，否则老任务会失去这个标记。
+   */
+  usageBilling?: boolean;
+  /** 平台渠道：创建时的预估点数；实际消耗见 pointsSpent */
+  pointsEst?: number;
+  /** 平台渠道：从账号流水对上的实际消耗点数（重跑会累加；未对上为 undefined） */
+  pointsSpent?: number;
+  /** 平台渠道：已经认领的流水条目，一条流水只能记到一个任务的某一次运行上 */
+  ledgerEntryIds?: string[];
+  /** 平台渠道：本次运行的起点，重跑会刷新 */
+  runStartedAt?: number;
+  /** 平台渠道：已经完成对账的那次运行的起点；等于 runStartedAt 就说明这次运行已结算 */
+  settledRunAt?: number;
+  /** 平台渠道：流水里暂时没有这笔扣点时的说明 */
+  pointsNote?: string;
   status: JobStatus;
   progress?: number;
   eta?: string;
