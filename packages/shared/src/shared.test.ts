@@ -59,12 +59,31 @@ describe('pricing & validation', () => {
     expect(pointsText(2)).toBe('2');
     expect(pointsText(0.555)).toBe('0.56');
   });
-  it('图像尺寸：档位固定长边，比例决定另一边，长宽都是偶数', () => {
-    expect(imageSizeOf('1:1', '1080p')).toBe('1080x1080');
-    expect(imageSizeOf('16:9', '1080p')).toBe('1080x608');
+  it('图像尺寸：档位固定长边，且宽高都能被 16 整除', () => {
     expect(imageSizeOf('1:1', '2k')).toBe('2048x2048');
     expect(imageSizeOf('9:16', '2k')).toBe('1152x2048');
-    expect(imageSizeOf('4:5', '4k')).toBe('3276x4096');
+    /* 上游真实报错过的组合：1080 不是 16 的倍数，必须吸附 */
+    expect(imageSizeOf('16:9', '1080p')).toBe('1072x608');
+    expect(imageSizeOf('1:1', '1080p')).toBe('1072x1072');
+    expect(imageSizeOf('4:5', '4k')).toBe('3280x4096');
+    /* 全部比例 × 档位都要满足 16 整除，比例误差 < 1.5%，方向与所选比例一致 */
+    for (const r of ['1:1', '4:5', '16:9', '9:16']) {
+      for (const q of ['1080p', '2k', '4k'] as const) {
+        const [w, h] = imageSizeOf(r, q)!.split('x').map(Number);
+        expect(w % 16, `${r} ${q} 宽`).toBe(0);
+        expect(h % 16, `${r} ${q} 高`).toBe(0);
+        const [rw, rh] = r.split(':').map(Number);
+        expect(Math.abs(w / h / (rw / rh) - 1), `${r} ${q} 比例误差`).toBeLessThan(0.015);
+        /* 横版就得比宽，竖版就得比高，别把方向算反 */
+        if (rw === rh) expect(w, `${r} ${q} 应为方形`).toBe(h);
+        else expect(w > h, `${r} ${q} 方向`).toBe(rw > rh);
+      }
+    }
+    /* 上游报错原文里的两个尺寸不能再出现 */
+    expect(imageSizeOf('16:9', '1080p')).not.toBe('1080x608');
+    expect(imageSizeOf('9:16', '1080p')).not.toBe('608x1080');
+    expect(imageSizeOf('16:9', '1080p')).toBe('1072x608');
+    expect(imageSizeOf('9:16', '1080p')).toBe('608x1072');
   });
   it('E-PRM-04：分辨率超过模型上限，并给出可用模型', () => {
     const fail = validateJob('image', { res: '4k', count: 2 }, U2, [U2, X1]);

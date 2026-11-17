@@ -206,6 +206,88 @@ describe('平台媒体模型与生成', () => {
     expect(req[0].auth).toBe('Bearer sk-test');
     expect(req[0].body).toMatchObject({ model: 'gemini-3-pro-image-preview', n: 1 });
     expect(req[0].body).not.toHaveProperty('response_format');
+    /* size 是真实接口字段：比例 + 档位算出的像素，宽高都必须能被 16 整除 */
+    expect(req[0].body!.size).toBe('2048x2048');
+  });
+
+  it('图片：size 的宽高都能被 16 整除（上游会拒绝 1080x608 这类尺寸）', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/generations')) {
+          bodies.push(JSON.parse(String(init?.body)));
+          return jsonRes(200, { data: [{ b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'), media_type: 'image/png' }] });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    const ctx: RunContext = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf, mime) => ({ src: '/x', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    };
+    for (const [ratio, res] of [['16:9', '1080p'], ['9:16', '1080p'], ['4:5', '4k']] as const) {
+      const job = {
+        id: `j-${ratio}`, name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '海报', refs: [],
+        ratio, count: 1, res, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+      };
+      await core.platformMedia.run(job, model, ctx);
+      const size = String(bodies[bodies.length - 1].size);
+      const [w, h] = size.split('x').map(Number);
+      expect(w % 16, `${ratio} ${res} 宽：${size}`).toBe(0);
+      expect(h % 16, `${ratio} ${res} 高：${size}`).toBe(0);
+      expect(size).not.toBe('1080x608');
+      expect(size).not.toBe('608x1080');
+    }
+  });
+
+  it('图片：网关明确不认识 size 时，去掉它重发一次；超时之类绝不重发', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    let n = 0;
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/generations')) {
+          bodies.push(JSON.parse(String(init?.body)));
+          n += 1;
+          /* 第一次点名 size 不支持；第二次（不带 size）正常返回 */
+          if (n === 1) return jsonRes(400, { error: { message: "UnsupportedParamsError: unsupported parameter 'size'", code: 'invalid_request_error' } });
+          return jsonRes(200, { data: [{ b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'), media_type: 'image/png' }] });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    const job = {
+      id: 'j-fallback', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '海报', refs: [],
+      ratio: '1:1', count: 1, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx: RunContext = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf, mime) => ({ src: '/x', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    };
+    const out = await core.platformMedia.run(job, model, ctx);
+    expect(out).toHaveLength(1);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toHaveProperty('size');
+    expect(bodies[1]).not.toHaveProperty('size');
   });
 
   it('图片：有参考素材时走 /v1/images/edits，multipart 上传 image[]，不退化成文生图', async () => {

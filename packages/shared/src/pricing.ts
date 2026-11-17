@@ -61,11 +61,14 @@ export const maxDurOf = (m: ModelInfo) => m.maxDur ?? (m.durs && m.durs.length ?
 /** 参数校验：只认真实的模型约束——分辨率超上限、时长超上限 */
 export function validateJob(type: MediaType, p: JobParams, m: ModelInfo, siblings: ModelInfo[]): JobFail | null {
   if (type === 'image' && m.maxRes && resRank(p.res) > resRank(m.maxRes)) {
-    const better = siblings.find((x) => x.type === 'image' && x.status === 'on' && x.maxRes && resRank(x.maxRes) >= resRank(p.res));
+    const better = siblings.find((x) => x.type === 'image' && x.status === 'on' && m.maxRes && resRank(x.maxRes!) >= resRank(p.res));
     const cap = resoOf(m.maxRes);
+    /* 说清实际会发出去的像素：按比例算完还要吸附到 16 的倍数，和档位标称值不完全相同 */
+    const wantPx = imageSizeOf(p.ratio, p.res);
+    const capPx = imageSizeOf(p.ratio, m.maxRes);
     return {
       code: 'E-PRM-04',
-      reason: `${resoOf(p.res).n}（${resoOf(p.res).px}）超出 ${m.name} 上限 ${cap.n}`,
+      reason: `${resoOf(p.res).n}${wantPx ? `（${wantPx.replace('x', ' × ')}）` : ''}超出 ${m.name} 上限 ${cap.n}${capPx ? `（${capPx.replace('x', ' × ')}）` : ''}`,
       fix: better ? `改用 ${better.name}，或降到 ${cap.n}` : `降到 ${cap.n}`,
     };
   }
@@ -132,19 +135,29 @@ export function pickImageSize(ratio: string | undefined, res: string | undefined
   return best.s;
 }
 
+/** 图像 size 的边长约束：上游（gpt-image 等）要求宽高都能被 16 整除 */
+const SIZE_STEP = 16;
+/** 长边向下吸附：宁可少几像素，也不要超出用户选的档位 */
+export const snapLongEdge = (n: number) => Math.max(SIZE_STEP, Math.floor(n / SIZE_STEP) * SIZE_STEP);
+/** 短边就近吸附：比例更准，且本来就不承担档位语义 */
+export const snapShortEdge = (n: number) => Math.max(SIZE_STEP, Math.round(n / SIZE_STEP) * SIZE_STEP);
+
 /**
  * 比例 + 分辨率档位 → 平台图像接口的像素尺寸。
  * 平台图像接口没有「档位名」字段，只有 size（如 1024x1536），所以必须自己算。
- * 档位固定的是**长边**（1080 / 2048 / 4096）：2K、4K 这类叫法本来就是按长边命名，
- * 固定短边会让 9:16 的面积翻倍（2K 竖版会到 3640 高），既超出预期也更容易被上游拒绝。
+ * 两条硬约束：
+ * - 宽高都要能被 16 整除，否则上游直接 400（`1080x608`、`1920x1080` 都不行）；
+ * - 档位固定**长边**（1080 / 2048 / 4096）：2K、4K 这类叫法本就按长边命名，
+ *   固定短边会让 9:16 面积翻倍。
+ * 所以长边与短边都吸附到 16 的倍数，比例误差在 1% 以内。
  */
 export function imageSizeOf(ratio: string | undefined, res: string | undefined): string | undefined {
   const [rw, rh] = (ratio || '1:1').split(':').map(Number);
   if (!rw || !rh) return undefined;
-  const ar = rw / rh;
-  const long = (RESOS.find((x) => x.k === res) || RESOS[1]).edge;
-  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
-  return ar >= 1 ? `${even(long)}x${even(long / ar)}` : `${even(long * ar)}x${even(long)}`;
+  const long = snapLongEdge((RESOS.find((x) => x.k === res) || RESOS[1]).edge);
+  /* 长边固定，短边 = 长边 × 短边比例。横版乘 (h/w)，竖版乘 (w/h)，两种写法都 < 1 */
+  const short = snapShortEdge(rw >= rh ? long * (rh / rw) : long * (rw / rh));
+  return rw >= rh ? `${long}x${short}` : `${short}x${long}`;
 }
 
 /** 视频清晰度换算成短边像素：2K / 4K 在视频里通常按长边命名，这里取常见短边值参与比较 */
