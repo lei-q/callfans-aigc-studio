@@ -119,7 +119,10 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 
 ## 平台模型（对话）
 
-- 清单：`GET {gatewayBase}/models`，免令牌，缓存 60 秒；`gatewayBase` 默认 `https://api.callfansai.com`，可用 `AIGC_GATEWAY_URL` 覆盖。
+- 清单：`GET {apiBase}/public/apps/models?clientId=<clientId>`，免令牌，缓存 60 秒；返回 `{appId, data:[…]}`，`data` 沿用网关的模型卡片结构（含 `mode`、`pricing`）。它按应用返回**本应用真正能调用的**模型，而网关的 `/models` 会列出未绑定给本应用的模型（选了也生成不了），所以不再使用后者。`clientId` 取 `clientId`（默认 `aigc-callfans`），可用 `AIGC_SSO_CLIENT_ID` 覆盖；`apiBase` 默认 `https://account.callfansai.com/api/v1`，可用 `AIGC_ACCOUNT_API` 覆盖。
+  - 404 `app_client_not_found`：clientId 没登记成应用，直接如实报错，**不**退回网关清单（否则用户会看到一堆选了就失败的模型）。
+  - 403：应用已停用，提示到平台控制台启用。
+  - 仅当账号服务根本没有这个端点（404 且无 `code`，即老版本）时才回退到 `{gatewayBase}/models`，避免升级期间模型目录变空。
 - 选模型：`AIGC_CHAT_MODEL` →「模型与价格 · 文本模型」里选的（平台渠道）→ 内置偏好（`deepseek-v4.1-flash-1017`、`claude-haiku-5-5`、`gpt-6-luna`）→ 最便宜的 openai 协议对话模型；不写死。
 - 密钥：`POST /app/llm-keys`（个人账号为 `/consumer/llm-keys` 的兼容回退）用当前令牌换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。
   - 409 `billing_account_provisioning` → 约 30 秒后重试。
@@ -129,7 +132,7 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
 
 ## 平台模型（图像 / 视频生成）
 
-- 模型目录：仍来自免令牌 `GET {gatewayBase}/models`，`mode` 以 `image` / `video` 开头的归到对应类型；价目表在「模型与价格」页面最下方统一展示。
+- 模型目录：来自免令牌 `GET {apiBase}/public/apps/models?clientId=<clientId>`（见上一节），`mode` 以 `image` / `video` 开头的归到对应类型；价目表在「模型与价格」页面最下方统一展示。
 - 图片：`POST {gatewayBase}/v1/images/generations`（`model`、`prompt`、`n`、`size`；**不传 `response_format`**，部分上游不支持该参数会直接报 `UnsupportedParamsError`），`size` 由比例 + 分辨率档位算出（如 `1152x2048`），**宽高都必须能被 16 整除**——上游对 `1080x608` 这类尺寸直接返回 `invalid_value`；长边固定档位并向下取整，短边就近吸附。返回的 `b64_json` 或 `url` 都保存到本机媒体目录；有参考素材时改用 `POST /v1/images/edits`（multipart，重复的 `image[]`，最多 4 张，同样带 `size`）。**不自动重试**，唯一的例外是网关在派发前明确拒绝 `size`（400 且消息点名该参数）时去掉它重发一次。
 - 视频：`POST {gatewayBase}/v1/videos`。画幅只由 `ratio` 表达、清晰度只由 `resolution`（大写档位，如 `768P` / `2K`），**不传 `size`**：参考文档 §6.3 明确同传 `size` 与 `resolution` 时以上游档位为准，而档位不含宽高比，会退回 16:9——这是「选 9:16 出 16:9」的根因。有首帧参考时改用 multipart，并先把参考图裁成目标画幅再作为 `input_reference` 上传。时长由用户自定义（默认 3 秒），原样按整秒字符串传。把返回的 `id` 原样存为上游任务 ID，每 3–5 秒 `GET /v1/videos/{id}`，最多等 10 分钟，成功后 `GET /v1/videos/{id}/content` 取 mp4。
 - 计费：视频创建返回 200 即已按秒扣费，任务失败也不退；因此失败后**不会自动重建**，重跑需要用户手动确认。余额每 10 秒自动刷新。

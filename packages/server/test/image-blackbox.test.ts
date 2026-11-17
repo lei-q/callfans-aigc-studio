@@ -48,7 +48,7 @@ beforeAll(async () => {
       }
       seen.push({ method: req.method || '', url, auth, json: body, form: isForm ? raw.toString('latin1') : undefined });
 
-      if (url.endsWith('/models')) {
+      if (url.includes('/public/apps/models') || url.endsWith('/models')) {
         return json(200, {
           object: 'list',
           data: [
@@ -101,7 +101,8 @@ async function makeApp() {
     version: 'test',
     memory: true,
     platformPollMs: 1,
-    account: { provider: 'fastsso', apiBase: 'http://account.test/api/v1', gatewayBase: gwUrl },
+    /* 清单走账号服务的 /public/apps/models：本地假网关同时扮演这两个角色 */
+    account: { provider: 'fastsso', apiBase: `${gwUrl}/api/v1`, gatewayBase: gwUrl },
   });
   cores.push(core);
   /* 已经登录 + 本地拿着模型密钥：不经过账号服务 */

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Job } from '@aigc/shared';
 import Jimp from 'jimp';
-import { pickChatModel, PlatformCatalog, platformChat } from '../src/account/platform';
+import { pickChatModel, PlatformCatalog, PlatformError, platformChat } from '../src/account/platform';
 import { buildApp } from '../src/app';
 import { Core } from '../src/core';
 import { platformMediaModels, videoSize } from '../src/providers/platform';
@@ -32,6 +32,12 @@ const CATALOG = {
     { id: 'qwen-audio-3.0-asr-flash', protocol: 'openai', mode: 'audio_transcription', pricing: { per_audio_second: 0.000035 } },
   ],
 };
+
+/** 清单请求：新接口走账号服务 /public/apps/models，老版本才回退到网关 /models */
+const isCatalog = (u: string) => u.includes('/public/apps/models') || u.endsWith('/models');
+
+/** 新清单接口（账号服务 /public/apps/models）的形状：{appId, data:[…]} */
+const APP_CATALOG = { appId: 'aigc-studio', data: CATALOG.data };
 
 function jsonRes(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -69,22 +75,28 @@ describe('模型清单与选择', () => {
     expect(pickChatModel([{ id: 'only-anthropic', protocol: 'anthropic', mode: 'chat' }])).toBeNull();
   });
 
-  it('清单缓存 60 秒，同一个 base 只拉一次', async () => {
-    const fetchMock = vi.fn(async () => jsonRes(200, CATALOG));
+  it('清单缓存 60 秒，同一个 clientId 只拉一次', async () => {
+    const fetchMock = vi.fn(async () => jsonRes(200, APP_CATALOG));
     vi.stubGlobal('fetch', fetchMock);
-    const cat = new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test' }) as never);
+    const cat = new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test', apiBase: 'http://account.test/api/v1', clientId: 'aigc-callfans' }) as never);
     await cat.models();
     await cat.models();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await cat.models(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    /* 请求的是账号服务的按应用清单，且带上 clientId */
+    const url = String((fetchMock.mock.calls[0] as unknown[])[0]);
+    expect(url).toBe('http://account.test/api/v1/public/apps/models?clientId=aigc-callfans');
   });
 
   it('用户选的文本模型优先于默认偏好；summary 翻成界面用的字段', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonRes(200, CATALOG)));
-    const cat = new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test/' }) as never);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonRes(200, APP_CATALOG)));
+    const cat = new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test/', apiBase: 'http://account.test/api/v1', clientId: 'aigc-callfans' }) as never);
     const sum = await cat.summary();
     expect(sum.gatewayBase).toBe('http://gw.test');
+    /* 界面据此说明「清单来自本应用目录」 */
+    expect(sum.appId).toBe('aigc-studio');
+    expect(sum.catalogUrl).toContain('/public/apps/models?clientId=aigc-callfans');
     expect(sum.models.find((m) => m.id === 'glm-cheap')).toMatchObject({
       protocol: 'openai',
       mode: 'chat',
@@ -102,12 +114,63 @@ describe('模型清单与选择', () => {
   });
 });
 
+describe('模型清单接口（账号服务 /public/apps/models）', () => {
+  const mk = (reply: unknown, status = 200) => {
+    const fetchMock = vi.fn(async () => jsonRes(status, reply));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  };
+  const cat = () =>
+    new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test', apiBase: 'http://account.test/api/v1', clientId: 'aigc-callfans' }) as never);
+
+  it('认新接口的 {appId, data} 形状，并记下 appId', async () => {
+    mk(APP_CATALOG);
+    const models = await cat().models();
+    expect(models.map((m) => m.id)).toContain('gemini-3-pro-image-preview');
+    const sum = await cat().summary();
+    expect(sum.appId).toBe('aigc-studio');
+  });
+
+  it('clientId 没登记（404 + code）：如实报错，不悄悄退回旧清单', async () => {
+    const fetchMock = mk({ status: 404, code: 'app_client_not_found', message: '客户端未登记为应用：nope' }, 404);
+    const err = await cat().models().catch((e) => e);
+    expect(err).toBeInstanceOf(PlatformError);
+    expect(err.status).toBe(404);
+    expect(err.message).toContain('没有登记');
+    /* 只打了一次：没有回退去拉网关全量清单 */
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('应用停用（403）：提示到平台启用，而不是「稍后重试」', async () => {
+    mk({ status: 403, code: 'app_disabled', message: '应用已停用' }, 403);
+    const err = await cat().models().catch((e) => e);
+    expect(err.status).toBe(403);
+    expect(err.message).toContain('已停用');
+  });
+
+  it('老账号服务没有这个端点（404 无 code）时，退回网关全量清单', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).includes('/public/apps/models') ? jsonRes(404, { status: 404, error: 'Not Found' }) : jsonRes(200, CATALOG),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const models = await cat().models();
+    expect(models).toHaveLength(CATALOG.data.length);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1][0])).toBe('http://gw.test/models');
+  });
+
+  it('data 不是数组时算格式错误，不当成「没有模型」', async () => {
+    mk({ appId: 'aigc-studio', data: 'oops' });
+    await expect(cat().models()).rejects.toThrow('格式不对');
+  });
+});
+
 describe('「模型与价格」的渠道设置', () => {
   it('保存辅助模型；只填 Key 就自动启用自定义渠道；清单接口返回平台模型', async () => {
     const core = await makeFssCore();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string) => (String(url).startsWith('http://gw.test/models') ? jsonRes(200, CATALOG) : jsonRes(200, { data: [] }))),
+      vi.fn(async (url: string) => (isCatalog(String(url)) ? jsonRes(200, CATALOG) : jsonRes(200, { data: [] }))),
     );
     const app = await buildApp(core);
     const h = { host: 'localhost', 'x-aigc-client': '1' };
@@ -134,6 +197,35 @@ describe('「模型与价格」的渠道设置', () => {
 });
 
 describe('网关调用', () => {
+  it('上游 400 被网关包成 503 时，仍按参数错误解释', async () => {
+    /* 真实报文：图像接口的上游拒绝 size，网关按「上游调用失败」回 503，
+       上游原文里带着 400 与可照着改的说明。 */
+    const body = {
+      error: {
+        message:
+          'litellm.BadRequestError: OpenAIException - {"error":{"code":"invalid_value","message":"Invalid size \'1080x608\'. Width and height must both be divisible by 16.","param":"$","type":"invalid_request_error","upstream":{"http_status":400}}}',
+        type: 'bad_request_error',
+        code: '503',
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonRes(503, body)));
+    const err = await platformChat({ baseUrl: 'http://gw.test', key: 'sk-x', model: 'm', messages: [{ role: 'user', content: 'hi' }] })
+      .then(() => null, (e: Error) => e);
+
+    if (!err) throw new Error('应该抛错');
+    expect(err).toMatchObject({ status: 503, upstreamStatus: 400 });
+    /* 不能再说成「服务暂时不可用」——用户重试同一个请求只会继续失败 */
+    expect(err.message).toContain('模型请求不合法');
+    expect(err.message).toContain('divisible by 16');
+  });
+
+  it('真正的 5xx（没有上游 4xx）仍按服务故障解释', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonRes(503, { error: { message: 'upstream timed out' } })));
+    await expect(platformChat({ baseUrl: 'http://gw.test', key: 'sk-x', model: 'm', messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow(
+      '暂时不可用',
+    );
+  });
+
   it('把 422 讲成积分不足，401 讲成密钥失效', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonRes(422, { error: { message: 'Budget has been exceeded' } })));
     await expect(platformChat({ baseUrl: 'http://gw.test', key: 'sk-x', model: 'm', messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow(
@@ -174,7 +266,7 @@ describe('平台媒体模型与生成', () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         calls.push({ url: u, auth: (init?.headers as Record<string, string> | undefined)?.Authorization, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/images/generations')) {
           return jsonRes(200, { data: [{ b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'), media_type: 'image/png' }] });
@@ -218,7 +310,7 @@ describe('平台媒体模型与生成', () => {
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/images/generations')) {
           bodies.push(JSON.parse(String(init?.body)));
@@ -259,7 +351,7 @@ describe('平台媒体模型与生成', () => {
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/images/generations')) {
           bodies.push(JSON.parse(String(init?.body)));
@@ -299,7 +391,7 @@ describe('平台媒体模型与生成', () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         calls.push({ url: u, form: init?.body instanceof FormData ? init.body : undefined });
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/images/edits')) {
           return jsonRes(200, { data: [{ b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64') }] });
@@ -346,7 +438,7 @@ describe('平台媒体模型与生成', () => {
   it('图片：参考素材读不出来时拒绝提交，不偷偷退回文生图', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
-    const fetchMock = vi.fn(async (url: string) => (String(url).endsWith('/models') ? jsonRes(200, CATALOG) : jsonRes(404, { error: { message: 'unexpected' } })));
+    const fetchMock = vi.fn(async (url: string) => (isCatalog(String(url)) ? jsonRes(200, CATALOG) : jsonRes(404, { error: { message: 'unexpected' } })));
     vi.stubGlobal('fetch', fetchMock);
     const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
     const job = {
@@ -376,7 +468,7 @@ describe('平台媒体模型与生成', () => {
         const u = String(url);
         urls.push(u);
         if (typeof init?.body === 'string') bodies.push(JSON.parse(init.body));
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid1', status: 'queued' });
         if (u.endsWith('/v1/videos/vid1/content')) return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'Content-Type': 'video/mp4' } });
@@ -427,7 +519,7 @@ describe('平台媒体模型与生成', () => {
             /* multipart 不是 JSON */
           }
         }
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid9', status: 'queued' });
         if (u.endsWith('/v1/videos/vid9/content')) return new Response(Buffer.from('mp4'), { status: 200, headers: { 'Content-Type': 'video/mp4' } });
@@ -473,7 +565,7 @@ describe('平台媒体模型与生成', () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         if (init?.body instanceof FormData) forms.push(init.body);
-        if (u.endsWith('/models')) return jsonRes(200, catalog);
+        if (isCatalog(u)) return jsonRes(200, catalog);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/videos')) return jsonRes(200, { id: 'vid-mini', status: 'queued' });
         if (u.endsWith('/v1/videos/vid-mini/content')) return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'Content-Type': 'video/mp4' } });
@@ -533,7 +625,7 @@ describe('平台媒体模型与生成', () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         calls.push({ url: u, auth: (init?.headers as Record<string, string> | undefined)?.Authorization, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/audio/speech')) return new Response(Buffer.from('ID3fake-mp3'), { status: 200, headers: { 'Content-Type': 'audio/mpeg' } });
         return jsonRes(404, { error: { message: 'unexpected' } });
@@ -568,7 +660,7 @@ describe('平台媒体模型与生成', () => {
   it('语音：音乐 / 音效用途没有平台模型时明确报不支持，不发请求', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
-    const fetchMock = vi.fn(async (url: string) => (String(url).endsWith('/models') ? jsonRes(200, CATALOG) : jsonRes(200, { key: 'sk-test' })));
+    const fetchMock = vi.fn(async (url: string) => (isCatalog(String(url)) ? jsonRes(200, CATALOG) : jsonRes(200, { key: 'sk-test' })));
     vi.stubGlobal('fetch', fetchMock);
     const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'audio')!;
     const job = {
@@ -586,6 +678,96 @@ describe('平台媒体模型与生成', () => {
     expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith('/v1/audio/speech'))).toBe(false);
   });
 
+  it('图像 size 被上游拒绝（网关包成 503）：照样去掉 size 重发一次，并报参数错误', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    const posts: { hasSize: boolean }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/generations')) {
+          const body = JSON.parse(String(init?.body || '{}')) as { size?: string };
+          posts.push({ hasSize: !!body.size });
+          /* 第一次带 size 被上游拒；去掉后成功。上游原文里的 400 就是判定依据 */
+          if (body.size) {
+            return jsonRes(503, {
+              error: {
+                message: `litellm.BadRequestError: OpenAIException - {"error":{"code":"invalid_value","message":"Invalid size '${body.size}'. Width and height must both be divisible by 16.","param":"$","type":"invalid_request_error","upstream":{"http_status":400}}}`,
+                code: '503',
+              },
+            });
+          }
+          return jsonRes(200, { data: [{ b64_json: png.toString('base64'), media_type: 'image/png' }] });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    await core.platform.models();
+    const model = core.models().find((m) => m.type === 'image')!;
+    const job = {
+      id: 'jsize', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '一杯咖啡', refs: [],
+      ratio: '16:9', count: 1, res: '1080p' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf: Buffer, mime: string) => ({ src: '/x', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    } as RunContext;
+
+    await core.platformMedia.run(job, model, ctx);
+    expect(posts).toEqual([{ hasSize: true }, { hasSize: false }]);
+  });
+
+  it('图像 size 被拒但无法重发成功时，报参数错误而不是「稍后重试」', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/generations')) {
+          return jsonRes(503, {
+            error: {
+              message: `litellm.BadRequestError: OpenAIException - {"error":{"code":"invalid_value","message":"Invalid size '1072x608'. Width and height must both be divisible by 16.","param":"$","type":"invalid_request_error","upstream":{"http_status":400}}}`,
+              code: '503',
+            },
+          });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    await core.platform.models();
+    const model = core.models().find((m) => m.type === 'image')!;
+    const job = {
+      id: 'jsize2', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '一杯咖啡', refs: [],
+      ratio: '16:9', count: 1, res: '1080p' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [],
+    };
+    const ctx = {
+      signal: new AbortController().signal,
+      progress: () => {},
+      save: async (_buf: Buffer, mime: string) => ({ src: '/x', mime }),
+      resolveRef: async () => null,
+      setUpstream: () => {},
+    } as RunContext;
+
+    const err = await core.platformMedia.run(job, model, ctx).then(
+      () => null,
+      (e: { code: string; reason: string; fix: string }) => e,
+    );
+    if (!err) throw new Error('应该失败');
+    expect(err.code).toBe('E-PRM-04');
+    expect(err.reason).toContain('模型请求不合法');
+    expect(err.fix).toContain('检查提示词与模型参数');
+  });
+
   it('模型没有可用通道：403 变成可执行的提示，并暂时从可选列表里隐藏', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
@@ -593,7 +775,7 @@ describe('平台媒体模型与生成', () => {
       'fetch',
       vi.fn(async (url: string) => {
         const u = String(url);
-        if (u.endsWith('/models')) return jsonRes(200, CATALOG);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/images/generations')) {
           return jsonRes(403, {
@@ -650,7 +832,7 @@ describe('平台媒体模型与生成', () => {
       'fetch',
       vi.fn(async (url: string) => {
         const u = String(url);
-        if (u.endsWith('/models')) return jsonRes(200, catalog2);
+        if (isCatalog(u)) return jsonRes(200, catalog2);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
         if (u.endsWith('/v1/images/generations')) return jsonRes(400, { error: { message: 'Image request rejected' } });
         return jsonRes(404, { error: { message: 'unexpected' } });

@@ -385,8 +385,11 @@ export function ModelsPage() {
             )}
           </div>
           <div className="tiny dim">
-            上游标价：对话模型按美元 / 百万 token，图像按张、视频按秒列出（视频再按清晰度分档）；生成时按平台实际用量扣点。清单来自{' '}
-            {cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models，免令牌、缓存 1 分钟；实际扣费以平台账本为准。
+            上游标价：对话模型按美元 / 百万 token，图像按张、视频按秒列出（视频再按清晰度分档）；生成时按平台实际用量扣点。
+            {cat?.appId
+              ? `清单来自平台按应用下发的模型目录（应用 ${cat.appId}），只包含本应用能调用的模型`
+              : `清单来自 ${cat?.gatewayBase || st.account.gatewayBase || 'https://api.callfansai.com'}/models`}
+            ，免令牌、缓存 1 分钟；实际扣费以平台账本为准。
           </div>
         </div>
         <div className="card table-card plat-table">

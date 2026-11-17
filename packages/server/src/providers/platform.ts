@@ -172,11 +172,14 @@ export class PlatformMediaProvider implements Provider {
   private toProviderError(e: unknown, model?: ModelInfo): ProviderError {
     if (e instanceof ProviderError) return e;
     if (e instanceof PlatformError) {
-      if (e.status === 422) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用微信 / 支付宝充值');
-      if (e.status === 401) return new ProviderError('E-AUTH-01', e.message || '模型密钥已失效', '重新登录后重试');
-      if (e.status === 429) return new ProviderError('E-RATE-29', e.message, '稍后重试');
-      if (e.status === 400) return new ProviderError('E-PRM-04', e.message, '检查提示词与模型参数后重试');
-      if (e.status === 403) {
+      /* 上游 4xx 被网关包成 5xx 时按上游状态归类：参数错误要报参数错误，
+         否则用户只会对着「服务暂时不可用」反复重试同一个必然失败的请求。 */
+      const status = e.status >= 500 && e.upstreamStatus ? e.upstreamStatus : e.status;
+      if (status === 422) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用微信 / 支付宝充值');
+      if (status === 401) return new ProviderError('E-AUTH-01', e.message || '模型密钥已失效', '重新登录后重试');
+      if (status === 429) return new ProviderError('E-RATE-29', e.message, '稍后重试');
+      if (status === 400) return new ProviderError('E-PRM-04', e.message, '检查提示词与模型参数后重试');
+      if (status === 403) {
         /* 平台把“模型没绑到可用上游”报成 403 GROUP_ROUTING_FAILED；换个模型就能继续，
            所以把原因和下一步说清楚，并让上层把这个模型暂时标成不可用 */
         const noRoute = /GROUP_ROUTING_FAILED|No authorized bound group/i.test(e.message);
@@ -490,7 +493,11 @@ export class PlatformMediaProvider implements Provider {
  * 超时、5xx 等情况可能已经执行，绝不能重发。
  */
 function isUnsupportedParam(e: unknown, param: string): boolean {
-  if (!(e instanceof PlatformError) || e.status !== 400) return false;
+  if (!(e instanceof PlatformError)) return false;
+  /* 网关会把上游的 400 包成 503 返回，此时 status 是 5xx，但上游状态仍是 400。
+     两处都看：真正的 5xx（上游真的挂了）不能重发，只有上游明确拒绝参数才行。 */
+  const status = e.status >= 500 && e.upstreamStatus ? e.upstreamStatus : e.status;
+  if (status !== 400) return false;
   const msg = e.message || '';
   return /unsupported|unrecognized|unknown|invalid|not support/i.test(msg) && new RegExp(param, 'i').test(msg);
 }

@@ -2,8 +2,10 @@ import type { AccountConfig, PlatformModelsReply } from '@aigc/shared';
 import type { ChatMessage } from '../providers/types';
 
 /* ============================================================================
-   平台模型网关（LiteLLM，https://api.callfansai.com）：
-   - 模型清单 GET /models 免令牌，运行时拉取并缓存 60 秒；
+   平台模型清单与网关（LiteLLM，https://api.callfansai.com）：
+   - 清单 GET {accountApi}/public/apps/models?clientId=…，免令牌，缓存 60 秒。
+     走账号服务而不是网关的 /models：账号服务按应用返回**本应用真正能调用**的模型，
+     网关清单里还包含没绑给本应用的模型，选了也没法生成。
    - 调用 POST /v1/chat/completions，只认 LiteLLM 虚拟密钥（key 由账号会话换取）；
    - consumer access token 只发 account.callfansai.com，key 只发网关，两者不混用。
    ========================================================================== */
@@ -31,6 +33,12 @@ export class PlatformError extends Error {
     readonly status: number,
     message: string,
     readonly code?: string,
+    /**
+     * 网关把上游 4xx 包成 5xx 返回时（例如图像接口把上游的 400 invalid_value
+     * 报成 503），这里保留上游的真实状态码。判定「这是参数错误还是服务故障」
+     * 必须看它，不能看 status。
+     */
+    readonly upstreamStatus?: number,
   ) {
     super(message);
   }
@@ -57,8 +65,16 @@ export function pickChatModel(models: PlatformModel[], selected = '', preferred:
   return [...chat].sort((a, b) => costOf(a) - costOf(b))[0]?.id || null;
 }
 
+/** 清单接口返回的原始结构：{appId, data:[模型卡片]} */
+interface AppModelsReply {
+  appId?: string;
+  data?: PlatformModel[];
+  code?: string;
+  message?: string;
+}
+
 export class PlatformCatalog {
-  private cache: { base: string; models: PlatformModel[]; at: number } | null = null;
+  private cache: { key: string; models: PlatformModel[]; appId?: string; url: string; at: number } | null = null;
   private inflight: Promise<PlatformModel[]> | null = null;
 
   constructor(private readonly config: () => AccountConfig) {}
@@ -67,19 +83,30 @@ export class PlatformCatalog {
     return (this.config().gatewayBase || 'https://api.callfansai.com').replace(/\/+$/, '');
   }
 
-  /** 免令牌模型清单；502/503 是网关暂时读不到配置，不代表没有模型 */
+  private apiBase() {
+    return (this.config().apiBase || 'https://account.callfansai.com/api/v1').replace(/\/+$/, '');
+  }
+
+  /** 清单接口地址：账号服务按应用返回本应用能用的模型 */
+  catalogUrl() {
+    const clientId = this.config().clientId || 'aigc-callfans';
+    return `${this.apiBase()}/public/apps/models?clientId=${encodeURIComponent(clientId)}`;
+  }
+
+  /** 免令牌模型清单；502/503 是平台暂时读不到配置，不代表没有模型 */
   async models(force = false): Promise<PlatformModel[]> {
-    const base = this.base();
+    const key = `${this.apiBase()}|${this.config().clientId || ''}`;
     const now = Date.now();
     const hit = this.cache;
-    if (!force && hit && hit.base === base && now - hit.at < CATALOG_TTL_MS) return hit.models;
+    if (!force && hit && hit.key === key && now - hit.at < CATALOG_TTL_MS) return hit.models;
     if (this.inflight) return this.inflight;
     this.inflight = (async () => {
-      const res = await fetch(`${base}/models`, {
+      const url = this.catalogUrl();
+      const res = await fetch(url, {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(10_000),
       }).catch((e) => {
-        throw new PlatformError(0, `连不上平台模型网关：${(e as Error).message}`, 'catalog_unreachable');
+        throw new PlatformError(0, `连不上平台账号服务：${(e as Error).message}`, 'catalog_unreachable');
       });
       const text = await res.text();
       const body: unknown = (() => {
@@ -90,18 +117,15 @@ export class PlatformCatalog {
         }
       })();
       if (!res.ok) {
-        const code = (body as { code?: string } | null)?.code;
-        const message =
-          res.status === 404
-            ? '平台没有开放模型清单'
-            : res.status === 502 || res.status === 503
-              ? '平台模型清单暂时读不到，稍后重试'
-              : `平台模型清单返回 HTTP ${res.status}`;
-        throw new PlatformError(res.status, message, code || 'model_catalog_unavailable');
+        const b = (body || {}) as AppModelsReply;
+        /* 只有「这个端点根本不存在」才退回老的网关清单：其它 404 都是 clientId 没登记，
+           退回旧清单会让人以为模型可用、生成时才失败。 */
+        if (res.status === 404 && !b.code) return this.legacyModels();
+        throw new PlatformError(res.status, catalogErrorMessage(res.status, b), b.code || 'model_catalog_unavailable');
       }
-      const list = Array.isArray(body) ? body : ((body as { data?: unknown } | null)?.data as unknown);
-      const models = Array.isArray(list) ? (list as PlatformModel[]).filter((m) => !!m?.id) : [];
-      this.cache = { base, models, at: Date.now() };
+      const models = normalizeCatalog(body);
+      if (!models) throw new PlatformError(0, '模型清单格式不对：缺少 data', 'model_catalog_malformed');
+      this.cache = { key, models, appId: (body as AppModelsReply).appId, url, at: Date.now() };
       return models;
     })();
     try {
@@ -109,6 +133,34 @@ export class PlatformCatalog {
     } finally {
       this.inflight = null;
     }
+  }
+
+  /**
+   * 老版本账号服务没有 /public/apps/models 时的退路：读网关的全量清单。
+   * 全量清单可能含未绑定给本应用的模型，所以只在端点缺失时使用，并记一条提示。
+   */
+  private async legacyModels(): Promise<PlatformModel[]> {
+    const base = this.base();
+    const res = await fetch(`${base}/models`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    }).catch((e) => {
+      throw new PlatformError(0, `连不上平台模型网关：${(e as Error).message}`, 'catalog_unreachable');
+    });
+    const text = await res.text();
+    const body: unknown = (() => {
+      try {
+        return text ? JSON.parse(text) : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!res.ok) {
+      throw new PlatformError(res.status, `平台模型清单返回 HTTP ${res.status}`, 'model_catalog_unavailable');
+    }
+    const models = normalizeCatalog(body) || [];
+    this.cache = { key: `${this.apiBase()}|${this.config().clientId || ''}`, models, url: `${base}/models`, at: Date.now() };
+    return models;
   }
 
   /** 当前该用哪个对话模型；selected 是用户在界面上选的（空 = 自动） */
@@ -119,14 +171,24 @@ export class PlatformCatalog {
   /** 同步读缓存：生成渠道的模型目录要用它（不能在这里发请求） */
   cachedModels(): PlatformModel[] {
     const hit = this.cache;
-    return hit && hit.base === this.base() ? hit.models : [];
+    return hit && hit.key === `${this.apiBase()}|${this.config().clientId || ''}` ? hit.models : [];
+  }
+
+  /** 缓存里记着的清单来源；「模型与价格」用来说明模型是从哪来的 */
+  cachedSource(): { url: string; appId?: string } | null {
+    const hit = this.cache;
+    if (!hit) return null;
+    return { url: hit.url, appId: hit.appId };
   }
 
   /** 「模型与价格」用：清单（按 mode 分组交给界面） */
   async summary(force = false): Promise<PlatformModelsReply> {
     const models = await this.models(force);
+    const src = this.cachedSource();
     return {
       gatewayBase: this.base(),
+      catalogUrl: src?.url || this.catalogUrl(),
+      appId: src?.appId,
       models: models.map((m) => ({
         id: m.id,
         protocol: m.protocol,
@@ -144,6 +206,30 @@ export class PlatformCatalog {
       at: Date.now(),
     };
   }
+}
+
+/**
+ * 清单响应 → 模型数组。新接口是 `{appId, data:[…]}`，老网关是 `{object, data:[…]}`
+ * 或裸数组，三种都认；`data` 缺失或不是数组时返回 null（由调用方判定为格式错误）。
+ */
+export function normalizeCatalog(body: unknown): PlatformModel[] | null {
+  const list = Array.isArray(body) ? body : ((body as { data?: unknown } | null)?.data as unknown);
+  if (!Array.isArray(list)) return null;
+  return (list as PlatformModel[]).filter((m) => !!m?.id);
+}
+
+/** 清单接口的错误说明：404 是应用没登记，403 是应用停用，都不该被当成「稍后重试」 */
+export function catalogErrorMessage(status: number, body?: AppModelsReply) {
+  const detail = body?.message?.trim();
+  if (status === 404) {
+    return `平台没有登记这个应用的模型清单${detail ? `（${detail}）` : ''}：检查 clientId 配置`;
+  }
+  if (status === 403) {
+    return `平台上的这个应用已停用${detail ? `（${detail}）` : ''}：到平台控制台启用后再试`;
+  }
+  if (status === 502 || status === 503) return '平台模型清单暂时读不到，稍后重试';
+  if (status === 400) return '平台模型清单请求不合法：缺少 clientId';
+  return `平台模型清单返回 HTTP ${status}${detail ? `：${detail}` : ''}`;
 }
 
 interface ChatReply {
@@ -198,20 +284,78 @@ export async function platformChat(opts: {
     const b = (body || {}) as ChatReply;
     const detail = typeof b.error === 'string' ? b.error : b.error?.message || '';
     const code = typeof b.error === 'object' ? b.error?.code : undefined;
-    throw new PlatformError(res.status, gatewayMessage(res.status, detail), code);
+    const upstreamStatus = upstreamStatusOf(body);
+    throw new PlatformError(res.status, gatewayMessage(res.status, detail, upstreamStatus), code, upstreamStatus);
   }
   const content = contentOf((body || {}) as ChatReply).trim();
   if (!content) throw new PlatformError(res.status, '模型没有返回内容', 'empty_reply');
   return content;
 }
 
-export function gatewayMessage(status: number, detail: string) {
-  if (status === 401) return '模型密钥已失效：重新登录后再试';
-  if (status === 422) return '积分不足：这个账号在该应用的积分用完了，充值后再试';
-  if (status === 429) return '模型服务限流，请稍后再试';
-  if (status === 400) return `模型请求不合法：${detail || '检查模型名与参数'}`;
+/**
+ * 网关状态码 → 给人看的一句话。
+ *
+ * {@code upstreamStatus} 是网关包装上游失败时附带的真实状态码：上游 400 被
+ * 报成 503 时，按 400 处理——那是用户改参数就能解决的客户端错误，不该提示
+ * 「稍后重试」。
+ */
+export function gatewayMessage(status: number, detail: string, upstreamStatus?: number) {
+  const client = status >= 500 && upstreamStatus && upstreamStatus >= 400 && upstreamStatus < 500
+    ? upstreamStatus
+    : status;
+  if (client === 401) return '模型密钥已失效：重新登录后再试';
+  if (client === 422) return '积分不足：这个账号在该应用的积分用完了，充值后再试';
+  if (client === 429) return '模型服务限流，请稍后再试';
+  if (client === 400) return `模型请求不合法：${detail || '检查模型名与参数'}`;
   if (status >= 500) return '平台模型服务暂时不可用，稍后重试';
   return detail || `平台模型网关返回 HTTP ${status}`;
+}
+
+/**
+ * 网关把上游 4xx 包装成 5xx 时，响应体里的原始状态码。
+ *
+ * 图像路由错误的那一刻最典型：上游说 `400 invalid_value: Invalid size
+ * '1080x608'. Width and height must both be divisible by 16`，网关按
+ * 「上游调用失败」回 503，于是这条本可以照着改参数解决的客户端错误，
+ * 被统一显示成「平台服务暂时不可用，稍后重试」——用户只会反复重试同一个
+ * 必然失败的请求。
+ *
+ * LiteLLM 把上游信息放在 `message` 里那段上游 JSON 的 `upstream.http_status`，
+ * 也有版本直接用 `error.upstream_status` / `upstream_status`。都读一遍；
+ * 只有 4xx 才算，5xx 仍旧是服务故障。
+ */
+export function upstreamStatusOf(body: unknown): number | undefined {
+  const found = findUpstreamStatus(body, 0);
+  return found && found >= 400 && found < 500 ? found : undefined;
+}
+
+function findUpstreamStatus(node: unknown, depth: number): number | undefined {
+  if (!node || depth > 4) return undefined;
+  if (typeof node === 'string') {
+    /* message 是 JSON 字符串时（"{\"error\":{...}}"）解析一层再看 */
+    const text = node.trim();
+    if (text.startsWith('{')) {
+      try {
+        return findUpstreamStatus(JSON.parse(text), depth + 1);
+      } catch {
+        return undefined;
+      }
+    }
+    /* 兜底：上游原文里带 http_status。不解析 JSON 也能认出最常见的写法 */
+    const m = /"http_status"\s*:\s*(\d{3})/.exec(text);
+    return m ? Number(m[1]) : undefined;
+  }
+  if (typeof node !== 'object') return undefined;
+  const o = node as Record<string, unknown>;
+  for (const key of ['upstream_status', 'upstreamStatus']) {
+    const v = o[key];
+    if (typeof v === 'number') return v;
+  }
+  for (const key of ['upstream', 'error', 'message', 'detail']) {
+    const found = findUpstreamStatus(o[key], depth + 1);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /** 网关错误体 → PlatformError（详情与 code 尽量保留，便于排查） */
@@ -219,5 +363,6 @@ export function platformError(status: number, body: unknown): PlatformError {
   const b = (body || {}) as { error?: { message?: string; code?: string } | string; message?: string; code?: string; detail?: string };
   const detail = typeof b.error === 'string' ? b.error : b.error?.message || b.message || b.detail || (typeof body === 'string' ? body : '');
   const code = typeof b.error === 'object' ? b.error?.code || b.code : b.code;
-  return new PlatformError(status, gatewayMessage(status, detail), code);
+  const upstreamStatus = upstreamStatusOf(body);
+  return new PlatformError(status, gatewayMessage(status, detail, upstreamStatus), code, upstreamStatus);
 }

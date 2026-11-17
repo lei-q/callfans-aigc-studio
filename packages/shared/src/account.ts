@@ -93,6 +93,10 @@ export interface PlatformModelInfo {
 
 export interface PlatformModelsReply {
   gatewayBase: string;
+  /** 清单接口地址（账号服务的 /public/apps/models，免令牌） */
+  catalogUrl?: string;
+  /** 清单接口解析出的应用 ID，如 aigc-studio */
+  appId?: string;
   /** 清单里的全部模型；按 mode 分组（chat / image / video / audio） */
   models: PlatformModelInfo[];
   at: number;
