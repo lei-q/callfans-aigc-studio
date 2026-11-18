@@ -538,7 +538,8 @@ a { color: inherit; text-decoration: none; }
 .tg-meta { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--t3); flex-wrap: wrap; }
 .tg-meta .sep { width: 3px; height: 3px; border-radius: 50%; background: var(--t4); }
 .tg-body { padding: 12px 14px 14px; }
-.result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 10px; }
+/* align-items: start：每张卡片按自己的比例排版，不被同行最高的那张拉高 */
+.result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 10px; align-items: start; }
 .result-grid.tight { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 
 .result-card {
@@ -548,8 +549,10 @@ a { color: inherit; text-decoration: none; }
 .result-card:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); transform: translateY(-1px); }
 .result-card.adopted { border-color: var(--green-border); }
 .result-card.failed-card { opacity: .92; }
-.rc-media { position: relative; width: 100%; height: 168px; background: var(--surface-3); overflow: hidden; }
-.rc-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 按素材真实宽高比排版（内联 aspect-ratio），不再定高裁切：
+   竖版视频被压进 168px 高的横框里，画面会被 cover 裁掉大半，看起来像横版。 */
+.rc-media { position: relative; width: 100%; background: var(--surface-3); overflow: hidden; max-height: 420px; }
+.rc-media img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .rc-media.playing img { animation: kenburns 6s ease-in-out infinite alternate; }
 .rc-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(23,26,35,.42) 0%, transparent 34%, transparent 62%, rgba(23,26,35,.5) 100%); opacity: 0; transition: opacity .16s; }
 .result-card:hover .rc-shade { opacity: 1; }

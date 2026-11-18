@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { JobStatus, MediaType, Result } from '@aigc/shared';
 import { TYPES, clamp, seededSeries } from '@aigc/shared';
 import { useStore } from '../store';
@@ -6,6 +6,31 @@ import { reportTime, stopPlay } from '../store/player';
 import { cssOfEdit, thumbOf } from '../lib/util';
 
 const FILL = new Set(['play', 'pause', 'more']);
+
+/**
+ * 记住每个产出**文件本身**的宽高比。
+ * 媒体元数据异步到达，先按记录值占位、到了再改，避免整列跳变。
+ */
+const AR_CACHE = new Map<string, number>();
+/** 媒体文件的实际宽高比；元数据还没到就先按任务记录的比例占位 */
+export function useMediaAr(r: Result): [number, (v: number) => void] {
+  const [ar, setAr] = useState<number>(() => AR_CACHE.get(r.id) ?? recordedAr(r.ratio));
+  const update = useCallback(
+    (v: number) => {
+      if (!Number.isFinite(v) || v <= 0) return;
+      AR_CACHE.set(r.id, v);
+      setAr((prev) => (Math.abs(prev - v) < 0.001 ? prev : v));
+    },
+    [r.id],
+  );
+  return [ar, update];
+}
+
+/** 任务记录里的比例当占位：只在媒体元数据到达前用一下 */
+function recordedAr(ratio?: string): number {
+  const [w, h] = (ratio || '1:1').split(':').map(Number);
+  return w && h ? w / h : 1;
+}
 
 export function Icon({ name, className = '' }: { name: string; className?: string }) {
   return (
@@ -106,12 +131,41 @@ export function Wave({ r, cls, bars = 40 }: { r: Result; cls?: string; bars?: nu
   );
 }
 
-/** 产出的媒体：有封面就用封面；真实视频直接用 <video> 首帧；真实音频画一块波形底 */
-export const MediaThumb = memo(function MediaThumb({ r, style, playable }: { r: Result; style?: CSSProperties; playable?: boolean }) {
+/**
+ * 产出的媒体：有封面就用封面；真实视频直接用 <video> 首帧；真实音频画一块波形底。
+ *
+ * onAr 上报素材**文件本身**的宽高比（不是任务记录里用户选的 ratio）：
+ * 早先版本有过「选了 9:16 出了 16:9」的问题，按记录值排版会把错的一直显示下去。
+ */
+export const MediaThumb = memo(function MediaThumb({
+  r,
+  style,
+  playable,
+  onAr,
+}: {
+  r: Result;
+  style?: CSSProperties;
+  playable?: boolean;
+  onAr?: (ar: number) => void;
+}) {
   const thumb = thumbOf(r);
   const editStyle = { ...cssOfEdit(r.edit?.css), ...style };
-  if (thumb) return <img src={thumb} alt={r.title} style={editStyle} draggable={false} loading="lazy" />;
-  if (r.type === 'video') return <CardVideo r={r} style={editStyle} playable={playable} />;
+  if (thumb) {
+    return (
+      <img
+        src={thumb}
+        alt={r.title}
+        style={editStyle}
+        draggable={false}
+        loading="lazy"
+        onLoad={(e) => {
+          const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+          if (w > 0 && h > 0) onAr?.(w / h);
+        }}
+      />
+    );
+  }
+  if (r.type === 'video') return <CardVideo r={r} style={editStyle} playable={playable} onAr={onAr} />;
   return (
     <div className="audio-tile">
       <Icon name="waveform" className="lg" />
@@ -120,7 +174,7 @@ export const MediaThumb = memo(function MediaThumb({ r, style, playable }: { r: 
 });
 
 /** 卡片里的真实视频：点播放才真的播，进度回写到全局播放状态 */
-function CardVideo({ r, style, playable }: { r: Result; style?: CSSProperties; playable?: boolean }) {
+function CardVideo({ r, style, playable, onAr }: { r: Result; style?: CSSProperties; playable?: boolean; onAr?: (ar: number) => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const playing = useStore((s) => s.play.id === r.id);
   useEffect(() => {
@@ -140,6 +194,10 @@ function CardVideo({ r, style, playable }: { r: Result; style?: CSSProperties; p
       playsInline
       preload="metadata"
       style={style}
+      onLoadedMetadata={(e) => {
+        const { videoWidth: w, videoHeight: h } = e.currentTarget;
+        if (w > 0 && h > 0) onAr?.(w / h);
+      }}
       onTimeUpdate={(e) => playing && reportTime(r.id, e.currentTarget.currentTime)}
       onEnded={() => playing && stopPlay()}
     />

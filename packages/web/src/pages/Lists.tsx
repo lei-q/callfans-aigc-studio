@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import type { Job, Result } from '@aigc/shared';
 import { TYPES, mmss, paramsBrief, pointsOf, pointsText, promptBrief, round2, timeLabel } from '@aigc/shared';
-import { DangerButton, Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, Wave } from '../components/common';
+import { DangerButton, Empty, Icon, MediaThumb, ProjectMini, StatusChip, TaskIc, Wave, useMediaAr } from '../components/common';
 import { setState, useStore } from '../store';
 import {
   adoptAll,
@@ -540,14 +540,16 @@ function ResultCard({ r, idx, picked }: { r: Result; idx: number; picked: boolea
   const adopted = r.status === 'adopted';
   const fav = r.status === 'fav';
   const j = jobById(s, r.job);
+  /* 按素材真实宽高比排版：定高 + cover 会把竖版裁成横版 */
+  const [ar, setAr] = useMediaAr(r);
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation();
     fn();
   };
   return (
     <article className={`result-card ${adopted ? 'adopted' : ''}`} onClick={() => openResult(r.id)} title="拖进画板当参考" {...dragProps(r.id)}>
-      <div className={`rc-media ratio-${r.ratio.replace(':', '-')} ${playing ? 'playing' : ''}`}>
-        <MediaThumb r={r} playable />
+      <div className={`rc-media ${playing ? 'playing' : ''}`} style={{ aspectRatio: String(ar) }}>
+        <MediaThumb r={r} playable onAr={setAr} />
         <div className="rc-shade" />
         <div className="rc-badges">
           <span className="rc-badge">{r.ratio}</span>
@@ -695,73 +697,82 @@ function DraftsPage() {
       {list.length ? (
         <div className="result-grid">
           {list.map((r) => (
-            <article key={r.id} className="result-card draft" {...dragProps(r.id)}>
-              <div className={`rc-media ratio-${r.ratio.replace(':', '-')}`}>
-                <MediaThumb r={r} />
-                <div className="rc-shade" />
-                <div className="rc-badges">
-                  <span className="rc-badge">{r.ratio}</span>
-                  <span className="rc-badge">
-                    <Icon name="box" />
-                    草稿
-                  </span>
-                  {r.type !== 'image' && (
-                    <span className={`rc-badge ${r.type === 'video' ? 'violet' : 'blue'}`}>
-                      <Icon name={TYPES[r.type].ic} />
-                      {r.dur}s
-                    </span>
-                  )}
-                </div>
-                <div className="rc-ops">
-                  <button className="rc-op" title="捞回画布" onClick={() => toCanvas(r.id)}>
-                    <Icon name="layers" />
-                  </button>
-                  <button className="rc-op" title="存进素材库" onClick={() => draftToLib(r.id)}>
-                    <Icon name="check" />
-                  </button>
-                  <button className="rc-op" title="下载" onClick={() => downloadResult(r.id)}>
-                    <Icon name="download" />
-                  </button>
-                </div>
-              </div>
-              <div className="rc-foot">
-                <div className="rc-line">
-                  <span className="grow" title={r.title}>
-                    {r.title}
-                  </span>
-                </div>
-                <div className="rc-line">
-                  <ProjectMini ws={r.ws} />
-                  <span className="tiny dim">{modelOf(s, r.model).name}</span>
-                </div>
-                <div className="rc-line rc-tags">
-                  {(r.tags || [])
-                    .filter((x) => x !== r.ratio)
-                    .slice(0, 2)
-                    .map((x) => (
-                      <span key={x} className="rc-tag">
-                        {x}
-                      </span>
-                    ))}
-                </div>
-                <div className="rc-actions">
-                  <button className="btn sm ghost" onClick={() => toCanvas(r.id)}>
-                    <Icon name="layers" />
-                    捞回画布
-                  </button>
-                  <button className="btn sm primary" onClick={() => draftToLib(r.id)}>
-                    <Icon name="check" />
-                    存进素材库
-                  </button>
-                </div>
-              </div>
-            </article>
+            <DraftCard key={r.id} r={r} />
           ))}
         </div>
       ) : (
         <Empty icon="check" title="草稿箱是空的" desc="生成之后没拖进画布的内容会落到这里，不用手动清理。" />
       )}
     </div>
+  );
+}
+
+/** 草稿卡：和素材库一样按素材真实宽高比排版 */
+function DraftCard({ r }: { r: Result }) {
+  const s = useStore();
+  const [ar, setAr] = useMediaAr(r);
+  return (
+    <article className="result-card draft" {...dragProps(r.id)}>
+      <div className="rc-media" style={{ aspectRatio: String(ar) }}>
+        <MediaThumb r={r} onAr={setAr} />
+        <div className="rc-shade" />
+        <div className="rc-badges">
+          <span className="rc-badge">{r.ratio}</span>
+          <span className="rc-badge">
+            <Icon name="box" />
+            草稿
+          </span>
+          {r.type !== 'image' && (
+            <span className={`rc-badge ${r.type === 'video' ? 'violet' : 'blue'}`}>
+              <Icon name={TYPES[r.type].ic} />
+              {r.dur}s
+            </span>
+          )}
+        </div>
+        <div className="rc-ops">
+          <button className="rc-op" title="捞回画布" onClick={() => toCanvas(r.id)}>
+            <Icon name="layers" />
+          </button>
+          <button className="rc-op" title="存进素材库" onClick={() => draftToLib(r.id)}>
+            <Icon name="check" />
+          </button>
+          <button className="rc-op" title="下载" onClick={() => downloadResult(r.id)}>
+            <Icon name="download" />
+          </button>
+        </div>
+      </div>
+      <div className="rc-foot">
+        <div className="rc-line">
+          <span className="grow" title={r.title}>
+            {r.title}
+          </span>
+        </div>
+        <div className="rc-line">
+          <ProjectMini ws={r.ws} />
+          <span className="tiny dim">{modelOf(s, r.model).name}</span>
+        </div>
+        <div className="rc-line rc-tags">
+          {(r.tags || [])
+            .filter((x) => x !== r.ratio)
+            .slice(0, 2)
+            .map((x) => (
+              <span key={x} className="rc-tag">
+                {x}
+              </span>
+            ))}
+        </div>
+        <div className="rc-actions">
+          <button className="btn sm ghost" onClick={() => toCanvas(r.id)}>
+            <Icon name="layers" />
+            捞回画布
+          </button>
+          <button className="btn sm primary" onClick={() => draftToLib(r.id)}>
+            <Icon name="check" />
+            存进素材库
+          </button>
+        </div>
+      </div>
+    </article>
   );
 }
 
