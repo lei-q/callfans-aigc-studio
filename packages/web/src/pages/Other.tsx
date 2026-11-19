@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { MediaType, PlatformModelInfo, PlatformModelsReply, UsageRequest, UsageSummary } from '@aigc/shared';
+import type { MediaType, PlatformModelInfo, ToolInfoDto, PlatformModelsReply, UsageRequest, UsageSummary } from '@aigc/shared';
 import { DEFAULT_PORT, TYPES, TYPE_KEYS, hostOf, platformGenerationType, platformModeType, round1, timeLabel } from '@aigc/shared';
 import { Empty, Icon, TaskIc } from '../components/common';
 import { UpdateStatus } from '../components/Update';
@@ -8,7 +8,7 @@ import { aestheticAddFile, logout, openDrawer, patchSettings, removeAesthetic } 
 import { balance, modelOf } from '../store/selectors';
 import { toast } from '../store/toast';
 import { api } from '../lib/api';
-
+import { ToolGuide } from '../components/ToolGuide';
 /* ---------------- 审美库 ---------------- */
 
 export function AestheticPage() {
@@ -177,6 +177,38 @@ function UsageSection({ loggedIn }: { loggedIn: boolean }) {
       <div className="table-note">
         <Icon name="shield" />
         <span>网页与 API 共用这一份点数；调用失败不扣费；同时排队与生成中的 API 任务超过 8 个返回 429。按量计费，没有月费与最低消费。</span>
+      </div>
+    </div>
+  );
+}
+
+/** 本机工具：ffmpeg（随包）/ yt-dlp / whisper（不随包，没装时给安装指引） */
+function ToolsSection() {
+  const [tools, setTools] = useState<ToolInfoDto[] | null>(null);
+  const load = () => void api.get<{ tools: ToolInfoDto[] }>('/api/tools').then((r) => setTools(r.tools)).catch(() => setTools([]));
+  useEffect(load, []);
+  return (
+    <div className="catalog-sec">
+      <div className="catalog-sec-name">本机工具</div>
+      <div className="card set-card">
+        {(tools || []).map((t) => (
+          <div key={t.name} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="snap-row">
+              <div className="grow">
+                <b>{t.title}</b> <span className="tiny dim">用于{t.purpose}</span>
+                <div className="tiny dim">{t.found ? t.path : t.badEnv ? `${t.env} 指向的文件不存在` : '未安装'}</div>
+              </div>
+              <span className={`chip ${t.found ? 'success' : 'warn'}`}>
+                <span className="cdot" />
+                {t.found ? '已就绪' : '需要安装'}
+              </span>
+              <button className="btn sm ghost" onClick={load}>
+                重新检测
+              </button>
+            </div>
+            {!t.found && <ToolGuide tool={t} onFound={load} />}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -753,6 +785,7 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+      <ToolsSection />
     </div>
   );
 }

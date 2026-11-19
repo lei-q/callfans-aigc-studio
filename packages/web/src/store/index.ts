@@ -29,6 +29,15 @@ import type {
 import { EDIT_DEF, PEN_COLORS } from '@aigc/shared';
 
 export type Page = 'studio' | 'jobs' | 'library' | 'projects' | 'models' | 'api' | 'aesthetic' | 'settings';
+export interface AgentPlanState {
+  goal: string;
+  loading: boolean;
+  error: string | null;
+  summary: string;
+  steps: (import('@aigc/shared').AgentPlanStep & { model: string })[] | null;
+  submitting: boolean;
+}
+
 export type DrawerType = 'result' | 'help' | 'queue' | 'ref-add' | 'topup' | 'edit' | 'post' | 'project' | 'account';
 
 export interface Toast {
@@ -135,6 +144,8 @@ export interface State {
   regen: { srcId: string } | null;
   annot: { srcId: string } | null;
   snapOpen: boolean;
+  agentPlan: AgentPlanState;
+  linkDl: boolean;
   group: { srcId: string; axes: string[]; adds: Record<string, string> } | null;
   check: { ids: string[] } | null;
   /** 批注缓存：画布元素 id → 批注；只在本次会话里，生成提交后清掉 */
@@ -243,6 +254,8 @@ export const initialState: State = {
   regen: null,
   annot: null,
   snapOpen: false,
+  agentPlan: { goal: '', loading: false, error: null, summary: '', steps: null, submitting: false },
+  linkDl: false,
   group: null,
   check: null,
   annotCache: {},

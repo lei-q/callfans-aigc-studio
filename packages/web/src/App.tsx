@@ -20,6 +20,7 @@ import { AnnotModal } from './canvas/AnnotModal';
 import { GroupModal } from './canvas/GroupModal';
 import { CheckModal } from './canvas/CheckModal';
 import { SnapshotModal } from './canvas/SnapshotModal';
+import { LinkDlModal } from './canvas/LinkDlModal';
 
 function Main() {
   const page = useStore((s) => s.page);
@@ -238,6 +239,7 @@ export function App() {
       <GroupModal />
       <CheckModal />
       <SnapshotModal />
+      <LinkDlModal />
       <Toasts />
       <UpdatePrompt />
       <UpdateFloat />

@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { TYPES, agentParamText, clamp } from '@aigc/shared';
 import { Icon } from '../components/common';
 import { setState, useStore } from '../store';
+import { AgentPlanSection } from './AgentPlan';
 import { agentApply, agentClose, agentCopy, agentOpen, agentScopeAll } from './ops';
 
 /* Agent 是画布上的浮层：收起时是一颗悬浮球，展开时是可拖动、可停靠的面板 */
@@ -104,6 +105,7 @@ export function AgentDock() {
           </button>
         </div>
         <div className="agent-body">
+          <AgentPlanSection />
           {!total ? (
             <div className="agent-empty">
               {r.scoped ? '选中的东西里没有可读的内容。' : '画板还是空的。'}先把参考图、社媒帖子或文档放上去，Agent 才有东西可读。

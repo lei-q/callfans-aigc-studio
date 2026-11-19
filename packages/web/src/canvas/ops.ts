@@ -1,4 +1,4 @@
-import type { AgentEnhanceReply, AgentResult, Board, CanvasItem, CanvasView, MediaType, Result, TextSize } from '@aigc/shared';
+import type { AgentEnhanceReply, AgentPlanReply, AgentPlanStep, AgentResult, Board, CanvasItem, CanvasView, MediaType, Result, TextSize } from '@aigc/shared';
 import {
   DIVERGE_AXES,
   DIVERGE_DEFAULT,
@@ -203,6 +203,22 @@ export function autoSnapshot(name: string) {
   const s = getState();
   if (!s.ws || !canvasItems(s).length) return;
   void api.post('/api/snapshots', { ws: s.ws, name, auto: true }).catch(() => {});
+}
+
+/** 把转写文字作为一个文字元素放在视频旁边，并连回视频 */
+export function addTranscriptText(srcId: string, text: string) {
+  const it = canvasItems(getState()).find((x) => x.id === srcId);
+  if (!it || !text.trim()) return;
+  const id = uid('c');
+  mutateBoard((b) => {
+    b.items.push({ id, kind: 'text', text: text.trim().slice(0, 4000), size: 'sm', x: Math.round(it.x + cvsItemW(it) + 40), y: Math.round(it.y) });
+    b.links.push({ id: uid('L'), from: srcId, to: id });
+  });
+  toast('success', '转写文字已放进画布', '在视频右边，并连回视频');
+}
+
+export function linkDlOpen() {
+  setState((s) => void ((s.cvsMenu = null), (s.linkDl = true)));
 }
 
 export function snapshotsOpen() {
@@ -1353,6 +1369,114 @@ export function agentResync() {
 export function agentScopeAll() {
   setState((s) => void (s.canvasSel = []));
   void agentOpen(true);
+}
+
+/* ---------------- Agent 计划：目标 → 几步生成 → 确认后才建任务 ---------------- */
+
+/** 参与参考的素材：选中的优先；没选就取画布前 4 个素材 */
+function planItems(s: State) {
+  const sel = canvasSelItems(s).filter((i) => i.kind === 'media');
+  return (sel.length ? sel : canvasItems(s).filter((i) => i.kind === 'media')).slice(0, MAX_REFS);
+}
+
+export const agentPlanGoal = (goal: string) => setState((s) => void (s.agentPlan.goal = goal));
+
+export async function agentPlanRun() {
+  const s = getState();
+  const goal = s.agentPlan.goal.trim();
+  if (goal.length < 2) return toast('info', '先写一句目标', '例如：做一组春季饮品的小红书配图，再配一条 5 秒短视频');
+  const items = planItems(s);
+  const result = s.agent.result || computeAgent(s);
+  const prompts = (result.scoped ? canvasSelItems(s) : canvasItems(s))
+    .map((i) => resultById(s, i.rid))
+    .map((r) => (r ? jobById(s, r.job)?.prompt : undefined))
+    .filter((p): p is string => !!p);
+  setState((st) => void (st.agentPlan = { ...st.agentPlan, loading: true, error: null, steps: null, summary: '' }));
+  try {
+    const plan = await api.post<AgentPlanReply>('/api/assist/plan', {
+      goal,
+      facts: [result.typeText, ...result.postLines, ...result.notes].filter(Boolean),
+      prompts,
+      nodeTexts: result.nodeTexts,
+      items: items.map((i) => ({ id: i.id, type: i.type || 'image', title: i.t || '未命名' })),
+    });
+    const st0 = getState();
+    setState((st) => {
+      st.agentPlan.loading = false;
+      st.agentPlan.summary = plan.summary;
+      st.agentPlan.steps = plan.steps.map((x) => ({ ...x, model: st0.params[x.kind].model }));
+    });
+  } catch (e) {
+    /* 失败就是失败：保留目标文字，说明原因，不拿模板冒充 AI 的计划 */
+    setState((st) => void ((st.agentPlan.loading = false), (st.agentPlan.error = (e as Error).message || '计划生成失败')));
+  }
+}
+
+export function agentPlanEdit(id: string, patch: Partial<AgentPlanStep & { model: string }>) {
+  setState((s) => {
+    const x = s.agentPlan.steps?.find((y) => y.id === id);
+    if (x) Object.assign(x, patch);
+  });
+}
+
+export function agentPlanRemove(id: string) {
+  setState((s) => void (s.agentPlan.steps && (s.agentPlan.steps = s.agentPlan.steps.filter((x) => x.id !== id))));
+}
+
+export function agentPlanCost(s: State) {
+  return round1(
+    (s.agentPlan.steps || []).reduce((n, x) => {
+      const m = modelOf(s, x.model);
+      const p = x.kind === 'video' ? { ...s.params.video, dur: x.dur } : { ...s.params.image, count: x.count };
+      return n + singleUnitCost(x.kind, p, m) * (x.kind === 'image' ? x.count : 1);
+    }, 0),
+  );
+}
+
+export async function agentPlanConfirm() {
+  const s = getState();
+  const steps = s.agentPlan.steps;
+  if (!steps?.length || s.agentPlan.submitting) return;
+  const total = agentPlanCost(s);
+  if (!canAfford(s, total)) return toast('warn', '点数不够执行这份计划', `需要约 ${total} 点，当前余额 ${s.wallet?.balance ?? 0} 点`);
+  const defaults = planItems(s);
+  setState((st) => void (st.agentPlan.submitting = true));
+  try {
+    autoSnapshot(`Agent 计划前 · ${steps.length} 步`);
+    const bodies: CreateJobBody[] = steps.map((x) => {
+      const items = (x.refIds.length ? x.refIds.map((id) => canvasItems(s).find((i) => i.id === id)).filter((i): i is CanvasItem => !!i) : defaults).slice(0, MAX_REFS);
+      const refs = items.map((i) => refFromItem(s, i)).filter((r): r is NonNullable<typeof r> => !!r);
+      const tpl = jobBody(s, x.kind);
+      return {
+        ...tpl,
+        model: x.model,
+        prompt: x.prompt,
+        refs,
+        ratio: x.ratio,
+        name: `Agent · ${x.title}`.slice(0, 80),
+        fromCvsId: items[0]?.id,
+        ...(x.kind === 'image' ? { count: x.count } : { dur: x.dur || 5 }),
+      };
+    });
+    await api.post<{ jobs: Job[] }>('/api/jobs', { jobs: bodies });
+    setState((st) => void (st.agentPlan = { goal: '', loading: false, error: null, summary: '', steps: null, submitting: false }));
+    toast('success', `已按计划排队 ${bodies.length} 项`, `约 ${total} 点（平台渠道以实际用量为准）；产出会连回参考素材`);
+  } catch (e) {
+    setState((st) => void (st.agentPlan.submitting = false));
+    toastError(e, '没能提交计划');
+  }
+}
+
+/** 能力卡：能直接交给现成工具的就直接打开；其余把目标填进去让 Agent 出计划 */
+export function agentCard(k: 'group' | 'replicate' | 'edit' | 'adapt') {
+  const sel = canvasSelItems(getState()).filter((i) => i.kind === 'media');
+  const one = sel.length === 1 ? sel[0] : null;
+  const needImage = () => (one?.type === 'image' ? true : (toast('info', '先选中一张图片', '单击画布上的图片，再点这张卡'), false));
+  if (k === 'group') return needImage() && groupOpen();
+  if (k === 'edit') return needImage() && annotOpen();
+  if (k === 'adapt') return needImage() && cropOpen();
+  agentPlanGoal('参考选中的素材（或帖子），复刻一条同风格的爆款短视频：先拆成几个镜头，再生成');
+  void agentPlanRun();
 }
 
 export function agentClose() {

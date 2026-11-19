@@ -377,6 +377,44 @@ describe('画布上下文接口', () => {
   });
 });
 
+describe('Agent 计划', () => {
+  it('清洗模型输出：夹住范围、过滤非法素材 id、丢掉没提示词的步骤；一步都没有返回 null', async () => {
+    const { cleanPlan } = await import('../src/assist');
+    const ids = new Set(['c1', 'c2']);
+    const p = cleanPlan(
+      {
+        summary: '先出主图再做短视频',
+        steps: [
+          { kind: 'image', title: '主图', prompt: '山地徒步', ratio: '7:3', count: 9, refIds: ['c1', 'zzz'], why: '竖版更适合信息流' },
+          { kind: 'video', prompt: '镜头推进', ratio: '9:16', dur: 99, refIds: ['c2'] },
+          { kind: 'audio', prompt: '不支持' },
+          { kind: 'image', prompt: '   ' },
+        ],
+      },
+      ids,
+    )!;
+    expect(p.steps).toHaveLength(2);
+    expect(p.steps[0]).toMatchObject({ kind: 'image', ratio: '1:1', count: 4, refIds: ['c1'], why: '竖版更适合信息流' });
+    expect(p.steps[1]).toMatchObject({ kind: 'video', dur: 15, count: 1, title: '第 2 步' });
+    expect(cleanPlan({ steps: [] }, ids)).toBeNull();
+    expect(cleanPlan('x', ids)).toBeNull();
+  });
+
+  it('走真实对话路由：解析成功返回计划；模型胡言乱语时 502；未登录说明需要文本模型', async () => {
+    const core = await makeCore();
+    const { planAgent } = await import('../src/assist');
+    const body = { goal: '做一组春季饮品海报', facts: [], prompts: [], nodeTexts: [], items: [{ id: 'c1', type: 'image', title: '拿铁' }] };
+    await expect(planAgent(core, body)).rejects.toThrow(/文本模型/);
+    await login(core);
+    const spy = vi.spyOn(core.cloud, 'chat');
+    spy.mockResolvedValueOnce('```json\n{"summary":"两步","steps":[{"kind":"image","title":"主图","prompt":"春日拿铁海报","ratio":"4:5","count":2,"refIds":["c1"]}]}\n```');
+    const r = await planAgent(core, body);
+    expect(r.steps[0]).toMatchObject({ kind: 'image', ratio: '4:5', count: 2, refIds: ['c1'] });
+    spy.mockResolvedValueOnce('我不知道');
+    await expect(planAgent(core, body)).rejects.toMatchObject({ status: 502 });
+  });
+});
+
 describe('项目快照 / 批注 / 上下文包', () => {
   it('快照只读回看、恢复为新项目不覆盖当前；自动快照有上限；批注持久化；上下文包含全部文件', async () => {
     const core = await makeCore();

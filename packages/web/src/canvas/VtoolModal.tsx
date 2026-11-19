@@ -1,11 +1,13 @@
-import { useRef, useState } from 'react';
-import type { Result } from '@aigc/shared';
+import { useEffect, useRef, useState } from 'react';
+import type { Result, TaskDto, ToolInfoDto, TranscribeResultDto } from '@aigc/shared';
 import { Icon } from '../components/common';
 import { api } from '../lib/api';
 import { getState, setState, useStore } from '../store';
 import { canvasItems } from '../store/selectors';
 import { toast, toastError } from '../store/toast';
-import { ensureRid, placeDerived } from './ops';
+import { addTranscriptText, ensureRid, placeDerived } from './ops';
+import { ToolGuide, toolOfError } from '../components/ToolGuide';
+import { downloadText, copyText } from '../lib/util';
 
 /* ============================================================================
    视频工具：取帧（把当前画面存成图片）、裁时长（裁出一段新视频）。
@@ -23,7 +25,39 @@ export function VtoolModal() {
   const [a, setA] = useState(0);
   const [b, setB] = useState(0);
   const [busy, setBusy] = useState('');
+  const [asr, setAsr] = useState<TaskDto<TranscribeResultDto> | null>(null);
+  const [missing, setMissing] = useState<ToolInfoDto | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    setAsr(null);
+    setMissing(null);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [d?.srcId]);
   if (!d || !it) return null;
+  const pollAsr = (id: string) =>
+    api
+      .get<{ task: TaskDto<TranscribeResultDto> }>(`/api/transcribe/${id}`)
+      .then(({ task }) => {
+        setAsr(task);
+        if (task.status === 'running') timer.current = setTimeout(() => pollAsr(id), 1500);
+      })
+      .catch(() => (timer.current = setTimeout(() => pollAsr(id), 3000)));
+  const transcribe = async () => {
+    const rid = await ensureRid(it.id);
+    if (!rid) return;
+    setMissing(null);
+    try {
+      const { task } = await api.post<{ task: TaskDto<TranscribeResultDto> }>('/api/transcribe', { sourceId: rid });
+      setAsr(task);
+      void pollAsr(task.id);
+    } catch (e) {
+      const t = toolOfError(e);
+      if (t) setMissing(t);
+      else toastError(e, '没能开始转写');
+    }
+  };
   const close = () => setState((st) => void (st.vtool = null));
   const now = () => ref.current?.currentTime || 0;
 
@@ -129,6 +163,44 @@ export function VtoolModal() {
               </button>
             </div>
           </div>
+        </div>
+        <div className="vtool-body" style={{ paddingTop: 0 }}>
+        <div className="vtool-row col">
+          <div className="vtool-line">
+            <b>转写</b>
+            <span className="tiny dim">把声音转成文字和时间轴（本机 whisper，不扣点）</span>
+            <span className="grow" />
+            <button className="btn sm primary" onClick={() => void transcribe()} disabled={asr?.status === 'running'}>
+              <Icon name="waveform" />
+              {asr?.status === 'running' ? '转写中…' : '转写这个视频'}
+            </button>
+          </div>
+          {missing && <ToolGuide tool={missing} onFound={() => setMissing(null)} />}
+          {asr?.status === 'running' && (
+            <div className="tiny dim">
+              {asr.stage} {Math.round(asr.progress)}%
+            </div>
+          )}
+          {asr?.status === 'failed' && <div className="tiny" style={{ color: '#B91C1C' }}>转写失败：{asr.error}</div>}
+          {asr?.status === 'done' && asr.result && (
+            <>
+              <textarea className="prompt-input asr-box" readOnly value={asr.result.text || '（没有识别到语音）'} />
+              <div className="vtool-line">
+                <span className="tiny dim">{asr.result.language ? `语言 ${asr.result.language} · ` : ''}{asr.result.segments.length} 段</span>
+                <span className="grow" />
+                <button className="btn sm ghost" onClick={() => copyText(asr.result!.text) && toast('success', '已复制文字')}>
+                  复制
+                </button>
+                <button className="btn sm ghost" onClick={() => downloadText(`${it.t || '转写'}.srt`, asr.result!.srt, 'text/plain;charset=utf-8')}>
+                  下载 SRT
+                </button>
+                <button className="btn sm ghost" onClick={() => addTranscriptText(it.id, asr.result!.text)}>
+                  放到画布
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         </div>
         <div className="modal-foot">
           <span className="tiny dim">{busy || '本机 ffmpeg 处理，不调模型、不扣点；原视频不变。更多编辑（变速、字幕、静音）在「编辑」页'}</span>

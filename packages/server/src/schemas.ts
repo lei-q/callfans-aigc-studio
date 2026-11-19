@@ -225,4 +225,16 @@ export const annotationsSchema = z.record(
   z.array(z.object({ id: z.number(), kind: z.enum(['box', 'brush', 'point']), x: z.number(), y: z.number(), w: z.number(), h: z.number(), pts: z.array(z.tuple([z.number(), z.number()])).max(2000).optional(), text: z.string().max(500) })).max(50),
 );
 
+export const linkBodySchema = z.object({ url: z.string().min(8).max(2000) });
+export const linkDownloadSchema = z.object({ url: z.string().min(8).max(2000), ws: z.string(), title: z.string().max(120).optional() });
+export const transcribeSchema = z.object({ sourceId: z.string(), language: z.string().max(8).optional() });
+
+export const agentPlanSchema = z.object({
+  goal: z.string().min(2).max(1000),
+  facts: z.array(z.string().max(500)).max(30),
+  prompts: z.array(z.string().max(2000)).max(20),
+  nodeTexts: z.array(z.string().max(500)).max(30),
+  items: z.array(z.object({ id: z.string().max(64), type: z.string().max(10), title: z.string().max(200) })).max(40),
+});
+
 export type SaveEdited = z.infer<typeof saveEditedSchema>;

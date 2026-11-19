@@ -585,6 +585,95 @@ test('项目快照：保存 / 恢复为新项目（不覆盖当前）、批注�
   await expect(page.locator('.ws-btn')).toContainText('快照 清空前');
 });
 
+test('本机工具：没装 yt-dlp / whisper 时展示安装指引，而不是静默失败', async ({ page }) => {
+  await open(page);
+  const tools = (await page.evaluate(async () => (await (await fetch('/api/tools')).json()).tools)) as { name: string; found: boolean }[];
+  const missing = (n: string) => !tools.find((t) => t.name === n)?.found;
+  test.skip(!missing('ytdlp') || !missing('whisper'), '本机已装 yt-dlp / whisper，指引不会出现');
+
+  /* 链接下载：弹层里直接是安装指引，「解析」不可点 */
+  const box = (await page.locator('#cvsViewport').boundingBox())!;
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30, { button: 'right' });
+  await page.locator('.cvs-menu-item', { hasText: '从链接下载视频' }).click();
+  await expect(page.locator('.linkdl-modal .tool-guide')).toContainText('yt-dlp');
+  await expect(page.locator('.linkdl-modal .tool-guide code').first()).toContainText(/brew install yt-dlp|winget install yt-dlp|pipx install yt-dlp/);
+  await expect(page.locator('.linkdl-modal .btn', { hasText: '下载到画布' })).toBeDisabled();
+  await page.locator('.linkdl-modal .icon-btn').first().click();
+
+  /* 设置页：本机工具区列出状态与指引 */
+  await page.locator('.side-item', { hasText: '设置' }).click();
+  await expect(page.locator('.catalog-sec-name', { hasText: '本机工具' })).toBeVisible();
+  await expect(page.locator('.tool-guide', { hasText: 'whisper' })).toBeVisible();
+  await expect(page.locator('.tool-guide', { hasText: 'openai-whisper' })).toContainText('pip');
+});
+
+test('Agent：能力卡、生成计划、改参数、确认后才建任务；计划失败如实报错', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await generate(page, '1 张');
+  const cards = page.locator('.cvs-inbox-card');
+  await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  await cards.first().locator('.cvs-inbox-add').click();
+  const media = page.locator('#cvsWorld .cvs-el.cvs-media');
+  await expect(media).toHaveCount(1);
+  const imgId = (await media.first().getAttribute('data-id'))!;
+  await media.first().click({ position: { x: 8, y: 8 } });
+
+  await page.locator('.agent-fab').click();
+  await expect(page.locator('.agent-card')).toHaveCount(4);
+
+  /* 能力卡：没选图时提示；选了图直接打开对应工具 */
+  await page.locator('.agent-card', { hasText: '改这张图' }).click();
+  await expect(page.locator('.annot-modal')).toBeVisible();
+  await page.locator('.annot-modal .icon-btn').first().click();
+
+  /* 计划失败：如实报错，目标文字保留 */
+  await page.route('**/api/assist/plan', (r) => r.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: '模型没有给出可用的计划', detail: '稍后重试' }) }));
+  await page.locator('.agent-sec textarea').first().fill('做一组春季饮品配图，再配一条短视频');
+  await page.locator('.agent-sec .btn', { hasText: '生成计划' }).click();
+  await expect(page.locator('.agent-sec .agent-hint')).toContainText('没有给出可用的计划');
+  await expect(page.locator('.plan-step')).toHaveCount(0);
+
+  /* 计划成功：改一步的比例、删一步，确认后任务带着参考图提交 */
+  await page.unroute('**/api/assist/plan');
+  await page.route('**/api/assist/plan', (r) =>
+    r.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        summary: '先出两张主图，再做短视频',
+        steps: [
+          { id: 's1', kind: 'image', title: '主图', prompt: '春日拿铁海报，窗边晨光', ratio: '4:5', count: 2, refIds: [imgId], why: '竖版适合信息流' },
+          { id: 's2', kind: 'video', title: '短视频', prompt: '镜头推进，蒸汽升起', ratio: '9:16', count: 1, dur: 5, refIds: [] },
+          { id: 's3', kind: 'image', title: '多余的一步', prompt: '删掉我', ratio: '1:1', count: 1, refIds: [] },
+        ],
+      }),
+    }),
+  );
+  await page.locator('.agent-sec .btn', { hasText: '生成计划' }).click();
+  await expect(page.locator('.plan-step')).toHaveCount(3);
+  await expect(page.locator('.plan-step').first()).toContainText('AI 建议 · 竖版适合信息流');
+  const before = (await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).jobs.length)) as number;
+  await page.locator('.plan-step').nth(2).locator('.icon-btn').click();
+  await expect(page.locator('.plan-step')).toHaveCount(2);
+  await page.locator('.plan-step').first().locator('select').nth(1).selectOption('16:9');
+  /* 没点确认之前不建任务 */
+  expect(await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).jobs.length)).toBe(before);
+  await page.locator('.plan-steps .btn', { hasText: '确认并生成' }).click();
+  await expect.poll(async () => (await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).jobs)).filter((j: { name: string }) => j.name.startsWith('Agent · ')).length).toBe(2);
+  const jobs = (await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).jobs)) as { name: string; ratio?: string; count?: number; dur?: number; type: string; refs: unknown[]; fromCvsId?: string }[];
+  const main = jobs.find((j) => j.name === 'Agent · 主图')!;
+  expect(main).toMatchObject({ type: 'image', ratio: '16:9', count: 2, fromCvsId: imgId });
+  expect(main.refs).toHaveLength(1);
+  const vid = jobs.find((j) => j.name === 'Agent · 短视频')!;
+  expect(vid).toMatchObject({ type: 'video', ratio: '9:16', dur: 5 });
+  expect(vid.refs).toHaveLength(1); /* 步骤没指定参考时，用选中的素材 */
+});
+
 test('API 接入：创建 Key、下载 mcp.json（带完整 Key）、Key 能读画布上下文、停用后被拒', async ({ page }) => {
   await open(page);
   await ensureLogin(page);

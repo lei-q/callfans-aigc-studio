@@ -33,6 +33,7 @@ export function menuItems(): MenuEntry[] {
     items.push({ t: '整理成网格', run: op.arrange });
     items.push({ sep: true });
     items.push({ t: '从电脑选文件', run: () => void uploadFromMenu() });
+    items.push({ t: '从链接下载视频…', run: op.linkDlOpen });
     items.push({ t: s.cvsPen.on ? '关闭画笔' : '手绘标注', k: 'B', run: op.togglePen });
     items.push({ t: '新建节点', run: op.newNode });
     items.push({ t: '新建文字', run: op.newText });

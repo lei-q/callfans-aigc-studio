@@ -1,4 +1,4 @@
-import type { AgentEnhanceBody, AgentEnhanceReply, MediaType, OptimizeReply, PostCopyBody, PostCopyReply } from '@aigc/shared';
+import type { AgentPlanBody, AgentPlanReply, AgentEnhanceBody, AgentEnhanceReply, MediaType, OptimizeReply, PostCopyBody, PostCopyReply } from '@aigc/shared';
 import { POST_PLATFORMS } from '@aigc/shared';
 import { EXPAND_THRESHOLD, TYPES } from '@aigc/shared';
 import type { Core } from './core';
@@ -155,5 +155,65 @@ export async function postCopy(core: Core, body: PostCopyBody): Promise<PostCopy
   } catch (e) {
     if (e instanceof HttpError) throw e;
     throw new HttpError(502, `模型调用失败：${(e as Error).message || '未知错误'}`, '稍后重试；原来的标题和正文没有被改动');
+  }
+}
+
+const PLAN_RATIOS = ['1:1', '4:5', '3:4', '16:9', '9:16'];
+
+/** 清洗模型给的计划：只留合法字段、夹住范围；一步都没有就是失败 */
+export function cleanPlan(raw: unknown, validItemIds: Set<string>): AgentPlanReply | null {
+  const j = raw as { summary?: unknown; steps?: unknown } | null;
+  if (!j || !Array.isArray(j.steps)) return null;
+  const steps = j.steps
+    .slice(0, 6)
+    .map((x, i) => {
+      const s = x as Record<string, unknown>;
+      const kind = s.kind === 'video' ? 'video' : s.kind === 'image' ? 'image' : null;
+      const prompt = typeof s.prompt === 'string' ? s.prompt.trim().slice(0, 800) : '';
+      if (!kind || !prompt) return null;
+      const ratio = PLAN_RATIOS.includes(String(s.ratio)) ? String(s.ratio) : kind === 'video' ? '9:16' : '1:1';
+      const refIds = Array.isArray(s.refIds) ? s.refIds.map(String).filter((id) => validItemIds.has(id)).slice(0, 4) : [];
+      return {
+        id: `s${i + 1}`,
+        kind,
+        title: (typeof s.title === 'string' && s.title.trim()) || `第 ${i + 1} 步`,
+        prompt,
+        ratio,
+        count: kind === 'image' ? Math.min(4, Math.max(1, Math.round(Number(s.count) || 1))) : 1,
+        ...(kind === 'video' ? { dur: Math.min(15, Math.max(2, Math.round(Number(s.dur) || 5))) } : {}),
+        refIds,
+        ...(typeof s.why === 'string' && s.why.trim() ? { why: s.why.trim().slice(0, 80) } : {}),
+      } as AgentPlanReply['steps'][number];
+    })
+    .filter((s): s is AgentPlanReply['steps'][number] => !!s);
+  if (!steps.length) return null;
+  return { summary: typeof j.summary === 'string' ? j.summary.trim().slice(0, 200) : '', steps };
+}
+
+export async function planAgent(core: Core, body: AgentPlanBody): Promise<AgentPlanReply> {
+  const route = await chatRoute(core);
+  if (route.kind === 'none') throw new HttpError(409, 'Agent 计划需要可用的文本模型', route.reason);
+  const sys =
+    '你是社媒运营的创意 Agent，帮用户把目标拆成几步生成任务（图片或视频）。依据画板里真实的信息，不要编造画板上没有的素材。' +
+    `每一步给出：kind（image 或 video）、title（短标题）、prompt（可直接用于生成的中文提示词，不超过 120 字）、ratio（只能从 ${PLAN_RATIOS.join(' / ')} 里选）、count（图片张数 1-4）、dur（视频秒数 2-15，仅视频）、refIds（这一步要参考的素材 id，只能用下面给出的 id，可为空）、why（参数建议理由，一句话）。` +
+    '最多 6 步，能少则少；视频任务按秒计费，没必要不要加。只输出 JSON：{"summary":"一句话说明整体思路","steps":[{...}]}';
+  const user = [
+    `目标：${body.goal}`,
+    `画板信息：${body.facts.join('；') || '无'}`,
+    `原始提示词：${body.prompts.slice(0, 8).join(' / ') || '无'}`,
+    `用户写的字：${body.nodeTexts.join(' / ') || '无'}`,
+    `可参考的素材：${body.items.map((i) => `${i.id}（${i.type}：${i.title}）`).join('；') || '无'}`,
+  ].join('\n');
+  try {
+    const text = await ask(core, route, [
+      { role: 'system', content: sys },
+      { role: 'user', content: user },
+    ]);
+    const plan = cleanPlan(extractJson<unknown>(text), new Set(body.items.map((i) => i.id)));
+    if (!plan) throw new HttpError(502, '模型没有给出可用的计划', '稍后重试，或把目标写得更具体一点');
+    return plan;
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(502, `模型调用失败：${(e as Error).message || '未知错误'}`, '稍后重试');
   }
 }

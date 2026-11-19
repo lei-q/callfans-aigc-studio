@@ -8,7 +8,7 @@ import fastifyStatic from '@fastify/static';
 import { ZodError } from 'zod';
 import type { AestheticItem, Board, OrderDto, PackDto, Post, Project, Result, ServerEvent, UsageRequest, UsageSummary } from '@aigc/shared';
 import { POST_PLATFORMS, PROJECT_DOTS, ratioLabel, uid } from '@aigc/shared';
-import { enhanceAgent, optimizePrompt, postCopy } from './assist';
+import { enhanceAgent, optimizePrompt, planAgent, postCopy } from './assist';
 import { CloudError } from './cloud/client';
 import { ConsumerError } from './account/consumer';
 import { OidcError } from './account/oidc';
@@ -17,6 +17,8 @@ import { mimeOfExt } from './core';
 import { linkPreview } from './linkPreview';
 import { settlePoints } from './points';
 import { buildCanvasContext } from './context';
+import { probeLink, startDownload, startTranscribe, TaskBook } from './exttasks';
+import { allTools, ToolMissing, toolInfo } from './tools';
 import { buildContextPack, metaOf, takeSnapshot } from './contextpack';
 import { registerOpenApi } from './openapi';
 import { uniqueNames, zipStream, ZIP_MAX_BYTES } from './zip';
@@ -121,7 +123,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   });
 
   app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message, detail: err.detail });
+    if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message, detail: err.detail, ...((err as { tool?: unknown }).tool ? { tool: (err as { tool?: unknown }).tool } : {}) });
     if (err instanceof ZodError) {
       return reply.code(400).send({ error: '参数不合法', detail: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('；') });
     }
@@ -884,10 +886,44 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     const body = S.postCopySchema.parse(req.body);
     return postCopy(core, body);
   });
+  app.post('/api/assist/plan', async (req) => planAgent(core, S.agentPlanSchema.parse(req.body)));
   app.post('/api/assist/agent', async (req) => {
     const body = S.agentSchema.parse(req.body);
     return { enhanced: await enhanceAgent(core, body) };
   });
+
+  /* ---------------- 本机外部工具：状态 / 链接下载 / 转写 ---------------- */
+
+  const tasks = new TaskBook();
+  app.addHook('onClose', async () => tasks.stopAll());
+  /** 缺工具：501 + 工具信息（界面据此展示安装指引）；其余错误照常 */
+  const toolGuard = async <T>(fn: () => Promise<T> | T): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof ToolMissing) throw Object.assign(new HttpError(501, e.message, '需要先在这台电脑上安装它'), { tool: toolInfo(e.tool) });
+      throw e;
+    }
+  };
+
+  app.get('/api/tools', async () => ({ tools: allTools() }));
+  app.post('/api/link/probe', async (req) => toolGuard(() => probeLink(S.linkBodySchema.parse(req.body).url)));
+  app.post('/api/link/download', async (req) => {
+    const b = S.linkDownloadSchema.parse(req.body);
+    return toolGuard(() => ({ task: tasks.view(startDownload(core, tasks, b).id) }));
+  });
+  app.post('/api/transcribe', async (req) => {
+    const b = S.transcribeSchema.parse(req.body);
+    return toolGuard(() => ({ task: tasks.view(startTranscribe(core, tasks, b).id) }));
+  });
+  for (const base of ['/api/link/download', '/api/transcribe']) {
+    app.get(`${base}/:id`, async (req) => {
+      const t = tasks.view((req.params as { id: string }).id);
+      if (!t) throw new HttpError(404, '任务不存在或已过期');
+      return { task: t };
+    });
+    app.post(`${base}/:id/cancel`, async (req) => ({ ok: tasks.cancel((req.params as { id: string }).id) }));
+  }
 
   /* ---------------- 项目快照 / 批注 / 上下文包 ---------------- */
 

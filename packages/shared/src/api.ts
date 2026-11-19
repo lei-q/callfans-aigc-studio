@@ -104,3 +104,57 @@ export interface PostCopyReply {
   body: string;
   tags: string[];
 }
+
+/** 本机外部工具状态（ffmpeg / yt-dlp / whisper）：没装时界面按它给安装指引 */
+export interface ToolInfoDto {
+  name: 'ffmpeg' | 'ytdlp' | 'whisper';
+  title: string;
+  purpose: string;
+  found: boolean;
+  path: string | null;
+  badEnv: boolean;
+  env: string;
+  install: { mac: string[]; win: string[]; linux: string[]; note?: string };
+}
+export interface TaskDto<R = unknown> {
+  id: string;
+  kind: 'download' | 'transcribe';
+  status: 'running' | 'done' | 'failed' | 'canceled';
+  progress: number;
+  stage: string;
+  error?: string;
+  result?: R;
+}
+export interface TranscribeResultDto {
+  text: string;
+  language: string | null;
+  segments: { start: number; end: number; text: string }[];
+  srt: string;
+}
+
+/** Agent 计划：根据目标和画板选区，拆成几步生成。计划阶段只调文本模型，不生成、不扣生成点数 */
+export interface AgentPlanBody {
+  goal: string;
+  facts: string[];
+  prompts: string[];
+  nodeTexts: string[];
+  /** 选区 / 参与参考的素材：id 是画布元素 id */
+  items: { id: string; type: string; title: string }[];
+}
+export interface AgentPlanStep {
+  id: string;
+  kind: 'image' | 'video';
+  title: string;
+  prompt: string;
+  ratio: string;
+  count: number;
+  dur?: number;
+  /** 这一步要参考的画布元素 id；空 = 用选区 */
+  refIds: string[];
+  /** AI 给这一步的参数建议理由（只是建议，用户可改） */
+  why?: string;
+}
+export interface AgentPlanReply {
+  summary: string;
+  steps: AgentPlanStep[];
+}
