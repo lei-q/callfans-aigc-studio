@@ -32,7 +32,7 @@ describe('批量下载 zip', () => {
     fs.writeFileSync(out, await collect(zipStream([{ name: '发散 · 更暖 #1.png', file: a }, { name: 'big.mp4', file: b }])));
     expect(execFileSync('unzip', ['-tq', out]).toString()).toContain('No errors');
     /* 文件名按 UTF-8 标志解码：用 python 的 zipfile 读（各平台的 unzip 对 UTF-8 名字支持不一） */
-    const py = `import zipfile,sys,json;z=zipfile.ZipFile(sys.argv[1]);import hashlib;print(json.dumps({n:hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist()},ensure_ascii=False))`;
+    const py = `import zipfile,sys,json;z=zipfile.ZipFile(sys.argv[1]);import hashlib;print(json.dumps({n:hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist()}))`;
     const got = JSON.parse(execFileSync('python3', ['-I', '-c', py, out]).toString()) as Record<string, string>;
     expect(Object.keys(got)).toEqual(['发散 · 更暖 #1.png', 'big.mp4']);
     const sha = (f: string) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
