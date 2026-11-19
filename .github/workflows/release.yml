@@ -23,13 +23,16 @@ jobs:
           - name: macOS (arm64 + x64)
             os: macos-15
             target: --mac --arm64 --x64
+            ffmpeg: mac-arm64,mac-x64
             pkg: true
           - name: Windows (x64)
             os: windows-2022
             target: --win --x64
+            ffmpeg: win-x64
           - name: Linux (x64)
             os: ubuntu-22.04
             target: --linux --x64
+            ffmpeg: linux-x64
     runs-on: ${{ matrix.os }}
     env:
       # 没有配置证书时跳过签名；配置了 CSC_LINK 等 secrets 后自动启用
@@ -58,6 +61,27 @@ jobs:
           pnpm --filter @aigc/web build
           pnpm --filter @aigc/server build
           pnpm --filter @aigc/desktop build
+      - name: 下载随包的 ffmpeg（视频 / 音频编辑渲染用）
+        working-directory: packages/desktop
+        run: node scripts/fetch-ffmpeg.mjs ${{ matrix.ffmpeg }}
+      - name: 检查 ffmpeg 具备渲染所需的编码器与滤镜
+        if: runner.os != 'macOS' || runner.arch == 'ARM64'
+        # macOS 上直接运行下载来的未签名程序可能被系统拦：那边只告警，不挡发版
+        continue-on-error: ${{ runner.os == 'macOS' }}
+        shell: bash
+        working-directory: packages/desktop
+        run: |
+          case "${{ runner.os }}" in
+            macOS) F=build/ffmpeg/mac-arm64/ffmpeg ;;
+            Windows) F=build/ffmpeg/win-x64/ffmpeg.exe ;;
+            *) F=build/ffmpeg/linux-x64/ffmpeg ;;
+          esac
+          "$F" -hide_banner -encoders | grep -E "libx264|libmp3lame|aac" 
+          "$F" -hide_banner -filters | grep -E " overlay | afftdn | loudnorm | atempo "
+          "$F" -hide_banner -encoders | grep -q libx264
+          "$F" -hide_banner -encoders | grep -q libmp3lame
+          "$F" -hide_banner -filters | grep -q afftdn
+          "$F" -hide_banner -filters | grep -q loudnorm
       - name: Package (electron-builder)
         working-directory: packages/desktop
         run: pnpm exec electron-builder ${{ matrix.target }} --publish never

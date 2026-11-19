@@ -36,7 +36,7 @@ import {
   uid,
 } from '@aigc/shared';
 import { api } from '../lib/api';
-import { copyText, downloadText, downloadUrl, pickFiles, renderEditedImage, resultDownloadUrl, thumbOf } from '../lib/util';
+import { copyText, downloadText, downloadUrl, pickFiles, renderCaptionPng, renderEditedImage, resultDownloadUrl, thumbOf } from '../lib/util';
 import { cloneEditDefaults, getState, setState, type DrawerType, type Page, type State } from './index';
 import { fixParams } from './data';
 import { boardOf, canvasItems, inScope, jobById, libResults, modelOf, payChannels, resultById, wsShort } from './selectors';
@@ -1213,10 +1213,16 @@ export async function editSave() {
     toast('info', '还没有做任何修改', '调整一下参数再保存');
     return;
   }
+  if (s.editBusy) return;
+  setState((st) => void (st.editBusy = true));
   try {
     let dataUrl: string | undefined;
+    let captionPng: string | undefined;
     if (t === 'image') {
       dataUrl = await renderEditedImage(cur.src, s.editOps.image, cur.ratio);
+    } else {
+      toast('info', `正在渲染${t === 'video' ? '视频' : '音频'}…`, '素材越长越久，完成前请不要离开这个页面');
+      if (t === 'video' && s.editOps.video.caption.trim()) captionPng = renderCaptionPng(s.editOps.video.caption);
     }
     const { result } = await api.post<{ result: Result }>('/api/results/edited', {
       sourceId: cur.id,
@@ -1224,6 +1230,7 @@ export async function editSave() {
       tags: editTags(s, t),
       edit: { ops: ops as unknown as Record<string, unknown> },
       dataUrl,
+      captionPng,
     });
     setState((st) => {
       if (!st.results.some((r) => r.id === result.id)) st.results.unshift(result);
@@ -1234,6 +1241,8 @@ export async function editSave() {
     toast('success', '已保存为新产出', `${result.title} · 原素材没有被改动，可在素材库找到`);
   } catch (e) {
     toastError(e, '保存失败');
+  } finally {
+    setState((st) => void (st.editBusy = false));
   }
 }
 

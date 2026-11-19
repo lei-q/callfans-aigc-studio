@@ -21,6 +21,7 @@ export function Editor() {
   const pool = editPool(s, t);
   const cur = editPicked(s, t);
   const ops = s.editOps[t];
+  const busy = s.editBusy;
   return (
     <div className="edit-grid">
       <div className="edit-col">
@@ -79,9 +80,9 @@ export function Editor() {
                 重置参数
               </button>
               <span className="grow" />
-              <button className="btn primary" onClick={() => void editSave()}>
-                <Icon name="check" />
-                保存为新产出
+              <button className="btn primary" disabled={busy} onClick={() => void editSave()}>
+                <Icon name={busy ? 'refresh' : 'check'} />
+                {busy ? '正在渲染…' : '保存为新产出'}
               </button>
             </div>
           </div>
@@ -464,7 +465,7 @@ function Stage({ t, cur }: { t: MediaType; cur: Result | null }) {
       <Readout
         items={[`音量 ${aops.volume}%`, `淡入 ${aops.fadeIn}s`, `淡出 ${aops.fadeOut}s`, aops.denoise ? '已降噪' : '未降噪', aops.norm ? '响度标准化' : '不标准化']}
       />
-      <div className="tiny dim">剪辑参数作为非破坏性设置保存：试听与播放时生效，原文件不变。</div>
+      <div className="tiny dim">保存时会用这些参数真实渲染出一个新音频文件，原文件不变。</div>
     </>
   );
 }

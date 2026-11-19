@@ -348,6 +348,12 @@ export class Core {
     return { src: `/files/${dir}/${name}`, mime: clean };
   }
 
+  /** 预留一个媒体文件名（渲染输出用）：返回磁盘路径与对外的 /files 地址 */
+  newMediaFile(ext: string) {
+    const name = `${uid('m')}.${ext.replace(/^\./, '')}`;
+    return { file: path.join(this.mediaDir, name), src: `/files/media/${name}` };
+  }
+
   /** 本机 URL 路径 → 磁盘路径（只认两个目录，防目录穿越） */
   localPathOf(src: string): string | null {
     const clean = decodeURIComponent(src.split('?')[0].split('#')[0]);

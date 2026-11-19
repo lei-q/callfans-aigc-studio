@@ -96,6 +96,47 @@ export function cssOfEdit(css?: string): React.CSSProperties | undefined {
   return out as React.CSSProperties;
 }
 
+/**
+ * 把字幕画成一张透明 PNG（宽 1280，文字居中、半透明黑底、自动换行），交给服务端贴到视频底部。
+ * 字是在这里用系统字体画的：ffmpeg 自带的构建不一定有 freetype，也没有中文字体。
+ */
+export function renderCaptionPng(text: string): string {
+  const W = 1280;
+  const fs = 46;
+  const pad = 22;
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d')!;
+  ctx.font = `600 ${fs}px -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`;
+  /* 按宽度逐字换行（中英文都适用），最多 3 行 */
+  const maxW = W - pad * 4;
+  const lines: string[] = [];
+  let line = '';
+  for (const ch of text.trim().replace(/\s+/g, ' ')) {
+    if (ctx.measureText(line + ch).width > maxW && line) {
+      lines.push(line);
+      line = ch;
+    } else line += ch;
+  }
+  if (line) lines.push(line);
+  const shown = lines.slice(0, 3);
+  const lh = Math.round(fs * 1.3);
+  const widest = Math.max(...shown.map((l) => ctx.measureText(l).width));
+  c.width = W;
+  c.height = shown.length * lh + pad * 2;
+  const g = c.getContext('2d')!;
+  g.font = ctx.font;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const boxW = Math.min(W, widest + pad * 2);
+  g.fillStyle = 'rgba(0,0,0,0.5)';
+  g.beginPath();
+  g.roundRect((W - boxW) / 2, 0, boxW, c.height, 14);
+  g.fill();
+  g.fillStyle = '#fff';
+  shown.forEach((l, i) => g.fillText(l, W / 2, pad + lh * i + lh / 2));
+  return c.toDataURL('image/png');
+}
+
 /** 把图片按编辑参数真实渲染成一张新图（canvas），用于「保存为新产出」 */
 export async function renderEditedImage(src: string, ops: ImageEditOps, srcRatio: string): Promise<string> {
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {

@@ -10,7 +10,7 @@
     "build": "node build.mjs",
     "start": "node build.mjs && electron .",
     "start:web": "node build.mjs && electron . --mode=web",
-    "dist": "node build.mjs && electron-builder --publish never",
+    "dist": "node scripts/fetch-ffmpeg.mjs && node build.mjs && electron-builder --publish never",
     "pkg:mac": "node scripts/mac-pkg.mjs"
   },
   "devDependencies": {

@@ -107,6 +107,8 @@ export interface State {
 
   /* ---------------- 编辑器 ---------------- */
   editPick: Record<MediaType, string | null>;
+  /** 视频 / 音频正在渲染（ffmpeg 要几秒到几分钟，期间不能重复点保存） */
+  editBusy: boolean;
   editOps: EditOpsMap;
 
   /* ---------------- 播放 ---------------- */
@@ -206,6 +208,7 @@ export const initialState: State = {
   aestheticFilter: 'all',
 
   editPick: { image: null, video: null, audio: null },
+  editBusy: false,
   editOps: cloneEditDefaults(),
 
   play: { id: null, t: 0 },

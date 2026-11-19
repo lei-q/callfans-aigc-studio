@@ -206,11 +206,12 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
 
   const type = it.type || 'image';
   const ar = cvsItemAR(it);
-  const showVideo = type === 'video' && !it.thumb && it.src;
+  /* 有封面的视频（编辑器渲染出来的成品）也要能播：封面当 poster；src 不是视频文件（模拟产出）才退回静态图 */
+  const showVideo = type === 'video' && !!it.src && (!it.thumb || /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(it.src));
   return (
     <div className={cls('media', `${saved ? 'saved' : ''} ${anchor ? 'anchor' : ''}`)} data-id={it.id} style={common}>
       {showVideo ? (
-        <MediaVideo id={it.id} src={it.src!} ar={ar} />
+        <MediaVideo id={it.id} src={it.src!} poster={it.thumb} ar={ar} />
       ) : type === 'audio' && !it.thumb ? (
         <div className="cvs-audio" style={{ height: Math.round(w * ar) }}>
           <div className="cvs-audio-wave">
@@ -261,13 +262,14 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
 
 /* 画布里的视频：容器比例以文件真实宽高为准（记录里的比例可能缺失或不准，按它排版会把画面裁掉）；
    双击播放 / 暂停，播放中把居中的播放图标藏起来 */
-function MediaVideo({ id, src, ar }: { id: string; src: string; ar: number }) {
+function MediaVideo({ id, src, poster, ar }: { id: string; src: string; poster?: string; ar: number }) {
   const [playing, setPlaying] = useState(false);
   return (
     <>
       <video
         className="cvs-video"
         src={src}
+        poster={poster}
         muted
         loop
         playsInline

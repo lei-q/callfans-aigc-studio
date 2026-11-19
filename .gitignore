@@ -17,3 +17,4 @@ playwright-report/
 .claude/
 packages/cloud-mock/src/*.d.ts
 packages/cloud-mock/src/*.d.ts.map
+build/ffmpeg/

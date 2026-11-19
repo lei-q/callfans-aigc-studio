@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
@@ -16,6 +17,7 @@ import { mimeOfExt } from './core';
 import { linkPreview } from './linkPreview';
 import { settlePoints } from './points';
 import { registerOpenApi } from './openapi';
+import { audioFormat, findFfmpeg, RenderError, renderAudio, renderVideo, serial } from './render';
 import { HttpError } from './runner';
 import { safeEqual, sha256 } from './secrets';
 import * as S from './schemas';
@@ -439,7 +441,16 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     let thumb = src.thumb;
     let mime = src.mime;
     let css = body.edit.css;
-    if (body.dataUrl) {
+    let dur = src.dur;
+    if (src.type === 'video' || src.type === 'audio') {
+      /* 视频 / 音频：用 ffmpeg 真渲染，参数烘进新文件（不是只记一份参数） */
+      const out = await renderEditedMedia(core, src, body);
+      file = out.src;
+      mime = out.mime;
+      dur = out.dur;
+      if (out.thumb) thumb = out.thumb;
+      css = undefined;
+    } else if (body.dataUrl) {
       const m = /^data:([^;]+);base64,(.+)$/.exec(body.dataUrl);
       if (!m) throw new HttpError(400, '图片数据不合法');
       const saved = await core.saveMedia(Buffer.from(m[2], 'base64'), m[1]);
@@ -456,6 +467,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
       src: file,
       thumb,
       mime,
+      dur,
       createdAt: Date.now(),
       status: 'new',
       isNew: true,
@@ -777,4 +789,63 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
 
   registerOpenApi(app, core);
   return app;
+}
+
+
+/** 视频 / 音频的编辑渲染：返回新文件的地址、时长和（视频的）封面 */
+async function renderEditedMedia(core: Core, src: Result, body: S.SaveEdited) {
+  const ffmpeg = findFfmpeg();
+  if (!ffmpeg) {
+    throw new HttpError(501, '这台电脑上没有找到 ffmpeg，没法渲染视频 / 音频', '安装包自带 ffmpeg；从源码运行时请先安装 ffmpeg，或用环境变量 AIGC_FFMPEG 指定路径');
+  }
+  const local = core.localPathOf(src.src);
+  const input = local ?? (/^https?:\/\//i.test(src.src) ? src.src : null);
+  if (!input || (local && !fs.existsSync(local))) throw new HttpError(400, '原素材文件不存在', '可能已被删除，或是只有链接的素材');
+  const ops = body.edit.ops as Record<string, unknown>;
+  const num = (k: string, d: number) => (Number.isFinite(Number(ops[k])) ? Number(ops[k]) : d);
+  const made: string[] = [];
+  try {
+    return await serial(async () => {
+      if (src.type === 'video') {
+        const video = core.newMediaFile('mp4');
+        const cover = core.newMediaFile('jpg');
+        made.push(video.file, cover.file);
+        let cap: string | undefined;
+        if (body.captionPng && String(ops.caption || '').trim()) {
+          const m = /^data:image\/png;base64,(.+)$/.exec(body.captionPng);
+          if (!m) throw new HttpError(400, '字幕图片不合法');
+          cap = path.join(os.tmpdir(), `aigc-cap-${uid('c')}.png`);
+          made.push(cap);
+          await fs.promises.writeFile(cap, Buffer.from(m[1], 'base64'));
+        }
+        const r = await renderVideo(
+          ffmpeg,
+          input,
+          video.file,
+          cover.file,
+          { in: num('in', 0), out: num('out', src.dur || 5), speed: num('speed', 1), mute: !!ops.mute, cover: String(ops.cover || '首帧') },
+          cap,
+        );
+        return { src: video.src, mime: 'video/mp4', dur: r.dur, thumb: cover.src };
+      }
+      const fmt = audioFormat(path.extname((local || src.src).split('?')[0]));
+      const audio = core.newMediaFile(fmt.ext);
+      made.push(audio.file);
+      const r = await renderAudio(
+        ffmpeg,
+        input,
+        audio.file,
+        { in: num('in', 0), out: num('out', src.dur || 30), volume: num('volume', 100), fadeIn: num('fadeIn', 0), fadeOut: num('fadeOut', 0), denoise: !!ops.denoise, norm: !!ops.norm },
+        fmt.codec,
+      );
+      return { src: audio.src, mime: mimeOfExt(fmt.ext), dur: r.dur, thumb: undefined as string | undefined };
+    });
+  } catch (e) {
+    for (const f of made) await fs.promises.unlink(f).catch(() => {});
+    if (e instanceof RenderError) throw new HttpError(e.status, e.message, e.detail);
+    throw e;
+  } finally {
+    /* 字幕临时图用完即删（成功时只删它，成品文件要留下） */
+    for (const f of made) if (path.basename(f).startsWith('aigc-cap-')) await fs.promises.unlink(f).catch(() => {});
+  }
 }

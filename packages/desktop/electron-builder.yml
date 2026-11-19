@@ -20,7 +20,12 @@ asar: true
 afterPack: scripts/after-pack.cjs
 artifactName: "AIGC-Studio-${version}-${os}-${arch}.${ext}"
 
+# 视频 / 音频编辑要用的 ffmpeg：scripts/fetch-ffmpeg.mjs 按目标下载到 build/ffmpeg/<平台>-<架构>/，
+# 这里按目标平台与架构拷进 resources/bin（服务端从 ../bin 找它）
 mac:
+  extraResources:
+    - from: build/ffmpeg/mac-${arch}
+      to: bin
   category: public.app-category.graphics-design
   icon: build/icon.png
   identity: null
@@ -37,6 +42,9 @@ dmg:
   writeUpdateInfo: false
 
 win:
+  extraResources:
+    - from: build/ffmpeg/win-${arch}
+      to: bin
   icon: build/icon.png
   executableName: AIGC Studio
   target:
@@ -56,6 +64,9 @@ nsis:
   deleteAppDataOnUninstall: false
 
 linux:
+  extraResources:
+    - from: build/ffmpeg/linux-${arch}
+      to: bin
   icon: build/icon.png
   executableName: aigc-studio
   category: Graphics

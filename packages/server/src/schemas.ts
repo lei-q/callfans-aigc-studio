@@ -59,6 +59,8 @@ export const saveEditedSchema = z.object({
   tags: z.array(z.string().max(40)).max(10),
   edit: z.object({ css: z.string().max(500).optional(), ops: z.record(z.string(), z.unknown()) }),
   dataUrl: z.string().max(60_000_000).optional(),
+  /** 视频字幕：前端用系统字体画好的透明 PNG（data URL），服务端按视频宽度贴在底部 */
+  captionPng: z.string().max(8_000_000).optional(),
 });
 
 const canvasItem = z
@@ -192,3 +194,5 @@ export const agentSchema = z.object({
 
 export const keySchema = z.object({ name: z.string().min(1).max(40).optional(), channel: z.enum(['cloud', 'direct']).optional() });
 export const keyPatchSchema = z.object({ on: z.boolean().optional(), name: z.string().min(1).max(40).optional() });
+
+export type SaveEdited = z.infer<typeof saveEditedSchema>;
