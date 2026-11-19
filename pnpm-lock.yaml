@@ -67,6 +67,8 @@ importers:
         specifier: 0.28.2
         version: 0.28.2
 
+  packages/mcp: {}
+
   packages/server:
     dependencies:
       '@aigc/shared':

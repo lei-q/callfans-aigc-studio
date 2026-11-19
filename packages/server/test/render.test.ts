@@ -174,3 +174,47 @@ describe.skipIf(!ffmpeg)('保存编辑接口（视频 / 音频）', () => {
     }
   });
 });
+
+describe.skipIf(!ffmpeg)('取帧与无原素材的衍生图', () => {
+  it('视频取帧：存成新的图片产出，画幅按视频真实尺寸；非视频 400', async () => {
+    const core = await Core.create({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'aigc-frame-')), mode: 'web', desktop: false, version: 'test', memory: true, account: { provider: 'mock' } });
+    try {
+      const v = core.newMediaFile('mp4');
+      exec2(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=360x640:rate=25:duration=3', '-pix_fmt', 'yuv420p', v.file]);
+      const ws = core.store.projects.all()[0].id;
+      core.store.results.put({ id: 'rv', job: null, type: 'video', ws, title: '竖版片', src: v.src, ratio: '16:9', model: 'm', seed: 1, createdAt: 1, status: 'new', tags: [], dur: 3, home: 'library' });
+      core.store.results.put({ id: 'ri', job: null, type: 'image', ws, title: '图', src: '/files/media/x.png', ratio: '1:1', model: 'm', seed: 1, createdAt: 1, status: 'new', tags: [], dur: 0, home: 'library' });
+      const app = await buildApp(core);
+      const H = { host: 'localhost', 'x-aigc-client': '1' };
+      const ok = await app.inject({ method: 'POST', url: '/api/video/frame', headers: H, payload: { sourceId: 'rv', t: 1.5 } });
+      expect(ok.statusCode).toBe(200);
+      const r = ok.json().result as Result;
+      expect(r).toMatchObject({ type: 'image', ratio: '9:16', mime: 'image/jpeg', home: 'library' });
+      expect(r.title).toContain('0:01 帧');
+      expect(fs.statSync(core.localPathOf(r.src)!).size).toBeGreaterThan(1000);
+      expect((await app.inject({ method: 'POST', url: '/api/video/frame', headers: H, payload: { sourceId: 'ri', t: 0 } })).statusCode).toBe(400);
+      await app.close();
+    } finally {
+      core.close();
+    }
+  });
+
+  it('没有原素材（本地上传的图）也能保存衍生图：必须带项目和图片数据，画幅按成品记', async () => {
+    const core = await Core.create({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'aigc-derive-')), mode: 'web', desktop: false, version: 'test', memory: true, account: { provider: 'mock' } });
+    try {
+      const ws = core.store.projects.all()[0].id;
+      const app = await buildApp(core);
+      const H = { host: 'localhost', 'x-aigc-client': '1' };
+      const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      const base = { title: '裁切 4:5', tags: ['裁切'], edit: { ops: { crop: '4:5' } } };
+      expect((await app.inject({ method: 'POST', url: '/api/results/edited', headers: H, payload: { ...base, dataUrl: PNG } })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'POST', url: '/api/results/edited', headers: H, payload: { ...base, ws } })).statusCode).toBe(400);
+      const ok = await app.inject({ method: 'POST', url: '/api/results/edited', headers: H, payload: { ...base, ws, dataUrl: PNG, ratio: '4:5' } });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().result).toMatchObject({ type: 'image', ws, ratio: '4:5', title: '裁切 4:5', home: 'library', job: null });
+      await app.close();
+    } finally {
+      core.close();
+    }
+  });
+});

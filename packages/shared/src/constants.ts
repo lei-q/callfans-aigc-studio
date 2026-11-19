@@ -90,6 +90,19 @@ export const VIDEO_PLATFORMS = [
 ];
 export type PlatformDef = (typeof POST_PLATFORMS)[number];
 
+/**
+ * 各平台发帖的软提示（参考值，以平台实际规则为准——只用来提醒，不拦截、不当成官方硬限制）。
+ * 0 = 没有需要提醒的上限。
+ */
+export const POST_LIMITS: Record<string, { title: number; body: number; images: number }> = {
+  xhs: { title: 20, body: 1000, images: 18 },
+  douyin: { title: 55, body: 1000, images: 35 },
+  weibo: { title: 0, body: 2000, images: 18 },
+  wechat: { title: 64, body: 0, images: 0 },
+  bili: { title: 80, body: 2000, images: 0 },
+  zhihu: { title: 50, body: 0, images: 0 },
+};
+
 export const videoPlatformOf = (url?: string): PlatformDef | null =>
   VIDEO_PLATFORMS.find((x) => x.re.test(url || '')) || null;
 export const postPlatformOf = (url?: string): PlatformDef | null =>
@@ -181,3 +194,13 @@ export const PEN_COLORS = ['#4F46E5', '#E11D48', '#F59E0B', '#059669', '#171A23'
 export const MAX_REFS = 4;
 export const DEFAULT_PORT = 5780;
 export const TREECLOUD_BASE_URL = 'https://api.jtreecloud.com';
+
+/** 组图的变化轴：锚点（主体与整体风格）不变，只换其中一个维度。每条轴出一张 */
+export const GROUP_AXES = [
+  ...DIVERGE_AXES,
+  { k: 'color', n: '换配色', d: '构图不变，换一套配色', add: '整体配色换为莫兰迪低饱和色系，保持主体与构图不变' },
+  { k: 'time', n: '换时间', d: '同一场景，换一个时间', add: '改为黄昏时分，暖橙色逆光，天空有渐变晚霞' },
+  { k: 'pose', n: '换姿态', d: '主体换一个动作 / 摆法', add: '主体换一个自然的动作或摆放角度，其余保持不变' },
+  { k: 'shot', n: '换景别', d: '同一主体，拉近或拉远', add: '改为近景特写，突出主体的材质与细节' },
+];
+export const GROUP_DEFAULT = ['light', 'scene', 'color', 'shot'];

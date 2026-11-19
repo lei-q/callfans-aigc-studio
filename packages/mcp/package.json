@@ -1,0 +1,10 @@
+{
+  "name": "@aigc/mcp",
+  "version": "0.2.0",
+  "private": true,
+  "description": "AIGC 创作台的 MCP stdio 服务：让 Claude / Cursor 等外部 Agent 读画布、调模型生成",
+  "type": "module",
+  "bin": { "aigc-studio-mcp": "index.mjs" },
+  "main": "index.mjs",
+  "license": "GPL-3.0-only"
+}

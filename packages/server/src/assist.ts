@@ -1,4 +1,5 @@
-import type { AgentEnhanceBody, AgentEnhanceReply, MediaType, OptimizeReply } from '@aigc/shared';
+import type { AgentEnhanceBody, AgentEnhanceReply, MediaType, OptimizeReply, PostCopyBody, PostCopyReply } from '@aigc/shared';
+import { POST_PLATFORMS } from '@aigc/shared';
 import { EXPAND_THRESHOLD, TYPES } from '@aigc/shared';
 import type { Core } from './core';
 import type { ChatMessage } from './providers/types';
@@ -121,4 +122,38 @@ export async function enhanceAgent(core: Core, body: AgentEnhanceBody): Promise<
     /* 回退规则 */
   }
   return null;
+}
+
+/** 帖子文案：标题 / 正文 / 标签。失败一律明确报错并保留用户原文，不用模板假装是 AI 写的 */
+export async function postCopy(core: Core, body: PostCopyBody): Promise<PostCopyReply> {
+  const route = await chatRoute(core);
+  if (route.kind === 'none') throw new HttpError(409, 'AI 写文案需要可用的文本模型', route.reason);
+  const plat = POST_PLATFORMS.find((x) => x.k === body.platform)?.n || '社交平台';
+  const sys =
+    `你是${plat}的内容运营。根据下面的配图信息${body.title || body.body ? '和用户已有的标题 / 正文' : ''}，写一条可以直接发布的图文帖子文案：` +
+    '标题简短抓人（不超过 20 字）；正文口语化、分段清晰，不编造配图里没有的信息，不写夸大功效的词；再给 3 到 6 个话题标签（不带 # 号）。' +
+    '只输出 JSON：{"title":"标题","body":"正文","tags":["标签"]}';
+  const user = [
+    `目标平台：${plat}`,
+    body.title ? `已有标题：${body.title}` : '',
+    body.body ? `已有正文：${body.body}` : '',
+    ...body.images.map((x, i) => `配图 ${i + 1}：${x.title}${x.prompt ? `（生成描述：${x.prompt}）` : ''}${x.caption ? ` 配文：${x.caption}` : ''}`),
+  ]
+    .filter(Boolean)
+    .join('\n');
+  try {
+    const text = await ask(core, route, [
+      { role: 'system', content: sys },
+      { role: 'user', content: user },
+    ]);
+    const j = extractJson<{ title?: string; body?: string; tags?: unknown }>(text);
+    const title = j?.title?.trim() || '';
+    const bodyText = j?.body?.trim() || '';
+    if (!title && !bodyText) throw new HttpError(502, '模型没有返回可用的文案', '稍后重试；原来的标题和正文没有被改动');
+    const tags = Array.isArray(j?.tags) ? j.tags.map((t) => String(t).replace(/^#+/, '').trim()).filter(Boolean).slice(0, 8) : [];
+    return { title, body: bodyText, tags };
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(502, `模型调用失败：${(e as Error).message || '未知错误'}`, '稍后重试；原来的标题和正文没有被改动');
+  }
 }

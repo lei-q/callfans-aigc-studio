@@ -14,6 +14,7 @@ import type {
   PackDto,
   PayChannel,
   Post,
+  PostCopyReply,
   Project,
   RefInput,
   Result,
@@ -36,7 +37,7 @@ import {
   uid,
 } from '@aigc/shared';
 import { api } from '../lib/api';
-import { copyText, downloadText, downloadUrl, pickFiles, renderCaptionPng, renderEditedImage, resultDownloadUrl, thumbOf } from '../lib/util';
+import { copyText, downloadUrl, pickFiles, renderCaptionPng, renderEditedImage, resultDownloadUrl, thumbOf } from '../lib/util';
 import { cloneEditDefaults, getState, setState, type DrawerType, type Page, type State } from './index';
 import { fixParams } from './data';
 import { boardOf, canvasItems, inScope, jobById, libResults, modelOf, payChannels, resultById, wsShort } from './selectors';
@@ -568,6 +569,25 @@ export function downloadResult(id: string) {
   toast('success', '已开始下载', `${r.title} · 产出可直接商用`);
 }
 
+/**
+ * 批量下载：选中的产出打成一个 zip。只能打包本机已有的文件，
+ * 链接素材（只有远程地址）和已删除的会被跳过，并明确告诉用户跳过了几个。
+ */
+export function batchDownload(ids: string[], name = '') {
+  const s = getState();
+  const rs = [...new Set(ids)].map((id) => resultById(s, id)).filter((r): r is Result => !!r);
+  const local = rs.filter((r) => r.src.startsWith('/files/'));
+  if (!local.length) {
+    toast('warn', '没有可打包的文件', rs.length ? '选中的都是只有链接的素材，没有本机文件' : '先选中要下载的内容');
+    return;
+  }
+  const picked = local.slice(0, 500);
+  const skipped = rs.length - picked.length;
+  const label = name || `AIGC-${picked.length}项`;
+  downloadUrl(`/api/download/zip?ids=${picked.map((r) => encodeURIComponent(r.id)).join(',')}&name=${encodeURIComponent(label)}`);
+  toast('success', `已开始打包下载 ${picked.length} 项`, skipped > 0 ? `另有 ${skipped} 项没有本机文件（或超过单次 500 项），已跳过` : `${label}.zip · 产出可直接商用`);
+}
+
 export async function deleteResult(id: string) {
   const r = resultById(getState(), id);
   if (!r) return;
@@ -678,10 +698,11 @@ export function postNew() {
   void savePost(p);
 }
 
-export async function postSave(id: string, title: string, body: string) {
+export async function postSave(id: string, title: string, body: string, captions?: Record<string, string>) {
   const ok = await updatePost(id, (p) => {
     p.title = title.trim() || '未命名帖子';
     p.body = body;
+    if (captions) p.captions = captions;
   });
   /* 没写进去就别说「已保存」，也别关抽屉：用户还能改了再试 */
   if (!ok) return;
@@ -706,6 +727,13 @@ export async function postDel(id: string) {
 export const postPlatform = (id: string, k: string) => updatePost(id, (p) => void (p.platform = k));
 export const postItemAdd = (id: string, rid: string) => updatePost(id, (p) => void (!p.items.includes(rid) && p.items.push(rid)));
 export const postItemDel = (id: string, rid: string) => updatePost(id, (p) => void (p.items = p.items.filter((x) => x !== rid)));
+/** 设为封面：把这张移到第一位，其余顺序不变 */
+export const postSetCover = (id: string, rid: string) =>
+  updatePost(id, (p) => {
+    if (!p.items.includes(rid)) return;
+    p.items = [rid, ...p.items.filter((x) => x !== rid)];
+  });
+
 export function postItemShift(id: string, rid: string, dir: -1 | 1) {
   updatePost(id, (p) => {
     const i = p.items.indexOf(rid);
@@ -726,6 +754,9 @@ export function postItemMove(id: string, from: string, to: string) {
   });
 }
 
+/** 每张图的配文：帖子里单独写的优先，没有就用产出自己的备注 */
+export const captionOf = (p: Post, r: Result) => p.captions?.[r.id]?.trim() || r.note || '';
+
 export function postText(s: State, p: Post) {
   const items = p.items.map((id) => resultById(s, id)).filter((r): r is Result => !!r);
   const plat = POST_PLATFORMS.find((x) => x.k === p.platform);
@@ -735,8 +766,9 @@ export function postText(s: State, p: Post) {
   if (items.length) {
     lines.push('---', '');
     items.forEach((r) => {
-      lines.push(`![${r.title}](${r.src.startsWith('/') ? origin + r.src : r.src})`);
-      if (r.note) lines.push(`*${r.note}*`);
+      const cap = captionOf(p, r);
+      lines.push(`![${cap || r.title}](${r.src.startsWith('/') ? origin + r.src : r.src})`);
+      if (cap) lines.push(`*${cap}*`);
       lines.push('');
     });
   }
@@ -744,21 +776,43 @@ export function postText(s: State, p: Post) {
   return lines.join('\n');
 }
 
-export function postCopy(id: string, title?: string, body?: string) {
+export function postCopy(id: string, title?: string, body?: string, captions?: Record<string, string>) {
   const s = getState();
   const p = s.posts.find((x) => x.id === id);
   if (!p) return;
-  copyText(postText(s, { ...p, title: title ?? p.title, body: body ?? p.body }));
+  copyText(postText(s, { ...p, title: title ?? p.title, body: body ?? p.body, captions: captions ?? p.captions }));
   toast('success', '正文已复制', '标题、正文、配图说明都在里面');
 }
 
-export function postExport(id: string, title?: string, body?: string) {
+/** 导出：先把当前编辑的内容存下来，再下载 zip（index.md + images/，相对路径，换台电脑也能打开） */
+export async function postExport(id: string, title?: string, body?: string, captions?: Record<string, string>) {
+  const p = getState().posts.find((x) => x.id === id);
+  if (!p) return;
+  const ok = await updatePost(id, (x) => {
+    if (title !== undefined) x.title = title.trim() || '未命名帖子';
+    if (body !== undefined) x.body = body;
+    if (captions) x.captions = captions;
+  });
+  if (!ok) return;
+  downloadUrl(`/api/posts/${encodeURIComponent(id)}/export`);
+  toast('success', '已开始导出', 'zip 里是 index.md 和 images/，图片用相对路径，可以直接换台电脑打开');
+}
+
+/** AI 写文案：成功才回填；失败原样保留用户的标题和正文，把原因说清楚 */
+export async function postAiCopy(id: string, title: string, body: string, captions: Record<string, string>) {
   const s = getState();
   const p = s.posts.find((x) => x.id === id);
-  if (!p) return;
-  const full = { ...p, title: title ?? p.title, body: body ?? p.body };
-  downloadText(`${(full.title || 'post').replace(/[\\/:*?"<>|]/g, '_')}.md`, postText(s, full));
-  toast('success', '已导出 Markdown', '图片地址指向本机服务，可以在浏览器里直接打开');
+  if (!p) return null;
+  const images = p.items
+    .map((rid) => resultById(s, rid))
+    .filter((r): r is Result => !!r)
+    .map((r) => ({ title: r.title, prompt: jobById(s, r.job)?.prompt, caption: captions[r.id] || r.note || undefined }));
+  try {
+    return await api.post<PostCopyReply>('/api/assist/post-copy', { platform: p.platform, title, body, images });
+  } catch (e) {
+    toastError(e, 'AI 写文案没成功');
+    return null;
+  }
 }
 
 /* ---------------- 审美库：从电脑收藏 ---------------- */

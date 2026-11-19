@@ -54,7 +54,11 @@ export const patchResultSchema = z.object({
 });
 
 export const saveEditedSchema = z.object({
-  sourceId: z.string(),
+  /** 原素材；本地上传的图片没有产出记录，这时必须带 ws（新产出归到该项目） */
+  sourceId: z.string().optional(),
+  ws: z.string().optional(),
+  /** 成品的真实画幅（裁切后和原图不同）；不带就沿用原素材的 */
+  ratio: z.string().max(10).optional(),
   title: z.string().max(120),
   tags: z.array(z.string().max(40)).max(10),
   edit: z.object({ css: z.string().max(500).optional(), ops: z.record(z.string(), z.unknown()) }),
@@ -101,6 +105,14 @@ export const postSchema = z.object({
   body: z.string().max(20000),
   items: z.array(z.string()).max(40),
   platform: z.string().max(20),
+  captions: z.record(z.string(), z.string().max(500)).optional(),
+});
+
+export const postCopySchema = z.object({
+  platform: z.string().max(20),
+  title: z.string().max(120).optional(),
+  body: z.string().max(20000).optional(),
+  images: z.array(z.object({ title: z.string().max(200), prompt: z.string().max(2000).optional(), caption: z.string().max(500).optional() })).max(40),
 });
 
 /* 临时测试：除了账号服务已开通的档位，也允许直接按点数下单（1 点 = ¥1）。
@@ -194,5 +206,17 @@ export const agentSchema = z.object({
 
 export const keySchema = z.object({ name: z.string().min(1).max(40).optional(), channel: z.enum(['cloud', 'direct']).optional() });
 export const keyPatchSchema = z.object({ on: z.boolean().optional(), name: z.string().min(1).max(40).optional() });
+
+/** 把本地上传的文件登记成产出，之后就能走裁切 / 取帧 / 编辑这些要「产出」的流程 */
+export const localResultSchema = z.object({
+  src: z.string().regex(/^\/files\/(uploads|media)\//),
+  ws: z.string(),
+  type: mediaType,
+  title: z.string().max(120),
+  ratio: z.string().max(10).optional(),
+  dur: z.number().min(0).max(36000).optional(),
+});
+
+export const videoFrameSchema = z.object({ sourceId: z.string(), t: z.number().min(0).max(36000) });
 
 export type SaveEdited = z.infer<typeof saveEditedSchema>;

@@ -300,6 +300,8 @@ export interface Post {
   body: string;
   items: string[];
   platform: string;
+  /** 每张配图单独的配文 / alt，key 是产出 id；封面仍是 items[0]，旧帖子没有这个字段 */
+  captions?: Record<string, string>;
   updatedAt: number;
 }
 

@@ -37,6 +37,7 @@ export function menuItems(): MenuEntry[] {
     items.push({ t: '新建节点', run: op.newNode });
     items.push({ t: '新建文字', run: op.newText });
     items.push({ t: '把画板上的东西归为一组', run: op.groupAll });
+    if (canvasItems(s).length) items.push({ t: '复制画布上下文给 Agent', run: () => void op.copyCanvasContext() });
     if (canvasItems(s).length) {
       items.push({ sep: true });
       items.push({ t: s.canvasConfirm ? '再点一次确认清空' : '清空画板', danger: true, run: op.canvasClear });
@@ -45,7 +46,17 @@ export function menuItems(): MenuEntry[] {
   }
   items.push({ t: '复制一份', k: 'Ctrl D', run: op.duplicateSel });
   if (isMedia) items.push({ t: '以此发散', run: op.divergeOpen });
-  if (isMedia && one.type === 'image') items.push({ t: '适配多平台尺寸', run: op.platformsOpen });
+  if (isMedia && one.type === 'image') items.push({ t: '组图（以它为锚点）…', run: op.groupOpen });
+  if (many && sel.filter((i) => i.kind === 'media').length >= 2) items.push({ t: '一致性检查…', run: op.checkOpen });
+  if (isMedia && one.type === 'image') {
+    const nAnn = s.annotCache[one.id]?.length || 0;
+    items.push({ t: nAnn ? `批注改图…（已标 ${nAnn} 处）` : '批注改图…', run: op.annotOpen });
+  }
+  if (isMedia && one.rid) items.push({ t: '改参数再生成…', run: op.regenOpen });
+  if (many && sel.every((i) => i.kind === 'media') && n <= 4) items.push({ t: `并排对比 ${n} 个…`, run: op.compareOpen });
+  if (isMedia && one.type === 'image') items.push({ t: '裁切 / 平台尺寸…', run: op.cropOpen });
+  if (isMedia && one.type === 'image') items.push({ t: '适配多平台尺寸（重新构图）', run: op.platformsOpen });
+  if (isMedia && one.type === 'video') items.push({ t: '视频工具（取帧 / 裁时长）…', run: op.vtoolOpen });
   if (isMedia) items.push({ t: boardOf(s).anchor?.cvsId === one.id ? '取消风格基准' : '设为风格基准', run: () => op.anchorToggle(one.id) });
   if (n === 2) items.push({ t: '把这两个连起来', run: op.linkPair });
   if (many) items.push({ t: '归为一组', run: op.groupSelection });
@@ -54,6 +65,7 @@ export function menuItems(): MenuEntry[] {
   if (one && (one.kind === 'media' || one.kind === 'web' || one.kind === 'post')) items.push({ t: '收进审美库', run: () => void op.keepAesthetic(one.id) });
   if (one?.rid) items.push({ t: '查看生成参数', run: op.menuParams });
   if (one?.rid && !savedToLib(s, one.rid)) items.push({ t: '保存到素材库', run: op.saveSelToLib });
+  if (sel.some((i) => i.rid)) items.push({ t: many ? `下载选中的 ${sel.filter((i) => i.rid).length} 个素材（zip）` : '下载这个素材', run: op.downloadSel });
   if ((one?.kind === 'web' || one?.kind === 'post') && one.url) items.push({ t: '在浏览器打开', run: () => window.open(one.url, '_blank', 'noopener') });
   items.push({ sep: true });
   if (many) {

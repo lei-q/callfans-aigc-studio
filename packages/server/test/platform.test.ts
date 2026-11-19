@@ -114,6 +114,32 @@ describe('模型清单与选择', () => {
   });
 });
 
+describe('折扣字段', () => {
+  it('discount_rate 原样映射成 discountRate；缺失或不合理的值是 null，不编数字', async () => {
+    const body = {
+      appId: 'aigc-studio',
+      data: [
+        { id: 'img-a', mode: 'image_generation', pricing: { per_image: 0.04, discount_rate: 0.8 } },
+        { id: 'img-b', mode: 'image_generation', pricing: { per_image: 0.04 } },
+        { id: 'img-c', mode: 'image_generation', pricing: { per_image: 0.04, discount_rate: 8 } },
+        { id: 'img-d', mode: 'image_generation', pricing: { per_image: 0.04, discount_rate: 0 } },
+        { id: 'img-e', mode: 'image_generation', pricing: { per_image: 0.04, discount_rate: '0.5' } },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonRes(200, body)));
+    const cat = new PlatformCatalog(() => ({ gatewayBase: 'http://gw.test', apiBase: 'http://account.test/api/v1', clientId: 'aigc-callfans' }) as never);
+    const sum = await cat.summary();
+    const rate = (id: string) => sum.models.find((m) => m.id === id)?.discountRate;
+    expect(rate('img-a')).toBe(0.8);
+    expect(rate('img-b')).toBeNull();
+    expect(rate('img-c')).toBeNull();
+    expect(rate('img-d')).toBeNull();
+    expect(rate('img-e')).toBeNull();
+    /* 折前标价不被折扣改动 */
+    expect(sum.models.find((m) => m.id === 'img-a')?.perImage).toBe(0.04);
+  });
+});
+
 describe('模型清单接口（账号服务 /public/apps/models）', () => {
   const mk = (reply: unknown, status = 200) => {
     const fetchMock = vi.fn(async () => jsonRes(status, reply));

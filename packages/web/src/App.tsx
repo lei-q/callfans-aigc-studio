@@ -10,6 +10,15 @@ import * as op from './canvas/ops';
 import { Studio } from './pages/Studio';
 import { JobsPage, LibraryPage } from './pages/Lists';
 import { AestheticPage, ModelsPage, SettingsPage } from './pages/Other';
+import { ApiPage } from './pages/Api';
+import { ProjectsPage } from './pages/Projects';
+import { CropModal } from './canvas/CropModal';
+import { VtoolModal } from './canvas/VtoolModal';
+import { CompareModal } from './canvas/CompareModal';
+import { RegenModal } from './canvas/RegenModal';
+import { AnnotModal } from './canvas/AnnotModal';
+import { GroupModal } from './canvas/GroupModal';
+import { CheckModal } from './canvas/CheckModal';
 
 function Main() {
   const page = useStore((s) => s.page);
@@ -17,6 +26,8 @@ function Main() {
   if (page === 'library') return <LibraryPage />;
   if (page === 'aesthetic') return <AestheticPage />;
   if (page === 'models') return <ModelsPage />;
+  if (page === 'api') return <ApiPage />;
+  if (page === 'projects') return <ProjectsPage />;
   if (page === 'settings') return <SettingsPage />;
   return <Studio />;
 }
@@ -218,6 +229,13 @@ export function App() {
         </div>
       </div>
       <Drawer />
+      <CropModal />
+      <VtoolModal />
+      <CompareModal />
+      <RegenModal />
+      <AnnotModal />
+      <GroupModal />
+      <CheckModal />
       <Toasts />
       <UpdatePrompt />
       <UpdateFloat />

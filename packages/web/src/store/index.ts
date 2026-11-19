@@ -28,7 +28,7 @@ import type {
 } from '@aigc/shared';
 import { EDIT_DEF, PEN_COLORS } from '@aigc/shared';
 
-export type Page = 'studio' | 'jobs' | 'library' | 'models' | 'aesthetic' | 'settings';
+export type Page = 'studio' | 'jobs' | 'library' | 'projects' | 'models' | 'api' | 'aesthetic' | 'settings';
 export type DrawerType = 'result' | 'help' | 'queue' | 'ref-add' | 'topup' | 'edit' | 'post' | 'project' | 'account';
 
 export interface Toast {
@@ -128,6 +128,16 @@ export interface State {
   linkLabelEdit: string | null;
   diverge: { srcId: string; axes: string[] } | null;
   platforms: { srcId: string; picks: string[] } | null;
+  /** 裁切弹层 / 视频工具弹层：对哪个画布元素操作 */
+  crop: { srcId: string } | null;
+  vtool: { srcId: string } | null;
+  compare: { ids: string[] } | null;
+  regen: { srcId: string } | null;
+  annot: { srcId: string } | null;
+  group: { srcId: string; axes: string[]; adds: Record<string, string> } | null;
+  check: { ids: string[] } | null;
+  /** 批注缓存：画布元素 id → 批注；只在本次会话里，生成提交后清掉 */
+  annotCache: Record<string, import('../canvas/annot').Annot[]>;
   agent: { open: boolean; result: AgentResult | null; loading: boolean };
   agentPos: { x: number; y: number } | null;
   agentDock: boolean;
@@ -226,6 +236,14 @@ export const initialState: State = {
   linkLabelEdit: null,
   diverge: null,
   platforms: null,
+  crop: null,
+  vtool: null,
+  compare: null,
+  regen: null,
+  annot: null,
+  group: null,
+  check: null,
+  annotCache: {},
   agent: { open: false, result: null, loading: false },
   agentPos: null,
   agentDock: false,

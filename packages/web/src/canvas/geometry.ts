@@ -2,33 +2,17 @@ import type { CanvasItem, CanvasView } from '@aigc/shared';
 
 /* 画布几何：尺寸、包围盒、连线曲线。和原型同一套常量 */
 
-export const CVS_W = 168;
-export const CVS_W_TEXT = 240;
+import { CVS_AR, CVS_H_FILE, CVS_H_NODE, CVS_H_POST, CVS_H_WEB, CVS_W, CVS_W_TEXT, TEXT_H, cvsItemAR, cvsItemH, cvsItemW } from '@aigc/shared';
+
+/* 尺寸规则在 shared/canvasSize.ts（服务端导出画布上下文也要用）；这里只重新导出，其余几何留在前端 */
+export { CVS_AR, CVS_H_FILE, CVS_H_NODE, CVS_H_POST, CVS_H_WEB, CVS_W, CVS_W_TEXT, TEXT_H, cvsItemAR, cvsItemH, cvsItemW };
+
 export const TEXT_MAX_W = 420;
 export const CVS_W_MIN = 64;
 export const CVS_W_MAX = 720;
-export const CVS_AR = 0.68;
 export const CVS_K_MIN = 0.35;
 export const CVS_K_MAX = 2.6;
-export const CVS_H_WEB = 96;
-export const CVS_H_FILE = 92;
-export const CVS_H_POST = 132;
-export const CVS_H_NODE = 76;
-export const TEXT_H = { sm: 40, md: 64, lg: 96 } as const;
 export const TEXT_SIZE_NAME = { sm: '小（备注）', md: '中（正文）', lg: '大（标题）' } as const;
-
-export const cvsItemW = (i: CanvasItem) => Math.round(i.w || (i.kind === 'text' ? CVS_W_TEXT : CVS_W));
-export const cvsItemAR = (i: CanvasItem) => i.ar || CVS_AR;
-export function cvsItemH(i: CanvasItem) {
-  if (i.kind === 'web') return CVS_H_WEB + (i.cover ? 76 : 0);
-  if (i.kind === 'post') return CVS_H_POST + (i.cover ? 76 : 0);
-  if (i.kind === 'file') return CVS_H_FILE;
-  if (i.kind === 'draw') return Math.max(24, i.h || 60);
-  if (i.kind === 'group') return Math.max(120, i.h || 260);
-  if (i.kind === 'node') return Math.max(44, i.h || CVS_H_NODE);
-  if (i.kind === 'text') return Math.max(30, i.h || TEXT_H[i.size || 'md'] || TEXT_H.md);
-  return Math.round(cvsItemW(i) * cvsItemAR(i)) + 2;
-}
 
 /** 元素层级：z 越大越靠上，未设置时按数组顺序 */
 export const cvsZ = (i: CanvasItem, idx: number) => (i.z != null ? i.z : 100 + idx);

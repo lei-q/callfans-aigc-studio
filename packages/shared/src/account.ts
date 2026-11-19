@@ -89,6 +89,8 @@ export interface PlatformModelInfo {
   /** 语音合成：每个字符多少美元；音频转写：每秒多少美元 */
   perCharacter?: number | null;
   perAudioSecond?: number | null;
+  /** 实际结算折扣：0.8 = 8 折；上面的 per_* 都是折前上游标价。平台没返回为 null */
+  discountRate?: number | null;
 }
 
 export interface PlatformModelsReply {

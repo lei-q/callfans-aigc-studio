@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 /* 端到端：Web 模式 + Mock 云。覆盖 首启干净 → 登录 → 充值 → 生成 → 收件箱 → 画布 → 素材库 → 成帖
@@ -250,7 +253,7 @@ test('画布：框选、右键对齐、连线、撤销，刷新后仍在', async
   await expect(page.locator('.agent-panel')).toContainText('条连线');
 });
 
-test('素材库打包成帖并导出 Markdown', async ({ page }) => {
+test('素材库：批量下载；打包成帖、写配文、手机预览、导出 zip', async ({ page }) => {
   await open(page);
   await ensureLogin(page);
 
@@ -271,11 +274,24 @@ test('素材库打包成帖并导出 Markdown', async ({ page }) => {
   await page.locator('.fchip', { hasText: '全部项目' }).click();
   await picks.nth(0).click();
   await picks.nth(1).click();
+  /* 批量下载：选中的产出打成一个 zip */
+  const [zipDl] = await Promise.all([page.waitForEvent('download'), page.locator('.lib-pack-bar .btn', { hasText: '批量下载' }).click()]);
+  expect(zipDl.suggestedFilename()).toMatch(/\.zip$/);
+  const zipPath = await zipDl.path();
+  const head = fs.readFileSync(zipPath!).subarray(0, 4).toString('hex');
+  expect(head).toBe('504b0304');
   await page.locator('.btn', { hasText: '打包成帖' }).click();
   await expect(page.locator('.drawer-title', { hasText: '帖子草稿' })).toBeVisible();
   await page.locator('.post-body').fill('今天上新两款春季饮品。');
-  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('.drawer-foot .btn', { hasText: '导出 Markdown' }).click()]);
-  expect(dl.suggestedFilename()).toMatch(/\.md$/);
+  /* 每图配文、手机预览 */
+  await page.locator('.post-cap input').nth(1).fill('窗边的第一杯');
+  await page.locator('.btn', { hasText: '手机预览' }).click();
+  await expect(page.locator('.phone')).toContainText('今天上新两款春季饮品。');
+  await expect(page.locator('.phone')).toContainText('窗边的第一杯');
+  /* 设为封面：第二张的按钮点了，顺序里它排到第一 */
+  await page.locator('.post-cap .btn', { hasText: '设为封面' }).first().click();
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('.drawer-foot .btn', { hasText: '导出 zip' }).click()]);
+  expect(dl.suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('.drawer-foot .btn', { hasText: '保存' }).first().click();
   await expect(page.locator('.post-card')).toHaveCount(1);
 });
@@ -334,9 +350,9 @@ test('模型与价格：只保留平台渠道，不显示自定义渠道与密�
   await expect(page.locator('.catalog-sec-name', { hasText: '直连' })).toHaveCount(0);
 });
 
-test('导航：API 接入并入模型与价格，设置页改叫「账号」', async ({ page }) => {
+test('导航：API 接入是独立入口，设置页改叫「账号」', async ({ page }) => {
   await open(page);
-  await expect(page.locator('.side-item', { hasText: 'API 接入' })).toHaveCount(0);
+  await expect(page.locator('.side-item', { hasText: 'API 接入' })).toHaveCount(1);
   await page.locator('.side-item', { hasText: '模型与价格' }).click();
   await expect(page.locator('.page-title')).toHaveText('模型与价格');
   await expect(page.locator('.catalog-sec-name', { hasText: '用量与账单' })).toBeVisible();
@@ -350,6 +366,201 @@ test('导航：API 接入并入模型与价格，设置页改叫「账号」', a
   await expect(page.locator('.catalog-sec-name', { hasText: '预估单价' })).toHaveCount(0);
   await expect(page.locator('.snap-row', { hasText: '账号服务' })).toHaveCount(0);
   await expect(page.locator('.snap-row', { hasText: '接口根' })).toHaveCount(0);
+});
+
+test('画布：本地图片裁切成多个比例、本地视频取帧，成品摆在下面并连回原图', async ({ page }) => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  test.skip(spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status !== 0, '本机没有 ffmpeg');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigc-e2e-media-'));
+  const png = path.join(dir, 'photo.png');
+  const mp4 = path.join(dir, 'clip.mp4');
+  execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=800x600:rate=1', '-frames:v', '1', png]);
+  execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=25:duration=3', '-pix_fmt', 'yuv420p', mp4]);
+
+  await open(page);
+  const vp = page.locator('#cvsViewport');
+  const box = (await vp.boundingBox())!;
+  /* 前面的用例在画布上留了东西：先清空，右键才落在空白处 */
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  const before = await page.locator('#cvsWorld .cvs-el.cvs-media').count();
+  expect(before).toBe(0);
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30, { button: 'right' });
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('.cvs-menu-item', { hasText: '从电脑选文件' }).click()]);
+  await chooser.setFiles([png, mp4]);
+  await expect(page.locator('#cvsWorld .cvs-el.cvs-media')).toHaveCount(before + 2, { timeout: 20_000 });
+
+  /* 图片：裁切成默认的 3 个比例 */
+  const img = page.locator('#cvsWorld .cvs-el.cvs-media', { has: page.locator('img') }).first();
+  await img.click({ button: 'right', position: { x: 6, y: 6 } });
+  await page.locator('.cvs-menu-item', { hasText: '裁切 / 平台尺寸' }).click();
+  await expect(page.locator('.crop-modal')).toBeVisible();
+  await expect(page.locator('.crop-box')).toBeVisible();
+  await page.locator('.crop-modal .btn.primary', { hasText: '裁出 3 张' }).click();
+  await expect(page.locator('.crop-modal')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator('#cvsWorld .cvs-el.cvs-media')).toHaveCount(before + 5);
+  await expect(page.locator('#cvsLinks path.cvs-link')).toHaveCount(3);
+  /* 成品进了素材库，画幅是裁出来的比例 */
+  const results = await page.evaluate(async () => ((await (await fetch('/api/bootstrap')).json()) as { results: { title: string; ratio: string; tags: string[] }[] }).results);
+  const crops = results.filter((r) => r.tags.includes('裁切'));
+  expect(crops.map((r) => r.ratio).sort()).toEqual(['16:9', '1:1', '4:5']);
+
+  /* 视频：取当前画面 */
+  const vid = page.locator('#cvsWorld .cvs-el.cvs-media', { has: page.locator('video') }).first();
+  await vid.click({ button: 'right' });
+  await page.locator('.cvs-menu-item', { hasText: '视频工具' }).click();
+  await expect(page.locator('.vtool-modal')).toBeVisible();
+  await page.locator('.vtool-modal .btn', { hasText: '取当前画面' }).click();
+  await expect(page.locator('.toast', { hasText: '已取帧' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#cvsWorld .cvs-el.cvs-media')).toHaveCount(before + 6);
+});
+
+test('画布：批注改图、改参数再生成、并排对比', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await generate(page, '2 张');
+  const cards = page.locator('.cvs-inbox-card');
+  await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  while (await cards.count()) await cards.first().locator('.cvs-inbox-add').click();
+  const media = page.locator('#cvsWorld .cvs-el.cvs-media');
+  await expect(media.first()).toBeVisible();
+  const total0 = await media.count();
+  const jobsOf = async () => ((await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).jobs)) as { name: string; prompt: string; refs: { src: string }[]; fromCvsId?: string }[]);
+
+  /* 批注改图：框一处、写改法、提交；任务带原图 + 示意图两张参考图，新图连回原图 */
+  await media.first().click({ button: 'right', position: { x: 8, y: 8 } });
+  await page.locator('.cvs-menu-item', { hasText: '批注改图' }).click();
+  await expect(page.locator('.annot-modal')).toBeVisible();
+  const stage = page.locator('.annot-stage');
+  await expect(stage).toBeVisible();
+  const sb = (await stage.boundingBox())!;
+  await page.mouse.move(sb.x + sb.width * 0.05, sb.y + sb.height * 0.05);
+  await page.mouse.down();
+  await page.mouse.move(sb.x + sb.width * 0.25, sb.y + sb.height * 0.25, { steps: 6 });
+  await page.mouse.up();
+  await expect(page.locator('.annot-row')).toHaveCount(1);
+  await page.locator('.annot-row input').fill('把杯子换成红色');
+  await page.locator('.annot-modal .btn.primary', { hasText: '按批注生成' }).click();
+  await expect(page.locator('.annot-modal')).toHaveCount(0, { timeout: 20_000 });
+  await expect.poll(async () => (await jobsOf()).some((j) => j.name === '批注改图 · 1 处')).toBe(true);
+  const aj = (await jobsOf()).find((j) => j.name === '批注改图 · 1 处')!;
+  expect(aj.prompt).toContain('把杯子换成红色');
+  expect(aj.prompt).toContain('画面左上');
+  expect(aj.refs).toHaveLength(2);
+  expect(aj.fromCvsId).toBeTruthy();
+
+  /* 批注缓存：没提交的批注关掉再打开还在，并且元素上有角标 */
+  await media.first().click({ button: 'right', position: { x: 8, y: 8 } });
+  await page.locator('.cvs-menu-item', { hasText: '批注改图' }).click();
+  await page.locator('.annot-tools .btn', { hasText: '点选' }).click();
+  const sb2 = (await page.locator('.annot-stage').boundingBox())!;
+  await page.mouse.click(sb2.x + sb2.width * 0.7, sb2.y + sb2.height * 0.7);
+  await expect(page.locator('.annot-row')).toHaveCount(1);
+  await page.locator('.annot-modal .icon-btn').first().click();
+  await expect(media.first().locator('.cvs-annot-n')).toHaveText(/✎ 1/);
+
+  /* 改参数再生成 */
+  await media.first().click({ button: 'right', position: { x: 8, y: 8 } });
+  await page.locator('.cvs-menu-item', { hasText: '改参数再生成' }).click();
+  await expect(page.locator('.regen-modal')).toBeVisible();
+  await page.locator('.regen-modal select').nth(1).selectOption('16:9');
+  await page.locator('.regen-modal .btn.primary', { hasText: '重新生成' }).click();
+  await expect(page.locator('.regen-modal')).toHaveCount(0, { timeout: 20_000 });
+  await expect.poll(async () => (await jobsOf()).some((j) => j.name.startsWith('改参数 · 比例'))).toBe(true);
+
+  /* 并排对比：选中两个，采用其中一个 */
+  await page.keyboard.press('ControlOrMeta+a');
+  await media.first().click({ button: 'right', position: { x: 8, y: 8 } });
+  await page.locator('.cvs-menu-item', { hasText: /并排对比/ }).click();
+  await expect(page.locator('.compare-modal .compare-cell')).not.toHaveCount(0);
+  expect(await page.locator('.compare-modal .compare-cell').count()).toBeGreaterThanOrEqual(2);
+  await page.locator('.compare-modal .btn', { hasText: '采用这个' }).first().click();
+  await expect(page.locator('.compare-modal .btn', { hasText: '已采用' })).toHaveCount(1);
+  void total0;
+});
+
+test('组图：锚点出多张、整批放进画布并成组，一致性检查；项目画板页', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await generate(page, '1 张');
+  const cards = page.locator('.cvs-inbox-card');
+  await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  await cards.first().locator('.cvs-inbox-add').click();
+  const media = page.locator('#cvsWorld .cvs-el.cvs-media');
+  await expect(media).toHaveCount(1);
+
+  await media.first().click({ button: 'right', position: { x: 8, y: 8 } });
+  await page.locator('.cvs-menu-item', { hasText: '组图（以它为锚点）' }).click();
+  await expect(page.locator('.group-modal')).toBeVisible();
+  /* 默认 4 条轴：改一条的方案文字，再取消一条 → 3 张 */
+  await page.locator('.group-axis.on input').first().fill('改为雪地场景，冷色调');
+  await page.locator('.group-axis.on .ga-head').last().click();
+  await page.locator('.group-modal .btn.primary', { hasText: '出 3 张' }).click();
+  await expect(page.locator('.group-modal')).toHaveCount(0, { timeout: 20_000 });
+  const jobs = await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).jobs as { name: string; prompt: string; refs: unknown[]; batch?: string; fromCvsId?: string }[]);
+  const gj = jobs.filter((j) => j.name.startsWith('组图 · '));
+  expect(gj).toHaveLength(3);
+  expect(new Set(gj.map((j) => j.batch)).size).toBe(1);
+  expect(gj.every((j) => j.refs.length === 1 && j.fromCvsId)).toBe(true);
+  expect(gj.some((j) => j.prompt.includes('改为雪地场景，冷色调'))).toBe(true);
+
+  /* 整批放进画布并成组：3 张 + 锚点在一个分组里，连线 3 条 */
+  await expect(cards).toHaveCount(3, { timeout: 40_000 });
+  await page.locator('.cvs-inbox .btn', { hasText: '放进画布并成组' }).click();
+  await expect(media).toHaveCount(4);
+  await expect(page.locator('#cvsWorld .cvs-el.cvs-group')).toHaveCount(1);
+  await expect(page.locator('#cvsLinks path.cvs-link')).toHaveCount(3);
+
+  /* 一致性检查：规则本身在单测里逐条覆盖，这里只验证入口、弹层和结果渲染 */
+  await page.keyboard.press('ControlOrMeta+a');
+  await media.first().click({ button: 'right', position: { x: 8, y: 8 } });
+  await page.locator('.cvs-menu-item', { hasText: '一致性检查' }).click();
+  await expect(page.locator('.check-modal')).toBeVisible();
+  await expect(page.locator('.check-line', { hasText: /模型(不)?一致/ })).toBeVisible();
+  await expect(page.locator('.check-line', { hasText: /画幅(不)?一致/ })).toBeVisible();
+  await expect(page.locator('.check-line', { hasText: '共用同一张参考图' })).toHaveCount(0); /* 锚点自己没有参考图，所以不是「全部共用」 */
+  await page.locator('.check-modal .icon-btn').click();
+
+  /* 项目画板页：当前项目卡片带元素数；新建项目后进入它的空画布 */
+  await page.locator('.side-item', { hasText: '项目画板' }).click();
+  await expect(page.locator('.page-title')).toHaveText('项目画板');
+  await expect(page.locator('.proj-card.cur')).toContainText('5 个元素');
+  await page.locator('.proj-new').click();
+  await page.locator('.proj-new input').fill('新项目 E2E');
+  await page.locator('.proj-new .btn.primary').click();
+  await expect(page.locator('#cvsWorld .cvs-el')).toHaveCount(0);
+  await page.locator('.side-item', { hasText: '项目画板' }).click();
+  await expect(page.locator('.proj-card', { hasText: '新项目 E2E' })).toHaveCount(1);
+});
+
+test('API 接入：创建 Key、下载 mcp.json（带完整 Key）、Key 能读画布上下文、停用后被拒', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await page.locator('.side-item', { hasText: 'API 接入' }).click();
+  await expect(page.locator('.page-title')).toHaveText('API 接入');
+  await page.locator('.btn', { hasText: '创建 Key' }).click();
+  const secret = (await page.locator('.alert-bar .num').first().textContent())!.trim();
+  expect(secret).toMatch(/^sk-local-[0-9a-f]{36}$/);
+  await expect(page.locator('.key-row', { hasText: 'sk-local-' })).toHaveCount(1);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('.btn', { hasText: '下载 mcp.json' }).click()]);
+  expect(dl.suggestedFilename()).toBe('mcp.json');
+  const cfg = JSON.parse(fs.readFileSync((await dl.path())!, 'utf8')) as { mcpServers: Record<string, { env: Record<string, string>; args: string[] }> };
+  expect(cfg.mcpServers['aigc-studio'].env.AIGC_API_KEY).toBe(secret);
+  expect(cfg.mcpServers['aigc-studio'].env.AIGC_BASE_URL).toContain('127.0.0.1');
+  expect(cfg.mcpServers['aigc-studio'].args[0]).toMatch(/index\.mjs$/);
+  /* 用这把 Key 真的能读到画布上下文 */
+  const ctx = await page.evaluate(async (k) => (await fetch('/openapi/v1/canvas/context', { headers: { authorization: `Bearer ${k}` } })).json(), secret);
+  expect(ctx.summary).toContain('个元素');
+  /* 停用后被拒绝 */
+  await page.locator('.key-row', { hasText: 'sk-local-' }).locator('button', { hasText: '停用' }).click();
+  await expect(async () => {
+    const st = await page.evaluate(async (k) => (await fetch('/openapi/v1/canvas/context', { headers: { authorization: `Bearer ${k}` } })).status, secret);
+    expect(st).toBe(403);
+  }).toPass();
 });
 
 test('项目切换器：新建项目的名称输入框不能被「创建」按钮挤没', async ({ page }) => {

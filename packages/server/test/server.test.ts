@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Job, ServerEvent } from '@aigc/shared';
 import { startMockCloud, type MockCloudHandle } from '../../cloud-mock/src/index';
 import { buildApp } from '../src/app';
@@ -223,6 +223,49 @@ describe('AI 辅助真调模型', () => {
   });
 });
 
+describe('帖子：AI 文案与导出', () => {
+  it('AI 写文案：解析标题 / 正文 / 标签；模型没给可用内容时明确报错、不改原文', async () => {
+    const core = await makeCore();
+    const { postCopy } = await import('../src/assist');
+    await login(core);
+    const spy = vi.spyOn(core.cloud, 'chat');
+    spy.mockResolvedValueOnce('好的：```json\n{"title":"秋日第一杯","body":"风有点凉，来杯热的。","tags":["#咖啡","秋天"]}\n```');
+    const r = await postCopy(core, { platform: 'xhs', images: [{ title: '拿铁', prompt: '窗边的热拿铁' }] });
+    expect(r).toEqual({ title: '秋日第一杯', body: '风有点凉，来杯热的。', tags: ['咖啡', '秋天'] });
+    spy.mockResolvedValueOnce('抱歉我不会');
+    await expect(postCopy(core, { platform: 'xhs', title: '原标题', images: [] })).rejects.toMatchObject({ status: 502 });
+    spy.mockRejectedValueOnce(new Error('网关超时'));
+    await expect(postCopy(core, { platform: 'xhs', images: [] })).rejects.toThrow(/模型调用失败/);
+  });
+
+  it('未登录时 AI 写文案直接说明需要文本模型', async () => {
+    const core = await makeCore();
+    const { postCopy } = await import('../src/assist');
+    await expect(postCopy(core, { platform: 'xhs', images: [] })).rejects.toThrow(/文本模型/);
+  });
+
+  it('保存帖子带每图配文；导出 zip 含 index.md（相对路径、配文）与 images/', async () => {
+    const core = await makeCore();
+    const ws = core.store.projects.all()[0].id;
+    const f = core.newMediaFile('png');
+    fs.writeFileSync(f.file, 'png-bytes');
+    core.store.results.put({ id: 'rr1', job: null, type: 'image', ws, title: '拿铁', src: f.src, ratio: '1:1', model: 'm', seed: 1, createdAt: 1, status: 'new', tags: [], dur: 0, home: 'library' });
+    const app = await buildApp(core);
+    const H = { host: 'localhost', 'x-aigc-client': '1' };
+    const put = await app.inject({ method: 'PUT', url: '/api/posts/P1', headers: H, payload: { ws, title: '秋日', body: '正文', items: ['rr1'], platform: 'xhs', captions: { rr1: '窗边的热拿铁' } } });
+    expect(put.statusCode).toBe(200);
+    expect(core.store.posts.get('P1')?.captions).toEqual({ rr1: '窗边的热拿铁' });
+    const zip = await app.inject({ method: 'GET', url: '/api/posts/P1/export', headers: { host: 'localhost' } });
+    expect(zip.statusCode).toBe(200);
+    expect(zip.headers['content-type']).toBe('application/zip');
+    const raw = zip.rawPayload.toString('latin1');
+    expect(raw).toContain('index.md');
+    expect(raw).toContain('images/01-');
+    expect(zip.rawPayload.toString('utf8')).toContain('![窗边的热拿铁](images/01-');
+    await app.close();
+  });
+});
+
 describe('直连模式', () => {
   const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
   function fakeTreeCloud() {
@@ -291,6 +334,45 @@ describe('HTTP 边界', () => {
     const ok = await app.inject({ method: 'POST', url: '/openapi/v1/images/generations', headers: { host: 'localhost', authorization: `Bearer ${secret}` }, payload: { prompt: '一杯咖啡', n: 1 } });
     expect(ok.statusCode).toBe(200);
     expect(ok.json().data[0].url).toMatch(/^http:\/\/localhost\/files\/media\//);
+    await app.close();
+  });
+});
+
+describe('画布上下文接口', () => {
+  it('OpenAPI 与网页接口返回同一份：元素、提示词、模型、连线、坐标；没有 Key 拒绝', async () => {
+    const core = await makeCore();
+    await login(core);
+    const ws = core.store.projects.all()[0].id;
+    const j = core.runner.create({ type: 'image', ws, model: 'cloud:g-img-1', prompt: '一杯咖啡', refs: [], ratio: '4:5', count: 1, res: '2k' });
+    const done = await waitJob(core, j.id);
+    const rid = done.results[0];
+    core.store.saveBoard(ws, {
+      items: [
+        { id: 'c1', kind: 'media', type: 'image', src: core.store.results.get(rid)!.src, t: '咖啡', rid, x: 10, y: 20, w: 200, ar: 1.25 },
+        { id: 'c2', kind: 'node', text: '主视觉走暖橙', x: 300, y: 20 },
+        { id: 'c3', kind: 'group', t: '一组', x: 0, y: 0, w: 600, h: 400 },
+      ],
+      links: [{ id: 'L1', from: 'c1', to: 'c2', label: '启发' }],
+      view: { x: 0, y: 0, k: 1 },
+      anchor: null,
+    });
+    const app = await buildApp(core);
+    const H = { host: 'localhost', 'x-aigc-client': '1' };
+    const denied = await app.inject({ method: 'GET', url: '/openapi/v1/canvas/context', headers: { host: 'localhost' } });
+    expect(denied.statusCode).toBe(401);
+    const secret = (await app.inject({ method: 'POST', url: '/api/keys', headers: H, payload: { name: 'agent' } })).json().secret as string;
+    const r = await app.inject({ method: 'GET', url: `/openapi/v1/canvas/context?project=${ws}`, headers: { host: 'localhost', authorization: `Bearer ${secret}` } });
+    expect(r.statusCode).toBe(200);
+    const ctx = r.json();
+    expect(ctx.summary).toContain('3 个元素（1 个素材、1 个分组），1 条连线');
+    const media = ctx.items.find((i: { id: string }) => i.id === 'c1');
+    expect(media).toMatchObject({ kind: 'media', type: 'image', title: '咖啡', prompt: '一杯咖啡', model: 'cloud:g-img-1', ratio: '4:5', x: 10, y: 20, w: 200, h: 252 });
+    expect(media.src).toMatch(/^http:\/\/localhost\/files\/media\//);
+    expect(ctx.items.find((i: { id: string }) => i.id === 'c2')).toMatchObject({ kind: 'node', text: '主视觉走暖橙', src: null, type: null });
+    expect(ctx.links).toEqual([{ from: 'c1', to: 'c2', label: '启发' }]);
+    const web = await app.inject({ method: 'GET', url: `/api/canvas/context?ws=${ws}`, headers: { host: 'localhost' } });
+    expect(web.json().items).toHaveLength(3);
+    expect((await app.inject({ method: 'GET', url: '/api/canvas/context?ws=nope', headers: { host: 'localhost' } })).statusCode).toBe(404);
     await app.close();
   });
 });

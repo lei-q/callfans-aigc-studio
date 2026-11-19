@@ -189,8 +189,20 @@ const usd = (n: number | null | undefined) =>
 
 const ctxLabel = (n: number | null | undefined) => (n == null ? '—' : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
 
+/** 折扣：只显示平台真的返回了的 discount_rate（0.8 → 8 折）；没返回就明说，不自己推导 */
+export const discountText = (rate: number | null | undefined) => (rate == null ? '折扣率未返回' : rate >= 1 ? '无折扣' : `${Math.round(rate * 100) / 10} 折`);
+
 /** 上游标价：对话按百万 token，图像按张，视频按秒（分辨率档位另起一行） */
 function priceOf(m: PlatformModelInfo) {
+  return (
+    <span className="plat-price-wrap">
+      {priceBase(m)}
+      <span className={`tiny ${m.discountRate == null ? 'dim' : 'plat-discount'}`}>{discountText(m.discountRate)}</span>
+    </span>
+  );
+}
+
+function priceBase(m: PlatformModelInfo) {
   const t = modeType(m.mode);
   if (t === 'image' && m.perImage != null) {
     return (

@@ -4,6 +4,7 @@ import type { Job, Result } from '@aigc/shared';
 import type { Core } from './core';
 import { HttpError } from './runner';
 import { sha256 } from './secrets';
+import { buildCanvasContext } from './context';
 import { createJobSchema } from './schemas';
 
 /* ============================================================================
@@ -133,6 +134,15 @@ export function registerOpenApi(app: FastifyInstance, core: Core) {
     const body = createJobSchema.parse({ refs: [], ws: raw.ws || defaultWs(), ...raw });
     const job = core.runner.create(body, 'api', key.id);
     return jobView(req, job);
+  });
+
+  /** 画布上下文：项目、元素、提示词、模型、分组、连线、坐标（MCP 的 get_canvas_context 读它） */
+  app.get('/openapi/v1/canvas/context', async (req) => {
+    auth(req);
+    const q = req.query as { project?: string };
+    const ws = q.project || defaultWs();
+    if (!ws) throw new HttpError(400, '没有可用的项目');
+    return buildCanvasContext(core, ws, `${req.protocol}://${req.headers.host}`);
   });
 
   app.get('/openapi/v1/jobs/:id', async (req) => {

@@ -2,7 +2,7 @@ import { memo, useLayoutEffect, useRef, useState, type CSSProperties } from 'rea
 import type { CanvasItem } from '@aigc/shared';
 import { FILE_KINDS, TYPES, hostOf, humanSize, postPlatformOf, seededSeries, videoPlatformOf } from '@aigc/shared';
 import { Icon } from '../components/common';
-import { setState } from '../store';
+import { setState, useStore } from '../store';
 import { CVS_H_FILE, CVS_H_POST, CVS_H_WEB, TEXT_MAX_W, cvsItemAR, cvsItemH, cvsItemW, cvsLayer, cvsTransform } from './geometry';
 import { fitMediaAr, keepAesthetic, measureText, openParamsPop, removeOne, setCover, setGroupName, setItemText } from './ops';
 
@@ -18,6 +18,7 @@ interface Props {
 
 /* 一个画布元素。静止时就是一张纯粹的图——类型角标与标题只在悬停或选中时浮出来 */
 export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, anchor, groupCount }: Props) {
+  const annotN = useStore((s) => s.annotCache[it.id]?.length || 0);
   const w = cvsItemW(it);
   const tf = cvsTransform(it);
   const common: CSSProperties = {
@@ -255,6 +256,11 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
         </span>
       )}
       <span className="cvs-cap">{it.t || '未命名'}</span>
+      {annotN > 0 && (
+        <span className="cvs-annot-n" title="这张图已标了批注，右键「批注改图」继续">
+          ✎ {annotN}
+        </span>
+      )}
       {ops}
     </div>
   );

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import type { AccountDocuments, ForgotReply, Job, OrderDto, RegisterStartReply, Result } from '@aigc/shared';
-import { HELP_TOPICS, MAX_REFS, POST_PLATFORMS, TYPES, mmss, paramsBrief, pointsOf, pointsText, timeLabel } from '@aigc/shared';
+import { HELP_TOPICS, MAX_REFS, POST_LIMITS, POST_PLATFORMS, TYPES, mmss, paramsBrief, pointsOf, pointsText, timeLabel } from '@aigc/shared';
 import { useStore } from '../store';
 import {
   addRefItem,
@@ -32,6 +32,7 @@ import {
   makeVariant,
   openDrawer,
   openInEditor,
+  postAiCopy,
   postCopy,
   postDel,
   postExport,
@@ -41,6 +42,7 @@ import {
   postItemShift,
   postPlatform,
   postSave,
+  postSetCover,
   prepayOrder,
   refPool,
   registerComplete,
@@ -1454,6 +1456,9 @@ function PostDrawer({ id }: { id: string }) {
   const p = s.posts.find((x) => x.id === id);
   const [title, setTitle] = useState(p?.title || '');
   const [body, setBody] = useState(p?.body || '');
+  const [caps, setCaps] = useState<Record<string, string>>(p?.captions || {});
+  const [preview, setPreview] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const [drag, setDrag] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   if (!p) return <Head title="帖子不存在" />;
@@ -1462,6 +1467,22 @@ function PostDrawer({ id }: { id: string }) {
   const pool = libResults(s)
     .filter((r) => (s.libScope === 'all' || r.ws === s.ws) && !inPost.has(r.id))
     .slice(0, 16);
+  const lim = POST_LIMITS[p.platform];
+  const exceeds = (n: number, max: number) => max > 0 && n > max;
+  const warns = [
+    lim && exceeds(title.length, lim.title) ? `标题 ${title.length}/${lim.title} 字` : '',
+    lim && exceeds(body.length, lim.body) ? `正文 ${body.length}/${lim.body} 字` : '',
+    lim && exceeds(items.length, lim.images) ? `配图 ${items.length}/${lim.images} 张` : '',
+  ].filter(Boolean);
+  const aiCopy = async () => {
+    setAiBusy(true);
+    const r = await postAiCopy(p.id, title, body, caps);
+    setAiBusy(false);
+    if (!r) return;
+    if (r.title) setTitle(r.title);
+    const tags = r.tags.map((t) => `#${t}`).join(' ');
+    if (r.body || tags) setBody([r.body || body, tags].filter(Boolean).join('\n\n'));
+  };
   return (
     <>
       <Head
@@ -1480,8 +1501,23 @@ function PostDrawer({ id }: { id: string }) {
         <div className="field-block">
           <div className="field-head">
             <span className="field-label">标题</span>
+            <span className="grow" />
+            <button className="btn sm ai" disabled={aiBusy} onClick={() => void aiCopy()} title="用文本模型起草标题 / 正文 / 标签；失败时保留你写的内容">
+              <Icon name="wand" />
+              {aiBusy ? '写作中…' : 'AI 写文案'}
+            </button>
+            <button className={`btn sm ghost ${preview ? 'on' : ''}`} onClick={() => setPreview(!preview)}>
+              <Icon name="eye" />
+              手机预览
+            </button>
           </div>
           <input className="form-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="这篇要讲什么" />
+          {warns.length > 0 && (
+            <div className="field-hint post-warn">
+              超出 {POST_PLATFORMS.find((x) => x.k === p.platform)?.n} 常见范围：{warns.join('，')}（参考值，以平台实际规则为准，不影响保存）
+            </div>
+          )}
+          {preview && <PostPhonePreview title={title} body={body} items={items} caps={caps} platform={p.platform} />}
         </div>
         <div className="field-block">
           <div className="field-head">
@@ -1546,6 +1582,37 @@ function PostDrawer({ id }: { id: string }) {
             <div className="field-hint">还没有配图，从下面挑几张。</div>
           )}
         </div>
+        {items.length > 0 && (
+          <div className="field-block">
+            <div className="field-head">
+              <span className="field-label">每张图的配文</span>
+              <span className="grow" />
+              <span className="field-hint">第 1 张是封面 · 留空则用产出自己的备注</span>
+            </div>
+            <div className="post-caps">
+              {items.map((r, i) => (
+                <div key={r.id} className="post-cap">
+                  <span className="pc-thumb">
+                    <MediaThumb r={r} />
+                    <i className="num">{i + 1}</i>
+                  </span>
+                  <input
+                    className="form-input"
+                    maxLength={500}
+                    value={caps[r.id] ?? ''}
+                    placeholder={r.note || `给「${r.title}」写一句配文 / alt`}
+                    onChange={(e) => setCaps({ ...caps, [r.id]: e.target.value })}
+                  />
+                  {i > 0 && (
+                    <button className="btn sm ghost" title="设为封面（移到第一张）" onClick={() => void postSetCover(p.id, r.id)}>
+                      设为封面
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="field-block">
           <div className="field-head">
             <span className="field-label">从素材库添加</span>
@@ -1586,22 +1653,54 @@ function PostDrawer({ id }: { id: string }) {
         </div>
       </div>
       <div className="drawer-foot">
-        <button className="btn primary" onClick={() => postSave(p.id, title, body)}>
+        <button className="btn primary" onClick={() => void postSave(p.id, title, body, caps)}>
           <Icon name="check" />
           保存
         </button>
-        <button className="btn ghost" onClick={() => postCopy(p.id, title, body)}>
+        <button className="btn ghost" onClick={() => postCopy(p.id, title, body, caps)}>
           <Icon name="copy" />
           复制正文
         </button>
-        <button className="btn ghost" onClick={() => postExport(p.id, title, body)}>
+        <button className="btn ghost" onClick={() => void postExport(p.id, title, body, caps)}>
           <Icon name="download" />
-          导出 Markdown
+          导出 zip（Markdown + 图片）
         </button>
         <span className="grow" />
         <DangerButton label="删除" confirmLabel="再点一次删除" onConfirm={() => void postDel(p.id)} />
       </div>
     </>
+  );
+}
+
+/** 手机比例预览：封面 + 标题 + 正文 + 后面的配图（带配文），按 9:16 的小窗口排出来 */
+function PostPhonePreview({ title, body, items, caps, platform }: { title: string; body: string; items: Result[]; caps: Record<string, string>; platform: string }) {
+  const plat = POST_PLATFORMS.find((x) => x.k === platform);
+  const [cover, ...rest] = items;
+  return (
+    <div className="phone-wrap">
+      <div className="phone">
+        <div className="phone-bar" style={{ background: plat?.color || '#8A90A2' }}>
+          {plat?.n || '帖子'} · {plat?.label || '预览'}
+        </div>
+        <div className="phone-scroll">
+          {cover ? (
+            <div className="phone-cover">
+              <MediaThumb r={cover} />
+            </div>
+          ) : (
+            <div className="phone-cover empty">还没有配图</div>
+          )}
+          <div className="phone-title">{title || '（还没写标题）'}</div>
+          <div className="phone-body">{body || '（还没写正文）'}</div>
+          {rest.map((r) => (
+            <div key={r.id} className="phone-img">
+              <MediaThumb r={r} />
+              {(caps[r.id] || r.note) && <span>{caps[r.id] || r.note}</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

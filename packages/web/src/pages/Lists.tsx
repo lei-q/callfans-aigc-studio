@@ -6,6 +6,7 @@ import { setState, useStore } from '../store';
 import {
   adoptAll,
   adoptResult,
+  batchDownload,
   cancelJob,
   downloadResult,
   draftToLib,
@@ -308,6 +309,10 @@ function JobSub({ j }: { j: Job }) {
           <span className="grow" />
           {items.length > 0 && (
             <>
+              <button className="btn sm ghost" onClick={() => batchDownload(items.map((r) => r.id), j.name)}>
+                <Icon name="download" />
+                下载全部
+              </button>
               <button className="btn sm ghost" onClick={() => items.forEach((r) => toCanvas(r.id, true))}>
                 <Icon name="layers" />
                 全部放进画布
@@ -490,6 +495,10 @@ export function LibraryPage() {
           <input placeholder="搜索标题 / 提示词 / 标签" value={s.libSearch} onChange={(e) => setState((st) => void (st.libSearch = e.target.value))} />
         </div>
         <span className="grow" />
+        <button className="btn sm ghost" disabled={!list.length} onClick={() => setState((st) => void (st.libSelect = list.map((r) => r.id)))}>
+          <Icon name="check" />
+          全选当前 {list.length} 项
+        </button>
         <span className="tiny dim">共 {list.length} 项匹配</span>
       </div>
       {s.libSelect.length > 0 && (
@@ -497,8 +506,12 @@ export function LibraryPage() {
           <span className="lpb-n">
             已选 <b className="num">{s.libSelect.length}</b> 项
           </span>
-          <span className="tiny dim">选 ≥2 项就能打包成一条帖子</span>
+          <span className="tiny dim">选 ≥2 项可以打包成一条帖子；下载会打成一个 zip</span>
           <span className="grow" />
+          <button className="btn sm ghost" onClick={() => batchDownload(s.libSelect, '素材库')}>
+            <Icon name="download" />
+            批量下载
+          </button>
           <button className="btn sm ghost" onClick={() => setState((st) => void (st.libSelect = []))}>
             清空选择
           </button>

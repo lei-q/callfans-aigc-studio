@@ -190,6 +190,16 @@ export async function renderVideo(
   return { dur: Math.round(dur * 10) / 10 };
 }
 
+/** 从视频里取一帧存成 jpg */
+export async function renderFrame(ffmpeg: string, input: string, output: string, t: number, signal?: AbortSignal) {
+  const info = await probe(ffmpeg, input);
+  if (!info.hasVideo) throw new RenderError('这条素材不是视频文件', 400, '模拟产出或链接素材没有可取帧的视频流');
+  const at = clamp(t, 0, Math.max(0, info.dur - 0.05));
+  const r = await run(ffmpeg, ['-hide_banner', '-y', '-ss', sec(at), '-i', input, '-frames:v', '1', '-q:v', '2', output], 60_000, signal);
+  if (r.code !== 0 || !fs.existsSync(output)) throw failure(r, '取帧');
+  return { w: info.w, h: info.h, t: at };
+}
+
 export interface AudioRenderOps {
   in: number;
   out: number;

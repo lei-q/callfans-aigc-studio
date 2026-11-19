@@ -14,6 +14,9 @@ extraResources:
     filter: ["server.cjs", "sql-wasm.wasm"]
   - from: ../web/dist
     to: web
+  # MCP 服务脚本（零依赖）：「API 接入」页下载的 mcp.json 里指向它
+  - from: ../mcp/index.mjs
+    to: mcp/index.mjs
   - from: build/bin
     to: bin
 asar: true

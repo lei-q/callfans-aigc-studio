@@ -7,8 +7,8 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { ZodError } from 'zod';
 import type { AestheticItem, Board, OrderDto, PackDto, Post, Project, Result, ServerEvent, UsageRequest, UsageSummary } from '@aigc/shared';
-import { PROJECT_DOTS, uid } from '@aigc/shared';
-import { enhanceAgent, optimizePrompt } from './assist';
+import { POST_PLATFORMS, PROJECT_DOTS, ratioLabel, uid } from '@aigc/shared';
+import { enhanceAgent, optimizePrompt, postCopy } from './assist';
 import { CloudError } from './cloud/client';
 import { ConsumerError } from './account/consumer';
 import { OidcError } from './account/oidc';
@@ -16,8 +16,10 @@ import type { Core } from './core';
 import { mimeOfExt } from './core';
 import { linkPreview } from './linkPreview';
 import { settlePoints } from './points';
+import { buildCanvasContext } from './context';
 import { registerOpenApi } from './openapi';
-import { audioFormat, findFfmpeg, RenderError, renderAudio, renderVideo, serial } from './render';
+import { uniqueNames, zipStream, ZIP_MAX_BYTES } from './zip';
+import { audioFormat, findFfmpeg, RenderError, renderAudio, renderFrame, renderVideo, serial } from './render';
 import { HttpError } from './runner';
 import { safeEqual, sha256 } from './secrets';
 import * as S from './schemas';
@@ -435,14 +437,20 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   /** 编辑器「保存为新产出」：原素材不变，生成一条标记为已编辑的新产出 */
   app.post('/api/results/edited', async (req) => {
     const body = S.saveEditedSchema.parse(req.body);
-    const src = core.store.results.get(body.sourceId);
-    if (!src) throw new HttpError(404, '原素材不存在');
+    const found = body.sourceId ? core.store.results.get(body.sourceId) : undefined;
+    if (body.sourceId && !found) throw new HttpError(404, '原素材不存在');
+    /* 本地上传的图片没有产出记录：从零建一条（只支持图片），归到指定项目 */
+    if (!found && !(body.ws && core.store.projects.get(body.ws))) throw new HttpError(400, '没有原素材时需要指定项目');
+    if (!found && !body.dataUrl) throw new HttpError(400, '没有原素材时需要带图片数据');
+    const src: Result =
+      found ||
+      ({ id: '', job: null, type: 'image', ws: body.ws!, title: '', src: '', ratio: '1:1', model: 'local', seed: Math.floor(Math.random() * 90000), createdAt: 0, status: 'new', tags: [], dur: 0, home: 'library' } satisfies Result);
     let file = src.src;
     let thumb = src.thumb;
     let mime = src.mime;
     let css = body.edit.css;
     let dur = src.dur;
-    if (src.type === 'video' || src.type === 'audio') {
+    if (found && (src.type === 'video' || src.type === 'audio')) {
       /* 视频 / 音频：用 ffmpeg 真渲染，参数烘进新文件（不是只记一份参数） */
       const out = await renderEditedMedia(core, src, body);
       file = out.src;
@@ -467,6 +475,8 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
       src: file,
       thumb,
       mime,
+      /* 裁切后画幅变了：按成品的真实比例记，否则徽标、画布排版都还是原图的比例 */
+      ratio: body.ratio || src.ratio,
       dur,
       createdAt: Date.now(),
       status: 'new',
@@ -478,8 +488,101 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return { result: emitResult(r) };
   });
 
+  /** 本地上传的文件登记成产出（同一个文件只登记一次） */
+  app.post('/api/results/local', async (req) => {
+    const body = S.localResultSchema.parse(req.body);
+    if (!core.store.projects.get(body.ws)) throw new HttpError(404, '项目不存在');
+    const file = core.localPathOf(body.src);
+    if (!file || !fs.existsSync(file)) throw new HttpError(400, '文件不存在');
+    const exist = core.store.results.all().find((r) => r.src === body.src && r.ws === body.ws);
+    if (exist) return { result: exist };
+    const r: Result = {
+      id: uid('r'),
+      job: null,
+      type: body.type,
+      ws: body.ws,
+      title: body.title,
+      src: body.src,
+      mime: mimeOfExt(path.extname(file)),
+      ratio: body.ratio || '1:1',
+      model: 'local',
+      seed: Math.floor(Math.random() * 90000),
+      createdAt: Date.now(),
+      status: 'new',
+      tags: ['本地文件'],
+      dur: body.dur ?? 0,
+      home: 'canvas',
+    };
+    return { result: emitResult(r) };
+  });
+
+  /** 视频取帧：把某一秒的画面存成一条新的图片产出（原视频不变） */
+  app.post('/api/video/frame', async (req) => {
+    const body = S.videoFrameSchema.parse(req.body);
+    const src = core.store.results.get(body.sourceId);
+    if (!src) throw new HttpError(404, '原素材不存在');
+    if (src.type !== 'video') throw new HttpError(400, '只有视频可以取帧');
+    const ffmpeg = findFfmpeg();
+    if (!ffmpeg) throw new HttpError(501, '这台电脑上没有找到 ffmpeg，没法取帧', '安装包自带 ffmpeg；从源码运行时请先安装 ffmpeg，或用环境变量 AIGC_FFMPEG 指定路径');
+    const local = core.localPathOf(src.src);
+    const input = local ?? (/^https?:\/\//i.test(src.src) ? src.src : null);
+    if (!input || (local && !fs.existsSync(local))) throw new HttpError(400, '原素材文件不存在', '可能已被删除，或是只有链接的素材');
+    const out = core.newMediaFile('jpg');
+    try {
+      const f = await serial(() => renderFrame(ffmpeg, input, out.file, body.t));
+      const mm = `${Math.floor(f.t / 60)}:${String(Math.floor(f.t % 60)).padStart(2, '0')}`;
+      const r: Result = {
+        ...src,
+        id: uid('r'),
+        job: null,
+        type: 'image',
+        title: `${src.title.replace(/（已编辑）$/, '')} · ${mm} 帧`,
+        src: out.src,
+        thumb: out.src,
+        mime: 'image/jpeg',
+        ratio: ratioLabel(f.w, f.h),
+        dur: 0,
+        createdAt: Date.now(),
+        status: 'new',
+        isNew: true,
+        tags: ['视频取帧'],
+        home: 'library',
+        edit: undefined,
+      };
+      return { result: emitResult(r) };
+    } catch (e) {
+      await fs.promises.unlink(out.file).catch(() => {});
+      if (e instanceof RenderError) throw new HttpError(e.status, e.message, e.detail);
+      throw e;
+    }
+  });
+
   /** 收件箱「全部不收」：当前项目没取用的产出沉入草稿箱 */
   app.post('/api/inbox/:ws/drop', async (req) => ({ count: core.runner.settleInbox((req.params as { ws: string }).ws) }));
+
+  /** 批量下载：把选中的产出打成一个 zip（只打本机已有的文件；GET，浏览器直接当下载处理） */
+  app.get('/api/download/zip', async (req, reply) => {
+    const q = req.query as { ids?: string; name?: string };
+    const ids = [...new Set((q.ids || '').split(',').map((x) => x.trim()).filter(Boolean))].slice(0, 500);
+    if (!ids.length) throw new HttpError(400, '没有选中要下载的内容');
+    const picked: { name: string; file: string; size: number }[] = [];
+    for (const id of ids) {
+      const r = core.store.results.get(id);
+      const file = r ? core.localPathOf(r.src) : null;
+      if (!r || !file || !fs.existsSync(file)) continue;
+      picked.push({ name: `${r.title || r.id}${path.extname(file)}`, file, size: fs.statSync(file).size });
+    }
+    if (!picked.length) throw new HttpError(404, '选中的内容没有可下载的本机文件', '链接素材或已删除的产出没有本机文件');
+    const total = picked.reduce((n, p) => n + p.size, 0);
+    if (total > ZIP_MAX_BYTES || picked.some((p) => p.size >= 0xffffffff)) throw new HttpError(413, '一次打包太大了', '分几次下载，每次不超过 3.5GB');
+    const names = uniqueNames(picked.map((p) => p.name));
+    const base = (q.name || `AIGC-${picked.length}项`).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+    reply.header('Content-Type', 'application/zip');
+    reply.header('Content-Disposition', `attachment; filename="download.zip"; filename*=UTF-8''${encodeURIComponent(`${base}.zip`)}`);
+    reply.header('X-Zip-Count', String(picked.length));
+    reply.header('X-Zip-Skipped', String(ids.length - picked.length));
+    return reply.send(zipStream(picked.map((p, i) => ({ name: names[i], file: p.file }))));
+  });
 
   app.get('/api/download', async (req, reply) => {
     const q = req.query as { src?: string; name?: string };
@@ -565,6 +668,34 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     const p: Post = { ...body, id: (req.params as { id: string }).id, updatedAt: Date.now() };
     core.store.posts.put(p);
     return { post: p };
+  });
+  /** 导出帖子：zip 里是 index.md 和 images/，图片用相对路径，换台电脑也能直接打开（不依赖本机服务地址） */
+  app.get('/api/posts/:id/export', async (req, reply) => {
+    const p = core.store.posts.get((req.params as { id: string }).id);
+    if (!p) throw new HttpError(404, '帖子不存在');
+    const plat = POST_PLATFORMS.find((x) => x.k === p.platform);
+    const picked = p.items
+      .map((rid) => core.store.results.get(rid))
+      .filter((r): r is Result => !!r)
+      .map((r) => ({ r, file: core.localPathOf(r.src) }))
+      .filter((x) => !!x.file && fs.existsSync(x.file));
+    const names = uniqueNames(picked.map((x, i) => `${String(i + 1).padStart(2, '0')}-${x.r.title}${path.extname(x.file!)}`));
+    const lines = [`# ${p.title || '未命名帖子'}`, ''];
+    if (p.body) lines.push(p.body, '');
+    if (picked.length) {
+      lines.push('---', '');
+      picked.forEach((x, i) => {
+        const cap = p.captions?.[x.r.id]?.trim() || x.r.note || '';
+        lines.push(`![${cap || x.r.title}](images/${encodeURI(names[i])})`);
+        if (cap) lines.push(`*${cap}*`);
+        lines.push('');
+      });
+    }
+    lines.push('---', `目标平台：${plat ? plat.n : '未指定'} · 配图 ${picked.length} 张${picked.length < p.items.length ? `（另有 ${p.items.length - picked.length} 张没有本机文件，未导出）` : ''}`);
+    const base = (p.title || 'post').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+    reply.header('Content-Type', 'application/zip');
+    reply.header('Content-Disposition', `attachment; filename="post.zip"; filename*=UTF-8''${encodeURIComponent(`${base}.zip`)}`);
+    return reply.send(zipStream([{ name: 'index.md', data: Buffer.from(lines.join('\n'), 'utf8') }, ...picked.map((x, i) => ({ name: `images/${names[i]}`, file: x.file! }))]));
   });
   app.delete('/api/posts/:id', async (req) => {
     core.store.posts.del((req.params as { id: string }).id);
@@ -746,9 +877,25 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     const body = S.optimizeSchema.parse(req.body);
     return optimizePrompt(core, body.type, body.prompt);
   });
+  app.post('/api/assist/post-copy', async (req) => {
+    const body = S.postCopySchema.parse(req.body);
+    return postCopy(core, body);
+  });
   app.post('/api/assist/agent', async (req) => {
     const body = S.agentSchema.parse(req.body);
     return { enhanced: await enhanceAgent(core, body) };
+  });
+
+  /** MCP 服务脚本在哪：安装包里是 resources/mcp/index.mjs，源码运行时是 packages/mcp/index.mjs；找不到就是 null */
+  app.get('/api/mcp/info', async () => {
+    const candidates = [path.resolve(__dirname, '..', 'mcp', 'index.mjs'), path.resolve(__dirname, '..', '..', 'mcp', 'index.mjs'), path.resolve(__dirname, '..', '..', '..', 'mcp', 'index.mjs')];
+    return { path: candidates.find((c) => fs.existsSync(c)) || null };
+  });
+
+  /** 网页右键「复制画布上下文给 Agent」用：和 OpenAPI 同一份内容，只是走网页自己的会话鉴权 */
+  app.get('/api/canvas/context', async (req) => {
+    const ws = String((req.query as { ws?: string }).ws || '');
+    return buildCanvasContext(core, ws, `${req.protocol}://${req.headers.host}`);
   });
 
   /* ---------------- 本地 API Key（OpenAPI 鉴权用） ---------------- */

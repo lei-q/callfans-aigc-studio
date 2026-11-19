@@ -8,3 +8,4 @@ export * from './wallet';
 export * from './agent';
 export * from './api';
 export * from './update';
+export * from './canvasSize';

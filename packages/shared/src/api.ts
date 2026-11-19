@@ -89,3 +89,18 @@ export interface UploadReply {
 }
 
 export type { AudioUse };
+
+/** 帖子文案（AI 写标题 / 正文 / 标签）：只调真实文本模型，失败明确报错 */
+export interface PostCopyBody {
+  platform: string;
+  /** 已有的标题 / 正文（有就在此基础上改写，没有就从配图信息起草） */
+  title?: string;
+  body?: string;
+  /** 每张配图的描述：标题、原始提示词、已写的配文 */
+  images: { title: string; prompt?: string; caption?: string }[];
+}
+export interface PostCopyReply {
+  title: string;
+  body: string;
+  tags: string[];
+}

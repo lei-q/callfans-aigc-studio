@@ -25,6 +25,8 @@ export interface PlatformModel {
     per_video_second_by_resolution?: Record<string, number>;
     per_character?: number;
     per_audio_second?: number;
+    /** 实际结算折扣：0.8 = 8 折；per_* 都是折前上游标价 */
+    discount_rate?: number;
   } | null;
 }
 
@@ -49,6 +51,11 @@ const GATEWAY_TIMEOUT_MS = 120_000;
 
 /** 提示词辅助用的模型偏好；清单里没有就按标价取最便宜的 openai 协议对话模型 */
 const PREFERRED = ['deepseek-v4.1-flash-1017', 'claude-haiku-5-5', 'gpt-6-luna'];
+
+/** 折扣率只认 (0, 1] 的数字；平台没返回或给了不合理的值就当没有，界面据此显示「折扣率未返回」，不编数字 */
+export function validDiscount(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 1 ? v : null;
+}
 
 function costOf(m: PlatformModel) {
   return (m.pricing?.input_per_million ?? 0) + (m.pricing?.output_per_million ?? 0);
@@ -202,6 +209,7 @@ export class PlatformCatalog {
         perVideoSecondByResolution: m.pricing?.per_video_second_by_resolution ?? null,
         perCharacter: m.pricing?.per_character ?? null,
         perAudioSecond: m.pricing?.per_audio_second ?? null,
+        discountRate: validDiscount(m.pricing?.discount_rate),
       })),
       at: Date.now(),
     };

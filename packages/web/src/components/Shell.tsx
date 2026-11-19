@@ -198,6 +198,11 @@ export function Sidebar() {
           <span className="side-label">素材库</span>
           <span className="side-badge num">{lib.length}</span>
         </button>
+        <button className={`side-item ${s.page === 'projects' ? 'active' : ''}`} onClick={() => switchPage('projects')}>
+          <Icon name="layers" />
+          <span className="side-label">项目画板</span>
+          <span className="side-badge num">{s.projects.length}</span>
+        </button>
         <button className={`side-item ${s.page === 'aesthetic' ? 'active' : ''}`} onClick={() => switchPage('aesthetic')}>
           <Icon name="star" />
           <span className="side-label">审美库</span>
@@ -209,6 +214,10 @@ export function Sidebar() {
         <button className={`side-item ${s.page === 'models' ? 'active' : ''}`} onClick={() => switchPage('models')}>
           <Icon name="coins" />
           <span className="side-label">模型与价格</span>
+        </button>
+        <button className={`side-item ${s.page === 'api' ? 'active' : ''}`} onClick={() => switchPage('api')}>
+          <Icon name="link" />
+          <span className="side-label">API 接入</span>
         </button>
         <button className={`side-item ${s.page === 'settings' ? 'active' : ''}`} onClick={() => switchPage('settings')}>
           <Icon name="gear" />

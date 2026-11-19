@@ -704,6 +704,18 @@ function InboxBar({ results }: { results: ReturnType<typeof getState>['results']
         <span className="cvs-inbox-n num">{list.length} 项</span>
         <span className="grow" />
         <span className="cvs-inbox-hint">拖进画布留用，不拖的下次生成时进草稿箱</span>
+        {list.length > 1 && (
+          <button className="btn sm ghost" onClick={() => op.placeInboxBatch(false)}>
+            <Icon name="layers" />
+            整批放进画布
+          </button>
+        )}
+        {list.length > 1 && (
+          <button className="btn sm primary" onClick={() => op.placeInboxBatch(true)}>
+            <Icon name="grid" />
+            放进画布并成组
+          </button>
+        )}
         <button className="btn sm ghost" onClick={() => void op.dropInbox()}>
           <Icon name="trash" />
           全部不收

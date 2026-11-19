@@ -1,7 +1,9 @@
-import type { AgentEnhanceReply, AgentResult, Board, CanvasItem, CanvasView, MediaType, TextSize } from '@aigc/shared';
+import type { AgentEnhanceReply, AgentResult, Board, CanvasItem, CanvasView, MediaType, Result, TextSize } from '@aigc/shared';
 import {
   DIVERGE_AXES,
   DIVERGE_DEFAULT,
+  GROUP_AXES,
+  GROUP_DEFAULT,
   MAX_REFS,
   PLATFORM_DEFAULT,
   PLATFORMS,
@@ -10,6 +12,7 @@ import {
   agentParamText,
   agentReadBoard,
   clamp,
+  ratioLabel,
   fileKindOf,
   hostOf,
   isDirectVideo,
@@ -25,7 +28,7 @@ import {
 import { api } from '../lib/api';
 import { copyText, downloadText, pickFiles, readText, thumbOf } from '../lib/util';
 import { getState, setState, type State } from '../store';
-import { canAfford, refOfResult, uploadFiles, addToAesthetic, jobBody } from '../store/actions';
+import { addToAesthetic, batchDownload, canAfford, jobBody, refOfResult, uploadFiles } from '../store/actions';
 import { fixParams, releaseCanvasOrphans, silently } from '../store/data';
 import { boardOf, canvasHas, canvasItems, canvasLinks, canvasSelItems, emptyBoard, jobById, modelOf, resultById, savedToLib, wsShort } from '../store/selectors';
 import { toast, toastError } from '../store/toast';
@@ -83,13 +86,13 @@ function freeSpot(s: State) {
 }
 
 /** 把一条产出放进画布：收件箱里算「留用」，草稿箱里算「捞回来」 */
-export function keepResult(rid: string, at?: { x: number; y: number }) {
+export function keepResult(rid: string, at?: { x: number; y: number }, opts: { quiet?: boolean; linkFrom?: string } = {}): string | null {
   const s = getState();
   const r = resultById(s, rid);
-  if (!r) return;
+  if (!r) return null;
   if (canvasHas(s, rid)) {
-    toast('info', '已经在画布上了', r.title);
-    return;
+    if (!opts.quiet) toast('info', '已经在画布上了', r.title);
+    return null;
   }
   const from = r.home;
   /* 没指定落点（点「放进画布」）：放在当前视野中央，并错开已有元素，不要排到屏幕外 */
@@ -113,6 +116,8 @@ export function keepResult(rid: string, at?: { x: number; y: number }) {
     });
     /* 从某张图发散 / 适配出来的，拖进来时自动连回源元素——产出天然有结构 */
     if (j?.fromCvsId && b.items.some((x) => x.id === j.fromCvsId)) b.links.push({ id: uid('L'), from: j.fromCvsId, to: id });
+    /* 裁切 / 取帧得到的新元素：连回它的来源，来龙去脉一眼能看清 */
+    else if (opts.linkFrom && b.items.some((x) => x.id === opts.linkFrom)) b.links.push({ id: uid('L'), from: opts.linkFrom, to: id });
   });
   setState((st) => {
     st.canvasOpen = true;
@@ -120,7 +125,196 @@ export function keepResult(rid: string, at?: { x: number; y: number }) {
     if (res && (from === 'inbox' || from === 'draft')) res.home = 'canvas';
   });
   if (from === 'inbox' || from === 'draft') void api.patch(`/api/results/${rid}`, { home: 'canvas' }).catch(() => {});
-  toast('success', from === 'draft' ? '已从草稿箱捞回画布' : '已放进画布', `${r.title} · 满意后可以保存到素材库`);
+  if (!opts.quiet) toast('success', from === 'draft' ? '已从草稿箱捞回画布' : '已放进画布', `${r.title} · 满意后可以保存到素材库`);
+  return id;
+}
+
+/**
+ * 裁切 / 取帧都要「产出」做来源：本地上传的素材没有产出记录，这里先登记一条（同一文件只登记一次），
+ * 并把产出 id 写回画布元素。拿不到就提示原因并返回 null。
+ */
+export async function ensureRid(itemId: string): Promise<string | null> {
+  const s = getState();
+  const it = canvasItems(s).find((x) => x.id === itemId);
+  if (!it || it.kind !== 'media') return null;
+  if (it.rid && resultById(s, it.rid)) return it.rid;
+  if (!it.src || !it.src.startsWith('/files/')) {
+    toast('warn', '这个素材没有本机文件', '只有生成的产出和本地上传的文件才能裁切 / 取帧；链接素材请先下载到本地');
+    return null;
+  }
+  try {
+    const { result } = await api.post<{ result: Result }>('/api/results/local', {
+      src: it.src,
+      ws: s.ws,
+      type: it.type || 'image',
+      title: it.t || '本地素材',
+      ratio: it.ar ? ratioLabel(1, it.ar) : undefined,
+      dur: it.dur,
+    });
+    setState((st) => {
+      if (!st.results.some((x) => x.id === result.id)) st.results.unshift(result);
+    });
+    silently(() =>
+      mutateBoard((b) => {
+        const x = b.items.find((y) => y.id === itemId);
+        if (x) x.rid = result.id;
+      }),
+    );
+    return result.id;
+  } catch (e) {
+    toastError(e, '没能登记这个素材');
+    return null;
+  }
+}
+
+/** 把裁切 / 取帧得到的新产出摆在来源元素下面一排，并连回来源 */
+export function placeDerived(srcItemId: string, results: Result[]) {
+  const it = canvasItems(getState()).find((x) => x.id === srcItemId);
+  if (!it) return;
+  const y = it.y + cvsItemH(it) + 28;
+  results.forEach((r, i) => {
+    setState((st) => {
+      if (!st.results.some((x) => x.id === r.id)) st.results.unshift(r);
+    });
+    keepResult(r.id, { x: it.x + i * (CVS_W + 20), y }, { quiet: true, linkFrom: srcItemId });
+  });
+}
+
+export function cropOpen() {
+  const it = selected()[0];
+  setState((s) => void (s.cvsMenu = null));
+  if (!it || it.kind !== 'media' || it.type !== 'image') {
+    toast('info', '先选中一张图片');
+    return;
+  }
+  setState((s) => void ((s.crop = { srcId: it.id }), (s.diverge = null), (s.platforms = null)));
+}
+
+export function compareOpen() {
+  const sel = selected().filter((i) => i.kind === 'media');
+  setState((s) => void (s.cvsMenu = null));
+  if (sel.length < 2) return toast('info', '先选 2 到 4 个素材', '按住 Shift 点选，或者框选');
+  if (sel.length > 4) return toast('info', '一次最多并排 4 个', '少选几个，对比起来才看得清');
+  setState((s) => void (s.compare = { ids: sel.map((i) => i.id) }));
+}
+
+export function groupOpen() {
+  const it = selected()[0];
+  setState((s) => void (s.cvsMenu = null));
+  const s = getState();
+  if (!it || it.kind !== 'media' || it.type !== 'image') return toast('info', '先选中一张图片作为锚点', '组图以它的主体和整体风格为准');
+  if (!sourceBase(s, it).trim()) return toast('warn', '这张图没有可用的描述', '换一张生成出来的图当锚点，或先在创作页写好描述');
+  setState((st) => void (st.group = { srcId: it.id, axes: [...GROUP_DEFAULT], adds: {} }));
+}
+
+export function checkOpen() {
+  const sel = selected().filter((i) => i.kind === 'media');
+  setState((s) => void (s.cvsMenu = null));
+  if (sel.length < 2) return toast('info', '先选 2 个以上素材', '按住 Shift 点选，或框选一组');
+  setState((s) => void (s.check = { ids: sel.map((i) => i.id) }));
+}
+
+/** 提交组图：锚点作参考图，每条变化轴出一张；全部连回锚点 */
+export async function groupRun() {
+  const s = getState();
+  const d = s.group;
+  const it = d ? canvasItems(s).find((i) => i.id === d.srcId) : undefined;
+  if (!d || !it || !d.axes.length) return false;
+  const base = sourceBase(s, it).replace(/[。.]+$/, '');
+  const p = s.params.image;
+  const unit = singleUnitCost('image', { ...p, count: 1 }, modelOf(s, p.model));
+  const axes = GROUP_AXES.filter((a) => d.axes.includes(a.k));
+  const total = round1(unit * axes.length);
+  if (!canAfford(s, total)) {
+    toast('warn', '点数不够出这么多张', `需要约 ${total} 点，当前余额 ${s.wallet?.balance ?? 0} 点`);
+    return false;
+  }
+  const ref = refFromItem(s, it);
+  const tpl = jobBody(s, 'image');
+  const bodies = axes.map((a) => ({
+    ...tpl,
+    refs: ref ? [{ ...ref, w: 0.85 }] : [],
+    prompt: `${base}。${(d.adds[a.k] ?? a.add).trim()}。保持主体、产品细节与整体风格和参考图一致。`,
+    name: `组图 · ${a.n}`,
+    divergeAxis: a.n,
+    fromCvsId: it.id,
+    count: 1,
+  }));
+  try {
+    await api.post<{ jobs: Job[] }>('/api/jobs', { jobs: bodies });
+    setState((st) => {
+      st.group = null;
+      st.canvasSel = [];
+    });
+    toast('success', `已排队 ${axes.length} 张`, `${total} 点（平台渠道以实际用量为准）；完成后在顶部收件箱点「整批放进画布并成组」`);
+    return true;
+  } catch (e) {
+    toastError(e, '没能加入队列');
+    return false;
+  }
+}
+
+/** 收件箱里这一批（发散 / 组图 / 适配）一次摆进画布：排在来源元素下面、连回来源；group 为 true 时连来源一起圈成一组 */
+export function placeInboxBatch(group: boolean) {
+  const s = getState();
+  const list = s.results.filter((r) => r.home === 'inbox' && r.ws === s.ws);
+  if (!list.length) return;
+  const srcId = jobById(s, list[0].job)?.fromCvsId;
+  const src = srcId ? canvasItems(s).find((i) => i.id === srcId) : undefined;
+  const sorted = [...list].sort((a, b) => a.createdAt - b.createdAt);
+  const startX = src ? src.x : dropPoint(null, null).x;
+  const y = src ? src.y + cvsItemH(src) + 40 : dropPoint(null, null).y;
+  const placed: string[] = [];
+  sorted.forEach((r, i) => {
+    const id = keepResult(r.id, { x: startX + (i % 4) * (CVS_W + 24), y: y + Math.floor(i / 4) * 230 }, { quiet: true });
+    if (id) placed.push(id);
+  });
+  if (group && placed.length) {
+    const members = canvasItems(getState()).filter((i) => placed.includes(i.id) || i.id === srcId);
+    if (members.length >= 2) {
+      const pad = 26;
+      const head = 30;
+      const x1 = Math.min(...members.map((i) => i.x)) - pad;
+      const y1 = Math.min(...members.map((i) => i.y)) - pad - head;
+      const x2 = Math.max(...members.map((i) => i.x + cvsItemW(i))) + pad;
+      const y2 = Math.max(...members.map((i) => i.y + cvsItemH(i))) + pad;
+      mutateBoard((b) => void b.items.unshift({ id: uid('c'), kind: 'group', t: `${src?.t || '组图'} · 一组`, x: Math.round(x1), y: Math.round(y1), w: Math.round(x2 - x1), h: Math.round(y2 - y1 + head) }));
+    }
+  }
+  setState((st) => void ((st.canvasOpen = true), (st.canvasSel = placed)));
+  toast('success', `已放进画布 ${placed.length} 张`, group ? '已和锚点圈成一组，可以右键「一致性检查」' : '已连回来源');
+}
+
+export function annotOpen() {
+  const it = selected()[0];
+  setState((s) => void (s.cvsMenu = null));
+  if (!it || it.kind !== 'media' || it.type !== 'image' || !it.src) return toast('info', '先选中一张图片');
+  if (!it.src.startsWith('/files/') && !/^https?:\/\//.test(it.src)) return toast('info', '这张图没有可用的文件');
+  setState((s) => void (s.annot = { srcId: it.id }));
+}
+
+export function regenOpen() {
+  const it = selected()[0];
+  setState((s) => void (s.cvsMenu = null));
+  const s = getState();
+  const r = it?.kind === 'media' ? resultById(s, it.rid) : undefined;
+  const j = r ? jobById(s, r.job) : undefined;
+  if (!it || !j) {
+    toast('info', '这个素材没有可改的原任务', '只有生成出来的素材才能改参数再生成；本地上传的、编辑器里改出来的没有');
+    return;
+  }
+  if (j.type === 'audio') return toast('info', '音频请回创作页改参数');
+  setState((st) => void (st.regen = { srcId: it.id }));
+}
+
+export function vtoolOpen() {
+  const it = selected()[0];
+  setState((s) => void (s.cvsMenu = null));
+  if (!it || it.kind !== 'media' || it.type !== 'video') {
+    toast('info', '先选中一个视频');
+    return;
+  }
+  setState((s) => void ((s.vtool = { srcId: it.id }), (s.diverge = null), (s.platforms = null)));
 }
 
 const ratioAr = (ratio: string) => {
@@ -343,6 +537,29 @@ export function deleteSel() {
   dropTransients(new Set(ids));
   releaseCanvasOrphans();
   toast('info', `已移除 ${ids.length} 个元素`, hadGroup ? '分组框移除了，组里的元素都还在画板上' : '素材库里的产出不受影响');
+}
+
+/** 把当前画布整理成外部 Agent 能读懂的 JSON 复制到剪贴板（和 MCP get_canvas_context 同一份） */
+export async function copyCanvasContext() {
+  const s = getState();
+  setState((st) => void (st.cvsMenu = null));
+  try {
+    const ctx = await api.get<{ summary: string }>(`/api/canvas/context?ws=${encodeURIComponent(s.ws)}`);
+    if (copyText(JSON.stringify(ctx, null, 2))) {
+      toast('success', '已复制画布上下文', `${ctx.summary}。里面有提示词和本机地址，只发给你信任的 Agent`);
+    } else toast('warn', '复制失败', '浏览器不允许写剪贴板，换个浏览器或手动复制');
+  } catch (e) {
+    toastError(e, '读取画布上下文失败');
+  }
+}
+
+/** 把选中的、来自生成产出的素材打成一个 zip 下载 */
+export function downloadSel() {
+  const rids = selected()
+    .map((i) => i.rid)
+    .filter((x): x is string => !!x);
+  setState((s) => void (s.cvsMenu = null));
+  batchDownload(rids, '画布素材');
 }
 
 export function duplicateSel() {
