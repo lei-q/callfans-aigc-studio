@@ -1095,7 +1095,7 @@ body.cvs-acting .cvs-el { cursor: grabbing; }
   transition: box-shadow .16s;
 }
 .cvs-media:hover { box-shadow: 0 6px 20px rgba(15, 17, 26, .22), 0 0 0 1px rgba(15, 17, 26, .08); }
-.cvs-media img { width: 100%; height: auto; object-fit: cover; display: block; pointer-events: none; }
+.cvs-media img { width: 100%; height: auto; object-fit: contain; display: block; pointer-events: none; }
 /* 标题只在悬停时浮出来，静止状态就是一张纯粹的参考图 */
 .cvs-media .cvs-cap {
   position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 8px 6px;
@@ -1360,7 +1360,7 @@ body.cvs-space .cvs-el { cursor: grab; }
 .cvs-draw.sel { box-shadow: 0 0 0 1px var(--primary); border-radius: 6px; }
 
 .cvs-pen-preview { position: absolute; inset: 0; pointer-events: none; z-index: 9; width: 100%; height: 100%; }
-body.cvs-acting .cvs-viewport { cursor: crosshair; }
+body.cvs-marqueeing .cvs-viewport, body.cvs-acting .cvs-viewport.pen-on { cursor: crosshair; }
 .cvs-penbar {
   display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 12px;
   border-bottom: 1px solid var(--border); background: linear-gradient(135deg, #FBF9FF, var(--surface));
@@ -1385,7 +1385,7 @@ body.cvs-acting .cvs-viewport { cursor: crosshair; }
 .cvs-audio { display: flex; align-items: center; padding: 0 10px; background: var(--surface-2); }
 .cvs-audio-wave { display: flex; align-items: center; gap: 2px; width: 100%; height: 46%; }
 .cvs-audio-wave i { flex: 1; min-width: 1px; background: var(--t4); border-radius: 1px; }
-.cvs-media video { width: 100%; display: block; object-fit: cover; background: #0F1118; }
+.cvs-media video { width: 100%; display: block; object-fit: contain; background: #0F1118; }
 .cvs-play {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: 30px; height: 30px; border-radius: 50%; background: rgba(23, 26, 35, .62);

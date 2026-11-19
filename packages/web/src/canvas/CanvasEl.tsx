@@ -1,10 +1,10 @@
-import { memo, useLayoutEffect, useRef, type CSSProperties } from 'react';
+import { memo, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { CanvasItem } from '@aigc/shared';
 import { FILE_KINDS, TYPES, hostOf, humanSize, postPlatformOf, seededSeries, videoPlatformOf } from '@aigc/shared';
 import { Icon } from '../components/common';
 import { setState } from '../store';
 import { CVS_H_FILE, CVS_H_POST, CVS_H_WEB, TEXT_MAX_W, cvsItemAR, cvsItemH, cvsItemW, cvsLayer, cvsTransform } from './geometry';
-import { keepAesthetic, measureText, openParamsPop, removeOne, setCover, setGroupName, setItemText } from './ops';
+import { fitMediaAr, keepAesthetic, measureText, openParamsPop, removeOne, setCover, setGroupName, setItemText } from './ops';
 
 interface Props {
   it: CanvasItem;
@@ -204,25 +204,7 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
   return (
     <div className={cls('media', `${saved ? 'saved' : ''} ${anchor ? 'anchor' : ''}`)} data-id={it.id} style={common}>
       {showVideo ? (
-        <>
-          <video
-            className="cvs-video"
-            src={it.src}
-            muted
-            loop
-            playsInline
-            preload="metadata"
-            style={{ aspectRatio: `${1 / ar}` }}
-            onDoubleClick={(e) => {
-              const v = e.currentTarget;
-              if (v.paused) void v.play();
-              else v.pause();
-            }}
-          />
-          <span className="cvs-play">
-            <Icon name="play" />
-          </span>
-        </>
+        <MediaVideo id={it.id} src={it.src!} ar={ar} />
       ) : type === 'audio' && !it.thumb ? (
         <div className="cvs-audio" style={{ height: Math.round(w * ar) }}>
           <div className="cvs-audio-wave">
@@ -232,7 +214,13 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
           </div>
         </div>
       ) : (
-        <img src={it.thumb || it.src} alt={it.t} draggable={false} style={{ aspectRatio: `${1 / ar}` }} />
+        <img
+          src={it.thumb || it.src}
+          alt={it.t}
+          draggable={false}
+          style={{ aspectRatio: `${1 / ar}` }}
+          onLoad={(e) => fitMediaAr(it.id, e.currentTarget.naturalHeight / e.currentTarget.naturalWidth)}
+        />
       )}
       <span className={`cvs-kind k-${type}`}>
         <Icon name={TYPES[type].ic} />
@@ -264,6 +252,39 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
     </div>
   );
 });
+
+/* 画布里的视频：容器比例以文件真实宽高为准（记录里的比例可能缺失或不准，按它排版会把画面裁掉）；
+   双击播放 / 暂停，播放中把居中的播放图标藏起来 */
+function MediaVideo({ id, src, ar }: { id: string; src: string; ar: number }) {
+  const [playing, setPlaying] = useState(false);
+  return (
+    <>
+      <video
+        className="cvs-video"
+        src={src}
+        muted
+        loop
+        playsInline
+        preload="metadata"
+        style={{ aspectRatio: `${1 / ar}` }}
+        onLoadedMetadata={(e) => fitMediaAr(id, e.currentTarget.videoHeight / e.currentTarget.videoWidth)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onDoubleClick={(e) => {
+          const v = e.currentTarget;
+          if (v.paused) void v.play().catch(() => {});
+          else v.pause();
+        }}
+      />
+      {!playing && (
+        <span className="cvs-play">
+          <Icon name="play" />
+        </span>
+      )}
+    </>
+  );
+}
 
 /* 分组名可编辑：文本由我们自己写进 DOM，React 只认这个空 span。
    可编辑节点里的文本节点会被浏览器（输入法、全选替换）整体换掉，若 React 也管着这些节点，

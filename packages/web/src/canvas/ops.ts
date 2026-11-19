@@ -182,6 +182,19 @@ export async function addLocalFiles(files: File[], clientX: number | null, clien
   toast('success', `已放进画布：${Object.keys(counts).map((k) => `${counts[k]} 个${name(k)}`).join(' · ')}`, '本地文件保存在本机，不会进素材库');
 }
 
+/** 媒体加载后按文件真实宽高比纠正元素比例；差异很小就不动，避免无谓写回 */
+export function fitMediaAr(id: string, ar: number) {
+  if (!ar || !isFinite(ar)) return;
+  const cur = boardOf(getState()).items.find((x) => x.id === id);
+  if (!cur || (cur.ar && Math.abs(cur.ar - ar) < 0.01)) return;
+  silently(() =>
+    mutateBoard((b) => {
+      const x = b.items.find((y) => y.id === id);
+      if (x) x.ar = Math.round(ar * 1000) / 1000;
+    }),
+  );
+}
+
 function probeMedia(it: CanvasItem) {
   if (it.kind !== 'media' || !it.src) return;
   const apply = (ar?: number, dur?: number) =>
