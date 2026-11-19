@@ -7,6 +7,7 @@ import { getState, setState, useStore } from '../store';
 import { canAfford, uploadFiles } from '../store/actions';
 import { canvasItems, modelOf, modelsFor } from '../store/selectors';
 import { toast, toastError } from '../store/toast';
+import { autoSnapshot } from './ops';
 import { annotPrompt, boxAnnot, brushAnnot, pointAnnot, type Annot } from './annot';
 
 /* ============================================================================
@@ -137,6 +138,7 @@ export function AnnotModal() {
     if (!canAfford(getState(), total)) return toast('warn', '点数不够', `需要约 ${total} 点，当前余额 ${getState().wallet?.balance ?? 0} 点`);
     setBusy(true);
     try {
+      autoSnapshot(`批注改图前 · ${usable.length} 处`);
       const blob = await renderOverlay(img, annots.filter((a) => a.text.trim()));
       const [up] = await uploadFiles([new File([blob], `批注示意-${it.id}.jpg`, { type: 'image/jpeg' })]);
       const body: CreateJobBody = {

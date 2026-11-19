@@ -4,6 +4,7 @@ import { RESOS, VIDEO_RATIOS, RATIOS, VIDEO_RES, round1, singleUnitCost } from '
 import { Icon } from '../components/common';
 import { api } from '../lib/api';
 import { getState, setState, useStore } from '../store';
+import { autoSnapshot } from './ops';
 import { canAfford } from '../store/actions';
 import { canvasItems, jobById, modelOf, modelsFor, resultById } from '../store/selectors';
 import { toast, toastError } from '../store/toast';
@@ -40,6 +41,7 @@ export function RegenModal() {
     if (!canAfford(getState(), total)) return toast('warn', '点数不够', `需要约 ${total} 点，当前余额 ${getState().wallet?.balance ?? 0} 点`);
     setBusy(true);
     try {
+      autoSnapshot('改参数再生成前');
       const body: CreateJobBody = {
         type,
         ws: getState().ws,

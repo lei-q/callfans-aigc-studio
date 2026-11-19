@@ -377,6 +377,46 @@ describe('画布上下文接口', () => {
   });
 });
 
+describe('项目快照 / 批注 / 上下文包', () => {
+  it('快照只读回看、恢复为新项目不覆盖当前；自动快照有上限；批注持久化；上下文包含全部文件', async () => {
+    const core = await makeCore();
+    await login(core);
+    const ws = core.store.projects.all()[0].id;
+    const j = core.runner.create({ type: 'image', ws, model: 'cloud:g-img-1', prompt: '一杯咖啡', refs: [], ratio: '1:1', count: 1, res: '2k' });
+    const rid = (await waitJob(core, j.id)).results[0];
+    const board = (n: number) => ({ items: Array.from({ length: n }, (_, i) => ({ id: `c${i}`, kind: 'media' as const, type: 'image' as const, rid, src: core.store.results.get(rid)!.src, x: i * 10, y: 0 })), links: [], view: { x: 0, y: 0, k: 1 }, anchor: null });
+    core.store.saveBoard(ws, board(2));
+    const app = await buildApp(core);
+    const H = { host: 'localhost', 'x-aigc-client': '1' };
+
+    const snap = (await app.inject({ method: 'POST', url: '/api/snapshots', headers: H, payload: { ws, name: '定稿前' } })).json().snapshot;
+    expect(snap).toMatchObject({ name: '定稿前', auto: false, items: 2 });
+    core.store.saveBoard(ws, board(5));
+    const restored = (await app.inject({ method: 'POST', url: `/api/snapshots/${snap.id}/restore`, headers: H })).json();
+    expect(restored.project.name).toContain('快照 定稿前');
+    expect(restored.board.items).toHaveLength(2);
+    expect(core.store.board(ws).items).toHaveLength(5); /* 当前画布不动 */
+
+    for (let i = 0; i < 33; i++) await app.inject({ method: 'POST', url: '/api/snapshots', headers: H, payload: { ws, name: `auto${i}`, auto: true } });
+    const list = (await app.inject({ method: 'GET', url: `/api/snapshots?ws=${ws}`, headers: H })).json().snapshots as { auto: boolean }[];
+    expect(list.filter((x) => x.auto)).toHaveLength(30);
+    expect(list.filter((x) => !x.auto)).toHaveLength(1); /* 手动的不被清理 */
+
+    const ann = { c0: [{ id: 1, kind: 'box', x: 0.1, y: 0.1, w: 0.2, h: 0.2, text: '换成红色' }] };
+    expect((await app.inject({ method: 'PUT', url: `/api/annotations/${ws}`, headers: H, payload: ann })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/annotations', headers: H })).json().annotations[ws].c0[0].text).toBe('换成红色');
+
+    core.store.posts.put({ id: 'P9', ws, title: '秋日', body: 'x', items: [rid], platform: 'xhs', updatedAt: 1 });
+    const zip = await app.inject({ method: 'GET', url: `/api/projects/${ws}/context-pack`, headers: { host: 'localhost' } });
+    expect(zip.statusCode).toBe(200);
+    const raw = zip.rawPayload.toString('utf8');
+    for (const f of ['README.md', 'project.json', 'provenance.json', 'decisions.json', 'snapshots/', 'posts/']) expect(raw).toContain(f);
+    expect(raw).toContain('换成红色'); /* 批注进了 decisions.json */
+    expect(raw).toContain('一杯咖啡'); /* 提示词进了 provenance.json */
+    await app.close();
+  });
+});
+
 describe('决策：充值开放与内容审核', () => {
   async function withCloud(opts: Parameters<typeof startMockCloud>[0], fn: (c: MockCloudHandle) => Promise<void>) {
     const c = await startMockCloud({ jobMs: 60, ...opts });

@@ -115,6 +115,18 @@ export async function boot() {
       lastSnap.set(ws, snapOf(board));
     }
     for (const ws of keep.keys()) scheduleSave(ws);
+    /* 批注：服务端存着的先灌回来（和刷新前一样继续标） */
+    void api
+      .get<{ annotations: Record<string, Record<string, import('../canvas/annot').Annot[]>> }>('/api/annotations')
+      .then((r) => {
+        const merged: Record<string, import('../canvas/annot').Annot[]> = {};
+        for (const [ws, m] of Object.entries(r.annotations)) {
+          annotSaved.set(ws, JSON.stringify(m));
+          Object.assign(merged, m);
+        }
+        if (Object.keys(merged).length) setState((st) => void (st.annotCache = { ...merged, ...st.annotCache }));
+      })
+      .catch(() => {});
     startWalletPoll();
     if (!subscribed) {
       subscribed = true;
@@ -308,8 +320,27 @@ export function startPersistence() {
       }
     }
     if (UI_KEYS.some((k) => s[k] !== prev[k])) scheduleUi();
+    if (s.annotCache !== prev.annotCache) scheduleAnnots();
   });
 }
+
+/* 批注也要落盘：上下文包要用，刷新后也不该丢。按项目拆开存，key 是画布元素 id */
+let annotTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleAnnots() {
+  if (annotTimer) clearTimeout(annotTimer);
+  annotTimer = setTimeout(() => {
+    const s = getState();
+    for (const [ws, board] of Object.entries(s.boards)) {
+      const ids = new Set(board.items.map((i) => i.id));
+      const mine = Object.fromEntries(Object.entries(s.annotCache).filter(([id, list]) => ids.has(id) && list.length));
+      const key = JSON.stringify(mine);
+      if (annotSaved.get(ws) === key) continue;
+      annotSaved.set(ws, key);
+      api.put(`/api/annotations/${ws}`, mine).catch(() => annotSaved.delete(ws));
+    }
+  }, 700);
+}
+const annotSaved = new Map<string, string>();
 
 let uiTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleUi() {

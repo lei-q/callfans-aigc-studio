@@ -38,6 +38,7 @@ export function menuItems(): MenuEntry[] {
     items.push({ t: '新建文字', run: op.newText });
     items.push({ t: '把画板上的东西归为一组', run: op.groupAll });
     if (canvasItems(s).length) items.push({ t: '复制画布上下文给 Agent', run: () => void op.copyCanvasContext() });
+    items.push({ t: '项目快照 / 导出上下文包…', run: op.snapshotsOpen });
     if (canvasItems(s).length) {
       items.push({ sep: true });
       items.push({ t: s.canvasConfirm ? '再点一次确认清空' : '清空画板', danger: true, run: op.canvasClear });

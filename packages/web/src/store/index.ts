@@ -134,6 +134,7 @@ export interface State {
   compare: { ids: string[] } | null;
   regen: { srcId: string } | null;
   annot: { srcId: string } | null;
+  snapOpen: boolean;
   group: { srcId: string; axes: string[]; adds: Record<string, string> } | null;
   check: { ids: string[] } | null;
   /** 批注缓存：画布元素 id → 批注；只在本次会话里，生成提交后清掉 */
@@ -241,6 +242,7 @@ export const initialState: State = {
   compare: null,
   regen: null,
   annot: null,
+  snapOpen: false,
   group: null,
   check: null,
   annotCache: {},

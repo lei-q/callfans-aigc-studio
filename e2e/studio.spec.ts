@@ -537,6 +537,54 @@ test('组图：锚点出多张、整批放进画布并成组，一致性检查�
   await expect(page.locator('.proj-card', { hasText: '新项目 E2E' })).toHaveCount(1);
 });
 
+test('项目快照：保存 / 恢复为新项目（不覆盖当前）、批注刷新后还在、导出上下文包', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await generate(page, '1 张');
+  const cards = page.locator('.cvs-inbox-card');
+  await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  await cards.first().locator('.cvs-inbox-add').click();
+  const media = page.locator('#cvsWorld .cvs-el.cvs-media');
+  await expect(media).toHaveCount(1);
+
+  /* 标一处批注但不提交 → 刷新后角标还在（批注已落盘） */
+  await media.first().click({ button: 'right', position: { x: 8, y: 8 } });
+  await page.locator('.cvs-menu-item', { hasText: '批注改图' }).click();
+  await page.locator('.annot-tools .btn', { hasText: '点选' }).click();
+  const sb = (await page.locator('.annot-stage').boundingBox())!;
+  await page.mouse.click(sb.x + sb.width * 0.5, sb.y + sb.height * 0.5);
+  await page.locator('.annot-row input').fill('换成暖色调');
+  await page.locator('.annot-modal .icon-btn').first().click();
+  await page.waitForTimeout(1200);
+  await page.reload();
+  await expect(page.locator('.composer-card')).toBeVisible();
+  await expect(page.locator('#cvsWorld .cvs-el.cvs-media .cvs-annot-n')).toHaveText(/✎ 1/);
+
+  /* 手动快照 → 清空画板 → 恢复为新项目：新项目里有那 1 个元素，原项目仍是空的 */
+  const box = (await page.locator('#cvsViewport').boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30, { button: 'right' });
+  await page.locator('.cvs-menu-item', { hasText: '项目快照' }).click();
+  await page.locator('.snap-new input').fill('清空前');
+  await page.locator('.snap-new .btn', { hasText: '保存快照' }).click();
+  await expect(page.locator('.snap-row', { hasText: '清空前' })).toBeVisible();
+  const [zip] = await Promise.all([page.waitForEvent('download'), page.locator('.snap-modal .btn', { hasText: '导出上下文包' }).click()]);
+  expect(zip.suggestedFilename()).toMatch(/上下文包\.zip$/);
+  expect(fs.readFileSync((await zip.path())!).subarray(0, 4).toString('hex')).toBe('504b0304');
+  await page.locator('.snap-modal .icon-btn').first().click();
+
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  await expect(page.locator('#cvsWorld .cvs-el')).toHaveCount(0);
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30, { button: 'right' });
+  await page.locator('.cvs-menu-item', { hasText: '项目快照' }).click();
+  await page.locator('.snap-row', { hasText: '清空前' }).locator('button', { hasText: '恢复为新项目' }).click();
+  await expect(page.locator('#cvsWorld .cvs-el.cvs-media')).toHaveCount(1);
+  await page.locator('.ws-btn').click();
+  await expect(page.locator('.ws-btn')).toContainText('快照 清空前');
+});
+
 test('API 接入：创建 Key、下载 mcp.json（带完整 Key）、Key 能读画布上下文、停用后被拒', async ({ page }) => {
   await open(page);
   await ensureLogin(page);

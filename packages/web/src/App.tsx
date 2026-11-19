@@ -19,6 +19,7 @@ import { RegenModal } from './canvas/RegenModal';
 import { AnnotModal } from './canvas/AnnotModal';
 import { GroupModal } from './canvas/GroupModal';
 import { CheckModal } from './canvas/CheckModal';
+import { SnapshotModal } from './canvas/SnapshotModal';
 
 function Main() {
   const page = useStore((s) => s.page);
@@ -236,6 +237,7 @@ export function App() {
       <AnnotModal />
       <GroupModal />
       <CheckModal />
+      <SnapshotModal />
       <Toasts />
       <UpdatePrompt />
       <UpdateFloat />

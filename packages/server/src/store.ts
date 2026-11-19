@@ -1,4 +1,6 @@
 import type {
+  Snapshot,
+  StoredAnnot,
   AccountConfig,
   AccountProvider,
   AestheticItem,
@@ -108,6 +110,7 @@ export class Store {
   readonly aesthetic: Collection<AestheticItem>;
   readonly posts: Collection<Post>;
   readonly apiKeys: Collection<StoredApiKey>;
+  readonly snapshots: Collection<Snapshot>;
 
   constructor(readonly db: Db) {
     this.projects = new Collection(db, 'projects');
@@ -117,6 +120,7 @@ export class Store {
     this.aesthetic = new Collection(db, 'aesthetic');
     this.posts = new Collection(db, 'posts');
     this.apiKeys = new Collection(db, 'api_keys');
+    this.snapshots = new Collection(db, 'snapshots');
   }
 
   get settings(): SettingsInternal {
@@ -226,6 +230,17 @@ export class Store {
       return { ...rest, anchor: rest.anchor ?? null };
     }
     return { items: [], links: [], view: { x: 40, y: 40, k: 1 }, anchor: null };
+  }
+
+  /** 批注：项目 → 画布元素 id → 批注列表（整份存 kv，量很小） */
+  annotations(): Record<string, Record<string, StoredAnnot[]>> {
+    return this.db.kvGet('annotations') || {};
+  }
+  setAnnotations(ws: string, v: Record<string, StoredAnnot[]>) {
+    const all = this.annotations();
+    if (Object.keys(v).length) all[ws] = v;
+    else delete all[ws];
+    this.db.kvSet('annotations', all);
   }
 
   saveBoard(ws: string, board: Board) {

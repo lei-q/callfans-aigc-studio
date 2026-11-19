@@ -198,6 +198,17 @@ export function compareOpen() {
   setState((s) => void (s.compare = { ids: sel.map((i) => i.id) }));
 }
 
+/** 关键动作之前自动存一份快照（不阻塞、失败不打扰）；服务端只留最近 30 个自动快照 */
+export function autoSnapshot(name: string) {
+  const s = getState();
+  if (!s.ws || !canvasItems(s).length) return;
+  void api.post('/api/snapshots', { ws: s.ws, name, auto: true }).catch(() => {});
+}
+
+export function snapshotsOpen() {
+  setState((s) => void ((s.cvsMenu = null), (s.snapOpen = true)));
+}
+
 export function groupOpen() {
   const it = selected()[0];
   setState((s) => void (s.cvsMenu = null));
@@ -231,6 +242,7 @@ export async function groupRun() {
   }
   const ref = refFromItem(s, it);
   const tpl = jobBody(s, 'image');
+  autoSnapshot(`组图前 · ${axes.length} 张`);
   const bodies = axes.map((a) => ({
     ...tpl,
     refs: ref ? [{ ...ref, w: 0.85 }] : [],
@@ -1497,6 +1509,7 @@ export function canvasClear() {
     toast('warn', '再点一次确认清空', '只会清空当前项目的画布，素材库与产出不受影响');
     return;
   }
+  autoSnapshot('清空画板前');
   mutateBoard((b, st) => {
     b.items = [];
     b.links = [];

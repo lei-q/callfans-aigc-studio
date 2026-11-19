@@ -17,6 +17,7 @@ import { mimeOfExt } from './core';
 import { linkPreview } from './linkPreview';
 import { settlePoints } from './points';
 import { buildCanvasContext } from './context';
+import { buildContextPack, metaOf, takeSnapshot } from './contextpack';
 import { registerOpenApi } from './openapi';
 import { uniqueNames, zipStream, ZIP_MAX_BYTES } from './zip';
 import { audioFormat, findFfmpeg, RenderError, renderAudio, renderFrame, renderVideo, serial } from './render';
@@ -643,6 +644,8 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     }
     for (const j of core.store.jobs.all().filter((x) => x.ws === id)) core.store.jobs.del(j.id);
     for (const p of core.store.posts.all().filter((x) => x.ws === id)) core.store.posts.del(p.id);
+    for (const sn of core.store.snapshots.all().filter((x) => x.ws === id)) core.store.snapshots.del(sn.id);
+    core.store.setAnnotations(id, {});
     core.store.projects.del(id);
     core.events.emit({ type: 'project.deleted', id });
     return { ok: true };
@@ -884,6 +887,49 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   app.post('/api/assist/agent', async (req) => {
     const body = S.agentSchema.parse(req.body);
     return { enhanced: await enhanceAgent(core, body) };
+  });
+
+  /* ---------------- 项目快照 / 批注 / 上下文包 ---------------- */
+
+  app.get('/api/snapshots', async (req) => {
+    const ws = String((req.query as { ws?: string }).ws || '');
+    return { snapshots: core.store.snapshots.all().filter((s) => s.ws === ws).sort((a, b) => b.createdAt - a.createdAt).map(metaOf) };
+  });
+  app.post('/api/snapshots', async (req) => {
+    const b = S.snapshotSchema.parse(req.body);
+    return { snapshot: metaOf(takeSnapshot(core, b.ws, b.name, !!b.auto)) };
+  });
+  app.delete('/api/snapshots/:id', async (req) => {
+    core.store.snapshots.del((req.params as { id: string }).id);
+    return { ok: true };
+  });
+  /** 恢复：另存为一个新项目（快照里的元素原样复制），当前画布不动 */
+  app.post('/api/snapshots/:id/restore', async (req) => {
+    const snap = core.store.snapshots.get((req.params as { id: string }).id);
+    if (!snap) throw new HttpError(404, '快照不存在');
+    const src = core.store.projects.get(snap.ws);
+    const n = core.store.projects.size;
+    const p: Project = { id: uid('w'), name: `${src?.name || '项目'} · 快照 ${snap.name}`.slice(0, 40), dot: PROJECT_DOTS[n % PROJECT_DOTS.length], used: 0, createdAt: Date.now() };
+    core.store.projects.put(p);
+    core.store.saveBoard(p.id, { items: snap.board.items, links: snap.board.links, anchor: snap.board.anchor, view: { x: 40, y: 40, k: 1 } });
+    core.events.emit({ type: 'project', project: p });
+    return { project: p, board: core.store.board(p.id) };
+  });
+  app.get('/api/annotations', async () => ({ annotations: core.store.annotations() }));
+  app.put('/api/annotations/:ws', async (req) => {
+    const ws = (req.params as { ws: string }).ws;
+    if (!core.store.projects.get(ws)) throw new HttpError(404, '项目不存在');
+    core.store.setAnnotations(ws, S.annotationsSchema.parse(req.body));
+    return { ok: true };
+  });
+  app.get('/api/projects/:id/context-pack', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const p = core.store.projects.get(id);
+    if (!p) throw new HttpError(404, '项目不存在');
+    const base = (p.name || 'project').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+    reply.header('Content-Type', 'application/zip');
+    reply.header('Content-Disposition', `attachment; filename="context.zip"; filename*=UTF-8''${encodeURIComponent(`${base}-上下文包.zip`)}`);
+    return reply.send(buildContextPack(core, id, `${req.protocol}://${req.headers.host}`));
   });
 
   /** MCP 服务脚本在哪：安装包里是 resources/mcp/index.mjs，源码运行时是 packages/mcp/index.mjs；找不到就是 null */

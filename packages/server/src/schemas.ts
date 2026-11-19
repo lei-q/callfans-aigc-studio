@@ -219,4 +219,10 @@ export const localResultSchema = z.object({
 
 export const videoFrameSchema = z.object({ sourceId: z.string(), t: z.number().min(0).max(36000) });
 
+export const snapshotSchema = z.object({ ws: z.string(), name: z.string().min(1).max(60), auto: z.boolean().optional() });
+export const annotationsSchema = z.record(
+  z.string().max(64),
+  z.array(z.object({ id: z.number(), kind: z.enum(['box', 'brush', 'point']), x: z.number(), y: z.number(), w: z.number(), h: z.number(), pts: z.array(z.tuple([z.number(), z.number()])).max(2000).optional(), text: z.string().max(500) })).max(50),
+);
+
 export type SaveEdited = z.infer<typeof saveEditedSchema>;

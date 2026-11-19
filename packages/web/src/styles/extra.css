@@ -297,3 +297,10 @@ button.avatar.sm { width: 28px; height: 28px; font-size: 12px; }
 .proj-info b { display: flex; align-items: center; gap: 7px; font-size: 14px; }
 .proj-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .proj-new { border: 1.5px dashed var(--border); border-radius: 12px; display: grid; place-items: center; min-height: 190px; color: var(--t3); background: none; cursor: pointer; }
+
+.snap-modal { width: 560px; }
+.snap-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.snap-new { display: flex; gap: 8px; }
+.snap-new .form-input { flex: 1; }
+.snap-list { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
+.snap-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; }

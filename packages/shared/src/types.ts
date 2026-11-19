@@ -434,3 +434,30 @@ export type ServerEvent =
   | { type: 'settings'; settings: Settings }
   | { type: 'api'; apiKeys: ApiKey[] }
   | { type: 'notice'; level: 'info' | 'success' | 'warn' | 'ai'; title: string; desc?: string };
+
+/* ---------------- 项目快照 / 批注（上下文包用） ---------------- */
+
+/** 画板在某一刻的样子；只读回看，恢复时另存为新项目，不覆盖当前画布 */
+export interface Snapshot {
+  id: string;
+  ws: string;
+  name: string;
+  /** 自动快照（关键动作前）会按数量上限清理，手动的不会 */
+  auto: boolean;
+  createdAt: number;
+  board: Pick<Board, 'items' | 'links' | 'anchor'>;
+}
+
+export type SnapshotMeta = Omit<Snapshot, 'board'> & { items: number; links: number };
+
+/** 持久化的批注（和前端 annotCache 同形）：key 是画布元素 id */
+export interface StoredAnnot {
+  id: number;
+  kind: 'box' | 'brush' | 'point';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  pts?: [number, number][];
+  text: string;
+}
