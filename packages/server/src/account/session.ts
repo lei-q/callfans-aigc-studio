@@ -182,8 +182,9 @@ export class AccountSession {
   ): Promise<LoginStartReply> {
     await this.closePending();
     const c = this.cfg;
-    this.mode = mode === 'enterprise' ? 'enterprise' : 'consumer';
-    const oidc = this.client(this.mode);
+    const loginMode: AccountMode = mode === 'enterprise' ? 'enterprise' : 'consumer';
+    /* 入口没配好 / 连不上时直接抛错，不能把会话的入口改成没登录成功的那个 */
+    const oidc = this.client(loginMode);
     const state = randomToken(24);
     const nonce = randomToken(24);
     const verifier = randomToken(48);
@@ -192,7 +193,15 @@ export class AccountSession {
     this.reachable = true;
 
     const server = await startCallbackServer(c.redirectUri, (r) => this.onCallback(r));
-    const loginUrl = await oidc.authorizeUrl({ redirectUri: c.redirectUri, state, nonce, verifier });
+    let loginUrl: string;
+    try {
+      loginUrl = await oidc.authorizeUrl({ redirectUri: c.redirectUri, state, nonce, verifier });
+    } catch (e) {
+      /* 监听已经起来了：这里失败必须关掉，否则回调端口一直被占，下次登录报「端口被占用」 */
+      await server.close().catch(() => {});
+      throw e;
+    }
+    this.mode = loginMode;
     const pending: PendingLogin = {
       state,
       nonce,
