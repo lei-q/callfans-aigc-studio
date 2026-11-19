@@ -129,7 +129,8 @@ export class Store {
       cloud: { ...DEFAULT_SETTINGS.cloud, ...s?.cloud },
       runner: { ...DEFAULT_SETTINGS.runner, ...s?.runner },
       direct: { ...DEFAULT_SETTINGS.direct, ...s?.direct },
-      channel: s?.channel === 'direct' ? 'direct' : 'cloud',
+      /* 自定义渠道的界面入口已经收起：选着自定义渠道却没有 Key 的，模型目录是空的又切不回来，直接回到平台渠道 */
+      channel: s?.channel === 'direct' && s?.direct?.keyEnc ? 'direct' : 'cloud',
       models: {
         cloud: { ...DEFAULT_SETTINGS.models.cloud, ...s?.models?.cloud, ...(s?.models?.cloud?.text ? {} : { text: legacy }) },
         direct: { ...DEFAULT_SETTINGS.models.direct, ...s?.models?.direct },
@@ -146,7 +147,7 @@ export class Store {
     return this.db.kvGet<string>('cloud_session');
   }
   set cloudSession(v: string | null) {
-    if (v == null) this.db.del('kv', 'cloud_session');
+    if (v == null) this.db.kvDel('cloud_session');
     else this.db.kvSet('cloud_session', v);
   }
 
@@ -155,7 +156,7 @@ export class Store {
     return this.db.kvGet<string>('account_session');
   }
   set accountSession(v: string | null) {
-    if (v == null) this.db.del('kv', 'account_session');
+    if (v == null) this.db.kvDel('account_session');
     else this.db.kvSet('account_session', v);
   }
 

@@ -71,7 +71,6 @@ https://account.callfansai.com/api/v1   （/app/** 身份、余额、模型密�
 | `POST /api/account/password/forgot` | 发送找回验证码 |
 | `POST /api/account/password/reset` | 重置密码 |
 | `GET /api/billing/packs` | 积分档位（5 分钟缓存） |
-| `GET /api/billing/wallet` | 余额与今日免费额度 |
 | `POST /api/billing/wallet/refresh` | 主动向账号中心查一次余额（页面每 10 秒调一次，结果同时走 SSE `wallet`） |
 | `POST /api/billing/orders` | 下单，**必须**带 `Idempotency-Key`（请求体 `idempotencyKey`） |
 | `POST /api/billing/orders/:id/prepay` | 获取 `codeUrl`（二维码内容） |

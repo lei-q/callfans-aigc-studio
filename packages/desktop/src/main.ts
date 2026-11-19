@@ -181,7 +181,16 @@ async function startWeb() {
   const host = cfg.lan ? '0.0.0.0' : cfg.host || '127.0.0.1';
   const base = cfg.port || 5780;
   let lastErr: unknown = null;
+  /* 5781 留给登录回调的临时监听：Web 服务占了它，登录就永远报「端口被占用」 */
+  const reserved = (() => {
+    try {
+      return Number(new URL(process.env.AIGC_SSO_REDIRECT || 'http://127.0.0.1:5781/auth/callback').port);
+    } catch {
+      return 5781;
+    }
+  })();
   for (let port = base; port < base + 10; port++) {
+    if (port === reserved) continue;
     try {
       server = await loadServer().startServer({
         dataDir: userData,

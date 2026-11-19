@@ -505,7 +505,8 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     const p = core.store.projects.get((req.params as { id: string }).id);
     if (!p) throw new HttpError(404, '项目不存在');
     const body = S.projectSchema.partial().parse(req.body);
-    const next = { ...p, ...(body.name ? { name: body.name.trim() } : {}), ...(body.dot ? { dot: body.dot } : {}) };
+    const name = body.name?.trim();
+    const next = { ...p, ...(name ? { name } : {}), ...(body.dot ? { dot: body.dot } : {}) };
     core.store.projects.put(next);
     core.events.emit({ type: 'project', project: next });
     return { project: next };
@@ -518,13 +519,15 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     if (core.store.jobs.all().some((j) => j.ws === id && (j.status === 'running' || j.status === 'queued'))) {
       throw new HttpError(400, '这个项目还有进行中的任务', '先取消或等它们完成');
     }
+    /* 先删画板：它引用的文件不该把自己的产出文件留成孤儿；别的项目 / 审美库还在引用的由 removeMediaIfOrphan 保留 */
+    core.store.boards.del(id);
     for (const r of core.store.results.all().filter((x) => x.ws === id)) {
       core.store.results.del(r.id);
       core.removeMediaIfOrphan(r.src);
+      if (r.thumb && r.thumb !== r.src) core.removeMediaIfOrphan(r.thumb);
     }
     for (const j of core.store.jobs.all().filter((x) => x.ws === id)) core.store.jobs.del(j.id);
     for (const p of core.store.posts.all().filter((x) => x.ws === id)) core.store.posts.del(p.id);
-    core.store.boards.del(id);
     core.store.projects.del(id);
     core.events.emit({ type: 'project.deleted', id });
     return { ok: true };
@@ -575,7 +578,7 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     return pub;
   };
 
-  app.patch('/api/settings', async (req) => {
+  app.patch('/api/settings', async (req, reply) => {
     const body = S.settingsSchema.parse(req.body);
     const s = core.store.settings;
     let needDirect = false;
@@ -619,7 +622,16 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
     }
     if (body.runtime) {
       const r = body.runtime;
-      if (r.token) s.runtime.tokenHash = sha256(r.token);
+      if (r.port && r.port === (Number(new URL(s.account.redirectUri).port) || 0)) {
+        throw new HttpError(400, '这个端口不能用', `${r.port} 是登录回调的专用端口，换一个`);
+      }
+      if (r.token) {
+        s.runtime.tokenHash = sha256(r.token);
+        /* 当前浏览器是靠旧口令的 cookie 进来的：换了口令不顺带换 cookie，下一个请求就被锁在外面 */
+        if (parseCookies(req.headers.cookie).aigc_token) {
+          reply.header('Set-Cookie', `aigc_token=${encodeURIComponent(r.token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}`);
+        }
+      }
       if (r.clearToken) delete s.runtime.tokenHash;
       if (r.lan && !s.runtime.tokenHash) throw new HttpError(400, '开放局域网访问前，先设置访问口令');
       core.writeLaunch({

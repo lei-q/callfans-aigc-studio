@@ -230,6 +230,21 @@ export class Core {
     return this.models().find((m) => m.id === id);
   }
 
+  /**
+   * 跑任务时按任务记录里的模型 id 找模型：不看当前选的渠道。
+   * 用户把渠道切到自定义后，排队 / 运行中的平台任务和历史任务的重试仍要找得到自己的平台模型。
+   */
+  modelForRun(id: string) {
+    const hit = this.modelById(id);
+    if (hit || this.provider === 'mock' || !id.startsWith('cloud:')) return hit;
+    return this.platformModels().find((m) => m.id === id);
+  }
+
+  /** 平台模型目录还没拉到（刚启动、网络没好）：这时「找不到模型」不是下架，不能把任务判失败 */
+  catalogPending(id: string) {
+    return this.provider !== 'mock' && id.startsWith('cloud:') && this.platform.cachedModels().length === 0;
+  }
+
   providerOf(model: ModelInfo): Provider {
     if (model.channel === 'direct') return this.direct;
     return this.provider === 'mock' ? this.cloud : this.platformMedia;
@@ -365,7 +380,11 @@ export class Core {
   /** 删除产出时顺手删掉只被它引用的生成文件 */
   removeMediaIfOrphan(src: string) {
     if (!src.startsWith('/files/media/')) return;
-    const still = this.store.results.all().some((r) => r.src === src || r.thumb === src);
+    /* 审美库收藏、任意画板上的元素也在引用这个文件：只看 results 会把它们变成永久裂图 */
+    const still =
+      this.store.results.all().some((r) => r.src === src || r.thumb === src) ||
+      this.store.aesthetic.all().some((a) => a.src === src) ||
+      this.store.boards.all().some((b) => b.items.some((i) => i.src === src || i.thumb === src || i.cover === src));
     if (still) return;
     const file = this.localPathOf(src);
     if (file) fs.promises.unlink(file).catch(() => {});

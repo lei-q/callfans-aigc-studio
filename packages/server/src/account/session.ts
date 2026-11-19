@@ -71,8 +71,10 @@ interface PendingLogin {
   createdAt: number;
   server: CallbackHandle | null;
   timer: NodeJS.Timeout | null;
-  /** 浏览器拒绝 / 超时后留给 poll 报告一次 */
+  /** 浏览器拒绝 / 超时 / 换码后失败，留给 poll 报告一次 */
   outcome?: 'denied' | 'expired';
+  /** outcome 为 denied 时的原因 */
+  error?: string;
 }
 
 const LOGIN_TTL_MS = 10 * 60_000;
@@ -201,12 +203,12 @@ export class AccountSession {
       await server.close().catch(() => {});
       throw e;
     }
-    this.mode = loginMode;
+    /* 会话入口（this.mode）要等登录真正成功再切：取消 / 失败 / 超时都不该让个人账号的注册、找回密码入口消失 */
     const pending: PendingLogin = {
       state,
       nonce,
       verifier,
-      mode: this.mode,
+      mode: loginMode,
       createdAt: Date.now(),
       server,
       timer: null,
@@ -236,6 +238,7 @@ export class AccountSession {
     }
     if (r.error) {
       pending.outcome = 'denied';
+      pending.error = r.errorDescription || (r.error === 'access_denied' ? '已取消登录' : `账号服务拒绝了这次登录（${r.error}）`);
       this.status = 'logged_out';
       this.closeServer(pending);
       this.emitSession();
@@ -265,9 +268,12 @@ export class AccountSession {
       this.events.notice('success', '已登录', `${name} · 余额 ${this.wallet?.balance ?? 0} 点`);
       return { status: 200, html: callbackPage({ ok: true, title: '登录成功', message: '可以关闭这个页面，回到 AIGC 创作台继续。' }) };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : '登录失败';
-      this.status = 'logged_out';
-      this.pending = null;
+      const msg = friendlyLoginError(e, pending.mode);
+      /* 令牌已经写进内存和加密落盘了：登录没成就必须清掉，否则每次启动都会拿着它重试 */
+      this.clear();
+      /* pending 留着，让轮询把原因带回界面（不然只会看到「登录链接已过期」） */
+      pending.outcome = 'denied';
+      pending.error = msg;
       if (pending.timer) clearTimeout(pending.timer);
       this.closeServer(pending);
       this.emitSession();
@@ -281,7 +287,7 @@ export class AccountSession {
     if (pending?.outcome) {
       const status = pending.outcome;
       this.pending = null;
-      return { status };
+      return { status, ...(pending.error ? { error: pending.error } : {}) };
     }
     if (pending) {
       if (Date.now() - pending.createdAt > LOGIN_TTL_MS) {
@@ -344,11 +350,14 @@ export class AccountSession {
         this.applyTokens(t);
         return this.tokens;
       } catch (e) {
-        if (e instanceof OidcError && e.code === 'invalid_grant') {
+        /* 只有账号服务明确拒绝（4xx，如 invalid_grant）才算会话失效。网络抖动、超时、5xx 都是暂时的：
+           令牌留着，等下次再试，否则一次网络波动就把用户登出并删掉 refresh token */
+        if (e instanceof OidcError && e.status >= 400 && e.status < 500) {
           this.clear();
           this.events.notice('warn', '登录已失效', '请重新登录');
+          return null;
         }
-        return null;
+        throw new ConsumerError(503, '账号服务暂时连不上，稍后会自动重试');
       } finally {
         this.refreshing = null;
       }
@@ -793,6 +802,17 @@ export class AccountSession {
   private emitWallet() {
     this.events.emit({ type: 'wallet', wallet: this.wallet });
   }
+}
+
+/** 登录收尾阶段（换码 / 校验 / 取身份）失败时给用户看的原因；文档里约定的几种业务码要明确指路 */
+function friendlyLoginError(e: unknown, mode: AccountMode): string {
+  if (e instanceof ConsumerError) {
+    if (e.code === 'app_not_entitled') return mode === 'enterprise' ? '你的企业账号还没有被授予本应用的使用权限，请联系租户管理员开通' : '这个账号没有使用本应用的权限';
+    if (e.code === 'account_disabled') return '这个账号已被停用，请联系租户管理员或平台管理员';
+    if (e.code === 'billing_account_inactive') return '所属计费账户当前不可用，请联系平台管理员';
+    return e.message;
+  }
+  return e instanceof Error ? e.message : '登录失败';
 }
 
 function parseTokens(raw: string): StoredTokens | null {

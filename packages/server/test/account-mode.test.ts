@@ -189,3 +189,72 @@ describe('统一 /app/** 契约', () => {
     expect(info.registerEnabled).toBe(false);
   });
 });
+
+describe('令牌刷新与登录失败', () => {
+  it('刷新遇到网络 / 5xx 的暂时失败：不登出、不删令牌', async () => {
+    const core = await makeCore();
+    actAs(core, 'consumer');
+    core.store.accountSession = 'enc-token-placeholder';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('/.well-known/'))
+          return jsonRes(200, {
+            issuer: core.store.settings.account.issuer.replace(/\/+$/, ''),
+            authorization_endpoint: 'https://sso.test/auth',
+            token_endpoint: 'https://sso.test/token',
+            jwks_uri: 'https://sso.test/jwks',
+          });
+        if (u === 'https://sso.test/token') return jsonRes(503, { error: 'temporarily_unavailable' });
+        return jsonRes(401, { error: 'unauthorized' });
+      }),
+    );
+    await expect(core.accounts.refreshWallet()).rejects.toMatchObject({ status: 503 });
+    expect(core.accounts.loggedIn).toBe(true);
+    expect(core.store.accountSession).toBe('enc-token-placeholder');
+  });
+
+  it('刷新被账号服务明确拒绝（invalid_grant）：登出并清掉令牌', async () => {
+    const core = await makeCore();
+    actAs(core, 'consumer');
+    core.store.accountSession = 'enc-token-placeholder';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('/.well-known/'))
+          return jsonRes(200, {
+            issuer: core.store.settings.account.issuer.replace(/\/+$/, ''),
+            authorization_endpoint: 'https://sso.test/auth',
+            token_endpoint: 'https://sso.test/token',
+            jwks_uri: 'https://sso.test/jwks',
+          });
+        if (u === 'https://sso.test/token') return jsonRes(400, { error: 'invalid_grant' });
+        return jsonRes(401, { error: 'unauthorized' });
+      }),
+    );
+    await expect(core.accounts.refreshWallet()).rejects.toThrow();
+    expect(core.accounts.loggedIn).toBe(false);
+    expect(core.store.accountSession).toBeNull();
+  });
+});
+
+describe('删除产出时的文件引用', () => {
+  it('审美库收藏或画板还引用的文件不会被删掉', async () => {
+    const core = await makeCore();
+    const src = '/files/media/keep-me.png';
+    const file = core.localPathOf(src)!;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'x');
+    core.store.aesthetic.put({ id: 'a1', key: 'r:1', kind: 'image', src, t: '收藏', tags: [], createdAt: 1 });
+    core.removeMediaIfOrphan(src);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fs.existsSync(file)).toBe(true);
+
+    core.store.aesthetic.del('a1');
+    core.removeMediaIfOrphan(src);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fs.existsSync(file)).toBe(false);
+  });
+});

@@ -109,7 +109,7 @@
 
 ```bash
 # 创建一把本地 Key（完整 Key 只在响应里出现一次）
-curl -X POST http://127.0.0.1:5780/api/keys
+curl -X POST http://127.0.0.1:5780/api/keys -H 'x-aigc-client: 1'
 
 curl http://127.0.0.1:5780/openapi/v1/images/generations \
   -H "Authorization: Bearer $AIGC_API_KEY" \

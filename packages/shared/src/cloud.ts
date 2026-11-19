@@ -68,6 +68,8 @@ export interface DevicePollReply {
   status: DevicePollStatus;
   tokens?: CloudTokens;
   profile?: UserProfile;
+  /** denied 时的原因（账号被停用、企业员工没有应用准入等），界面直接展示 */
+  error?: string;
 }
 export interface CloudTokens {
   accessToken: string;

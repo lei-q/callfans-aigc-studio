@@ -111,6 +111,11 @@ export class Db {
     }
   }
 
+  kvDel(key: string) {
+    this.db.run('DELETE FROM kv WHERE key = ?', [key]);
+    this.touch();
+  }
+
   kvSet(key: string, value: unknown) {
     this.db.run('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, JSON.stringify(value)]);
     this.touch();

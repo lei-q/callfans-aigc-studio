@@ -130,6 +130,28 @@ describe('云端网关生成', () => {
     expect(core.session.wallet!.balance).toBeLessThan(before);
   });
 
+  it('发散一次提交多个方向：同批产出都留在收件箱，下一批来了才沉入草稿箱', async () => {
+    const core = await makeCore();
+    await login(core);
+    cloud.payOrder((await core.session.client.request<any>('/billing/orders', { json: { packId: 'p10', channel: 'alipay' } })).id);
+    await core.session.refreshWallet();
+    const body = { type: 'image' as const, ws: 'w1', model: 'cloud:g-img-1', refs: [], ratio: '1:1', count: 1, res: '2k' as const };
+    const batch = core.runner.createMany([
+      { ...body, prompt: '一杯咖啡。更暖', divergeAxis: '更暖' },
+      { ...body, prompt: '一杯咖啡。更冷', divergeAxis: '更冷' },
+      { ...body, prompt: '一杯咖啡。更近', divergeAxis: '更近' },
+    ]);
+    expect(new Set(batch.map((j) => j.batch)).size).toBe(1);
+    expect(batch[0].batch).toBeTruthy();
+    for (const j of batch) await waitJob(core, j.id);
+    const homes = () => core.store.results.all().filter((r) => batch.some((j) => j.id === r.job)).map((r) => r.home);
+    expect(homes()).toEqual(['inbox', 'inbox', 'inbox']);
+
+    const next = core.runner.create({ ...body, prompt: '另一杯拿铁' });
+    await waitJob(core, next.id);
+    expect(homes()).toEqual(['draft', 'draft', 'draft']);
+  });
+
   it('取消排队中的任务退回点数', async () => {
     const core = await makeCore();
     await login(core);

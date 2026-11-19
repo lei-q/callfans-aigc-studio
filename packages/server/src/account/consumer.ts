@@ -60,7 +60,8 @@ export class ConsumerClient {
     let res = await doFetch(init.auth === false ? null : this.hooks.accessToken());
 
     if (res.status === 401 && init.auth !== false) {
-      const fresh = await this.hooks.refresh().catch(() => null);
+      /* 刷新「暂时失败」（网络 / 5xx）要原样抛出，不能当成未授权去登出；只有拿不到新令牌才算失效 */
+      const fresh = await this.hooks.refresh();
       if (!fresh) {
         this.hooks.onUnauthorized();
         throw new ConsumerError(401, '登录已失效，请重新登录');
