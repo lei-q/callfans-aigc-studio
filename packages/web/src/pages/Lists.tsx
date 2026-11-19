@@ -28,7 +28,7 @@ import {
 } from '../store/actions';
 import { keepResult } from '../canvas/ops';
 import { togglePlay } from '../store/player';
-import { draftResults, failJobs, inScope, jobById, libResults, modelOf, resultById, resultsOfJob, wsShort } from '../store/selectors';
+import { canvasHas, draftResults, failJobs, inScope, jobById, libResults, modelOf, resultById, resultsOfJob, wsShort } from '../store/selectors';
 import { POST_PLATFORMS } from '@aigc/shared';
 
 /* ---------------- 任务记录 ---------------- */
@@ -308,6 +308,10 @@ function JobSub({ j }: { j: Job }) {
           <span className="grow" />
           {items.length > 0 && (
             <>
+              <button className="btn sm ghost" onClick={() => items.forEach((r) => toCanvas(r.id, true))}>
+                <Icon name="layers" />
+                全部放进画布
+              </button>
               <button className="btn sm ghost" onClick={() => adoptAll(j.id)}>
                 <Icon name="check" />
                 全部采用
@@ -355,6 +359,9 @@ function JobSub({ j }: { j: Job }) {
                 </div>
                 <div className="tiny dim">{{ inbox: '收件箱', canvas: '画布', library: '素材库', draft: '草稿箱' }[r.home]}</div>
                 <div className="row-actions">
+                  <button className="icon-btn" title={canvasHas(s, r.id) ? '已在画布上' : '放进画布'} disabled={canvasHas(s, r.id)} onClick={() => toCanvas(r.id)}>
+                    <Icon name="layers" />
+                  </button>
                   <button className="icon-btn" title="下载" onClick={() => downloadResult(r.id)}>
                     <Icon name="download" />
                   </button>
@@ -730,6 +737,9 @@ function DraftCard({ r }: { r: Result }) {
           )}
         </div>
         <div className="rc-ops">
+          <button className="rc-op" title="详情 / 删除" onClick={() => openResult(r.id)}>
+            <Icon name="eye" />
+          </button>
           <button className="rc-op" title="捞回画布" onClick={() => toCanvas(r.id)}>
             <Icon name="layers" />
           </button>
@@ -777,10 +787,12 @@ function DraftCard({ r }: { r: Result }) {
 }
 
 /** 捞回画布：草稿可能属于别的项目，先切到它的项目再放进去 */
-function toCanvas(rid: string) {
+function toCanvas(rid: string, quiet = false) {
   const s = useStore.getState();
   const r = resultById(s, rid);
   if (!r) return;
+  /* 批量放进去时已经在画布上的直接跳过，不要逐个弹「已经在画布上了」 */
+  if (quiet && s.ws === r.ws && canvasHas(s, rid)) return;
   setState((st) => {
     if (st.ws !== r.ws) st.ws = r.ws;
     st.page = 'studio';

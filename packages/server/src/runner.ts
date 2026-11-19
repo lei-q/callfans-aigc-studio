@@ -127,6 +127,10 @@ export class JobRunner {
   createMany(bodies: CreateJobBody[], source: Job['source'] = 'web', keyId?: string): Job[] {
     if (!bodies.length) throw new HttpError(400, '没有要创建的任务');
     const built = bodies.map((b) => this.buildJob(b, source, keyId));
+    if (built.length > 1) {
+      const batch = uid('b');
+      for (const { job } of built) job.batch = batch;
+    }
     const out: Job[] = [];
     for (const { job, model } of built) {
       const routeErr = this.core.routeError(model);
@@ -166,7 +170,7 @@ export class JobRunner {
     if (ac) {
       ac.abort();
       this.running.delete(id);
-      const model = this.core.modelById(job.model);
+      const model = this.core.modelForRun(job.model);
       if (model) void this.core.providerOf(model).cancel?.(job);
     }
     this.save(job);
@@ -177,7 +181,7 @@ export class JobRunner {
   }
 
   private requeue(job: Job, note: string) {
-    const model = this.core.modelById(job.model);
+    const model = this.core.modelForRun(job.model);
     if (!model) throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');
     const fail = validateJob(job.type, job, model, this.siblings(model));
     if (fail) throw new HttpError(400, fail.reason, fail.fix);
@@ -204,7 +208,7 @@ export class JobRunner {
     const job = this.store.jobs.get(id);
     if (!job) throw new HttpError(404, '任务不存在');
     if (job.status !== 'failed' && job.status !== 'canceled') throw new HttpError(400, '只有失败或已取消的任务可以重跑');
-    const model = this.core.modelById(job.model);
+    const model = this.core.modelForRun(job.model);
     if (model && model.status !== 'on') throw new HttpError(400, `${model.name} 当前不可用`, '用「修复重试」换一个可用模型');
     return this.requeue(job, '重新排队');
   }
@@ -212,7 +216,7 @@ export class JobRunner {
   fix(id: string) {
     const job = this.store.jobs.get(id);
     if (!job || !job.fail) throw new HttpError(404, '没有需要修复的失败任务');
-    const model = this.core.modelById(job.model);
+    const model = this.core.modelForRun(job.model);
     if (!model) throw new HttpError(400, '模型不存在', '到「设置」里刷新模型列表');
     /* 平台说这个模型没开通：换成同类型第一个可用模型，让「修复重试」真的能继续 */
     let target = model;
@@ -252,7 +256,7 @@ export class JobRunner {
       .sort((a, b) => a.createdAt - b.createdAt);
     const byChannel = new Map<string, number>();
     for (const j of queued) {
-      const ch = this.core.modelById(j.model)?.channel || 'mock';
+      const ch = this.core.modelForRun(j.model)?.channel || 'mock';
       const idx = byChannel.get(ch) || 0;
       byChannel.set(ch, idx + 1);
       const custom = j.queueNote && !/^前面 \d+ 个任务$/.test(j.queueNote);
@@ -272,15 +276,17 @@ export class JobRunner {
     for (const provider of this.core.providers()) {
       const runningHere = [...this.running.keys()].filter((id) => {
         const j = this.store.jobs.get(id);
-        const m = j && this.core.modelById(j.model);
+        const m = j && this.core.modelForRun(j.model);
         return m && this.core.providerOf(m) === provider;
       }).length;
       let room = provider.concurrency() - runningHere;
       for (const job of queued) {
         if (room <= 0) break;
         if (this.running.has(job.id)) continue;
-        const model = this.core.modelById(job.model);
+        const model = this.core.modelForRun(job.model);
         if (!model) {
+          /* 启动初期平台目录还没拉到：先排着，别把已提交的付费任务判成「模型已下架」 */
+          if (this.core.catalogPending(job.model)) continue;
           this.failJob(job, new ProviderError('E-MOD-04', '模型不存在或已下架', '到「设置」里刷新模型列表后换一个模型重试'));
           continue;
         }
@@ -363,11 +369,16 @@ export class JobRunner {
     );
   }
 
-  /** 新一批来了：上一批还在收件箱、没被拖进画布的，自动沉入草稿箱 */
-  settleInbox(ws: string) {
+  /**
+   * 新一批来了：上一批还在收件箱、没被拖进画布的，自动沉入草稿箱。
+   * keepBatch 是正在完成的这批：发散 / 适配一次提交多个任务，先完成的产出不能被后完成的同批任务沉下去，
+   * 否则收件箱里永远只剩最后一个方向。
+   */
+  settleInbox(ws: string, keepBatch?: string) {
     let n = 0;
     for (const r of this.store.results.all()) {
       if (r.home === 'inbox' && r.ws === ws) {
+        if (keepBatch && this.store.jobs.get(r.job)?.batch === keepBatch) continue;
         r.home = 'draft';
         this.store.results.put(r);
         this.core.events.emit({ type: 'result', result: r });
@@ -383,7 +394,7 @@ export class JobRunner {
   }
 
   private finish(job: Job, outs: ProviderOutput[]) {
-    const settled = this.settleInbox(job.ws);
+    const settled = this.settleInbox(job.ws, job.batch);
     const now = Date.now();
     const titleBase = job.divergeAxis
       ? `发散 · ${job.divergeAxis}`
@@ -434,10 +445,17 @@ export class JobRunner {
 
   /* ---------------- 重启恢复 ---------------- */
 
+  private recoverTries = 0;
   private recover() {
+    let waiting = false;
     for (const job of this.store.jobs.all()) {
-      if (job.status !== 'running') continue;
-      const model = this.core.modelById(job.model);
+      if (job.status !== 'running' || this.running.has(job.id)) continue;
+      const model = this.core.modelForRun(job.model);
+      if (!model && this.core.catalogPending(job.model) && this.recoverTries < 150) {
+        /* 平台目录还没拉到：稍后再恢复，已有上游任务号的视频不能因此丢掉 */
+        waiting = true;
+        continue;
+      }
       if (!model) {
         this.failJob(job, new ProviderError('E-MOD-04', '模型不存在或已下架', '到「设置」里刷新模型列表后换一个模型重试'));
         continue;
@@ -448,6 +466,12 @@ export class JobRunner {
       } else {
         this.failJob(job, new ProviderError('E-NET-03', '应用退出时请求还没完成，结果未知', '为避免重复扣费不会自动重试；可在任务记录里重跑'));
       }
+    }
+    if (waiting) {
+      this.recoverTries += 1;
+      setTimeout(() => {
+        if (!this.stopped) this.recover();
+      }, 2000).unref?.();
     }
   }
 }

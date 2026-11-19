@@ -155,6 +155,8 @@ export interface Job extends JobParams {
   platform?: string;
   /** 从画布哪个元素发散 / 适配出来的，产出拖进画布时自动连回 */
   fromCvsId?: string;
+  /** 同一次提交的一批任务（发散 / 适配）共用；同批产出互不沉入草稿箱 */
+  batch?: string;
   upstreamTaskId?: string;
   requestId?: string;
   source?: 'web' | 'api';
