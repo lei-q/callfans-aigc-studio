@@ -89,6 +89,9 @@ importers:
       sql.js:
         specifier: 1.14.2
         version: 1.14.2
+      undici:
+        specifier: 7.30.1
+        version: 7.30.1
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -5666,8 +5669,7 @@ snapshots:
 
   undici@6.29.1: {}
 
-  undici@7.30.1:
-    optional: true
+  undici@7.30.1: {}
 
   universalify@0.1.2: {}
 

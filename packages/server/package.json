@@ -15,6 +15,7 @@
     "fastify": "5.12.5",
     "jimp": "0.22.12",
     "sql.js": "1.14.2",
+    "undici": "7.30.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

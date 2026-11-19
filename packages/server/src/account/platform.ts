@@ -41,9 +41,26 @@ export class PlatformError extends Error {
      * 必须看它，不能看 status。
      */
     readonly upstreamStatus?: number,
+    /** 这次请求的现场：HTTP 状态、等了多久、经过的网关、LiteLLM 日志 ID。用来和平台后台日志对上号 */
+    readonly trace?: string,
   ) {
     super(message);
   }
+}
+
+/** 网关 / 代理层把长请求切断时返回的状态码：请求到不了「成功返回」这一步，但平台那边可能已经做完并计费了 */
+export const GATEWAY_CUT_STATUSES = [502, 504, 524, 408];
+
+/**
+ * 记下一次失败响应的现场。LiteLLM 后台能用 x-litellm-call-id 查到这次请求，
+ * 前面的 nginx / Cloudflare 之类的代理则能从 server / cf-ray 和 HTML 报错页认出来。
+ */
+export function traceOf(res: { status: number; headers: { get(name: string): string | null } }, elapsedMs: number, bodyText = ''): string {
+  const h = (n: string) => res.headers.get(n);
+  const callId = h('x-litellm-call-id') || h('x-litellm-request-id') || h('x-request-id');
+  const via = h('cf-ray') ? `Cloudflare（${h('cf-ray')}）` : h('server');
+  const html = /^\s*</.test(bodyText) ? bodyText.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+  return [`HTTP ${res.status}`, `等了 ${Math.round(elapsedMs / 1000)}s`, via ? `经过 ${via}` : '', callId ? `日志 ID ${callId}` : '', html ? `网关页面：${html}` : ''].filter(Boolean).join(' · ');
 }
 
 const CATALOG_TTL_MS = 60_000;
@@ -367,10 +384,10 @@ function findUpstreamStatus(node: unknown, depth: number): number | undefined {
 }
 
 /** 网关错误体 → PlatformError（详情与 code 尽量保留，便于排查） */
-export function platformError(status: number, body: unknown): PlatformError {
+export function platformError(status: number, body: unknown, trace?: string): PlatformError {
   const b = (body || {}) as { error?: { message?: string; code?: string } | string; message?: string; code?: string; detail?: string };
   const detail = typeof b.error === 'string' ? b.error : b.error?.message || b.message || b.detail || (typeof body === 'string' ? body : '');
   const code = typeof b.error === 'object' ? b.error?.code || b.code : b.code;
   const upstreamStatus = upstreamStatusOf(body);
-  return new PlatformError(status, gatewayMessage(status, detail, upstreamStatus), code, upstreamStatus);
+  return new PlatformError(status, gatewayMessage(status, detail, upstreamStatus), code, upstreamStatus, trace);
 }

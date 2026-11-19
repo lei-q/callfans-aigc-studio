@@ -3,7 +3,8 @@ import { estSeconds, imageSizeOf, platformGenerationType, pickVideoResolution, V
 import Jimp from 'jimp';
 import type { AccountSession } from '../account/session';
 import type { PlatformModel } from '../account/platform';
-import { PlatformError } from '../account/platform';
+import { GENERATION_TIMEOUT_MS } from '../gatewayHttp';
+import { GATEWAY_CUT_STATUSES, PlatformError } from '../account/platform';
 import { abortError, sleep } from './sleep';
 import { mp3Duration, sniffImageMime } from './treecloud';
 import { ProviderError, type Provider, type ProviderOutput, type RunContext } from './types';
@@ -243,8 +244,18 @@ export class PlatformMediaProvider implements Provider {
           '换一个模型再试；如果必须用这个模型，请联系平台开通',
         );
       }
-      if (e.status === 504 || e.code === 'timeout') return new ProviderError('E-NET-05', e.message, '稍后重试；不要在超时后重复提交');
-      return new ProviderError('E-UPS-50', e.message || '平台生成失败', '稍后重试；如果反复失败，换一个模型');
+      const where = e.trace ? `（${e.trace}）` : '';
+      /* 网关 / 代理把长请求切断（502 / 504 / 524）：客户端只看到失败，但平台那边可能已经生成完并计费了
+         （LiteLLM 后台是 success）。这时让用户「稍后重试」只会再扣一次费，所以先让他去核对。 */
+      if (GATEWAY_CUT_STATUSES.includes(e.status)) {
+        return new ProviderError(
+          'E-NET-05',
+          `平台网关在生成完成前切断了请求${where}：平台那边可能已经生成完毕并计费，只是结果没送回来`,
+          '先别重复提交：拿上面的日志 ID 去平台后台核对这次请求是否成功；慢模型需要平台把网关超时调长（nginx proxy_read_timeout / Cloudflare 100 秒上限）',
+        );
+      }
+      if (e.status === 504 || e.code === 'timeout') return new ProviderError('E-NET-05', `${e.message}${where}`, '稍后重试；不要在超时后重复提交');
+      return new ProviderError('E-UPS-50', `${e.message || '平台生成失败'}${where}`, '稍后重试；如果反复失败，换一个模型；想核对这次请求，用上面的日志 ID 到平台后台查');
     }
     return new ProviderError('E-UPS-50', `平台生成失败：${(e as Error)?.message || String(e)}`, '稍后重试');
   }
@@ -339,7 +350,7 @@ export class PlatformMediaProvider implements Provider {
           method: 'POST',
           form,
           signal: ctx.signal,
-          timeoutMs: 600_000,
+          timeoutMs: GENERATION_TIMEOUT_MS,
         });
       };
       let reply: ImageReply;
@@ -366,7 +377,7 @@ export class PlatformMediaProvider implements Provider {
         method: 'POST',
         json: body,
         signal: ctx.signal,
-        timeoutMs: 600_000,
+        timeoutMs: GENERATION_TIMEOUT_MS,
       });
     } catch (e) {
       if (!size || !isUnsupportedParam(e, 'size')) throw e;
@@ -375,7 +386,7 @@ export class PlatformMediaProvider implements Provider {
         method: 'POST',
         json: rest,
         signal: ctx.signal,
-        timeoutMs: 600_000,
+        timeoutMs: GENERATION_TIMEOUT_MS,
       });
     }
     return this.saveImageReply(reply, ctx);

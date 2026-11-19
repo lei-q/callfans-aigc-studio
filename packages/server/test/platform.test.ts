@@ -368,6 +368,46 @@ describe('平台媒体模型与生成', () => {
     }
   });
 
+  it('图片：网关 / 代理在生成完成前切断请求（504）：报出现场和日志 ID，提示先核对再重试，且只提交一次', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    let n = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (u.endsWith('/v1/images/generations')) {
+          n += 1;
+          return new Response('<html><head><title>504 Gateway Time-out</title></head><body><center><h1>504 Gateway Time-out</h1></center><hr><center>nginx</center></body></html>', {
+            status: 504,
+            headers: { 'content-type': 'text/html', server: 'nginx', 'x-litellm-call-id': '67e85875-cca5-4181-a50e-3ca4efa1c6d3' },
+          });
+        }
+        return jsonRes(404, { error: { message: 'unexpected' } });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    const job = { id: 'j-cut', name: 't', type: 'image' as const, ws: 'w1', model: model.id, prompt: '海报', refs: [], ratio: '1:1', count: 1, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [] };
+    const ctx: RunContext = { signal: new AbortController().signal, progress: () => {}, save: async (_b, mime) => ({ src: '/x', mime }), resolveRef: async () => null, setUpstream: () => {} };
+    const err = await core.platformMedia.run(job, model, ctx).then(() => null, (e: { code: string; reason?: string; message?: string; fix?: string }) => e);
+    expect(err).toMatchObject({ code: 'E-NET-05' });
+    const text = `${err!.reason ?? ''}${err!.message ?? ''}`;
+    expect(text).toContain('可能已经生成完毕并计费');
+    expect(text).toContain('HTTP 504');
+    expect(text).toContain('日志 ID 67e85875-cca5-4181-a50e-3ca4efa1c6d3');
+    expect(text).toContain('nginx');
+    expect(err!.fix).toContain('先别重复提交');
+    expect(n).toBe(1); /* 绝不自动重发：重发会再计一次费 */
+  });
+
+  it('traceOf：Cloudflare 524 与 LiteLLM 日志 ID', async () => {
+    const { traceOf } = await import('../src/account/platform');
+    const res = new Response('error code: 524', { status: 524, headers: { 'cf-ray': 'abc123-HKG', 'x-request-id': 'req-1' } });
+    expect(traceOf(res, 101_400)).toBe('HTTP 524 · 等了 101s · 经过 Cloudflare（abc123-HKG） · 日志 ID req-1');
+  });
+
   it('图片：网关明确不认识 size 时，去掉它重发一次；超时之类绝不重发', async () => {
     const core = await makeFssCore();
     fakeLogin(core);

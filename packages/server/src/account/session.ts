@@ -33,8 +33,9 @@ import {
   type FssSku,
 } from './consumer';
 import { OidcClient, OidcError, randomToken, type OidcTokens } from './oidc';
+import { gatewayRequest } from '../gatewayHttp';
 import { openInBrowser } from '../open';
-import { platformChat, platformError, PlatformError } from './platform';
+import { platformChat, platformError, PlatformError, traceOf } from './platform';
 import type { EventHub } from '../events';
 import type { ChatMessage } from '../providers/types';
 import type { Secrets } from '../secrets';
@@ -530,7 +531,7 @@ export class AccountSession {
     const timeout = opts.timeoutMs ?? 120_000;
     const signal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
     const call = (key: string) =>
-      fetch(`${base}${path}`, {
+      gatewayRequest(`${base}${path}`, {
         method: opts.method || 'GET',
         headers: {
           Accept: 'application/json',
@@ -541,8 +542,13 @@ export class AccountSession {
         signal,
       }).catch((e) => {
         if (opts.signal?.aborted) throw e;
-        if ((e as Error).name === 'TimeoutError') throw new PlatformError(504, '平台生成网关超时，请稍后再试', 'timeout');
-        throw new PlatformError(0, `连不上平台生成网关：${(e as Error).message}`, 'gateway_unreachable');
+        if ((e as Error).name === 'TimeoutError') throw new PlatformError(504, `平台生成网关超时（等了 ${Math.round(timeout / 60_000)} 分钟），请稍后再试`, 'timeout');
+        /* 底层 HTTP 客户端自己的等待上限（gatewayHttp 里放宽到 21 分钟）；撞上它时报出来只有一句 fetch failed */
+        const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+        if (cause?.code === 'UND_ERR_HEADERS_TIMEOUT' || cause?.code === 'UND_ERR_BODY_TIMEOUT') {
+          throw new PlatformError(504, '平台长时间没有返回，连接被客户端放弃了：这个模型生成得太慢', 'timeout');
+        }
+        throw new PlatformError(0, `连不上平台生成网关：${cause?.message || (e as Error).message}`, 'gateway_unreachable');
       });
     let res = await call(await this.llmKey());
     const userId = this.profile?.id;
@@ -555,6 +561,7 @@ export class AccountSession {
 
   /** 平台生成接口返回 JSON；非 2xx 统一翻成可读错误。multipart 走 form */
   async gatewayJson<T>(path: string, opts: { method?: string; json?: unknown; form?: FormData; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+    const t0 = Date.now();
     const res = await this.gatewayFetch(path, opts);
     const text = await res.text();
     let body: unknown = null;
@@ -563,7 +570,7 @@ export class AccountSession {
     } catch {
       /* 非 JSON：下面的错误信息会带上原文 */
     }
-    if (!res.ok) throw platformError(res.status, body ?? text);
+    if (!res.ok) throw platformError(res.status, body ?? text, traceOf(res, Date.now() - t0, text));
     return body as T;
   }
 
@@ -572,6 +579,7 @@ export class AccountSession {
     path: string,
     opts: { method?: string; json?: unknown; form?: FormData; signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<{ buf: Buffer; mime: string }> {
+    const t0 = Date.now();
     const res = await this.gatewayFetch(path, opts);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -581,7 +589,7 @@ export class AccountSession {
       } catch {
         /* 非 JSON：保留原文 */
       }
-      throw platformError(res.status, body);
+      throw platformError(res.status, body, traceOf(res, Date.now() - t0, text));
     }
     return { buf: Buffer.from(await res.arrayBuffer()), mime: res.headers.get('content-type') || 'application/octet-stream' };
   }
