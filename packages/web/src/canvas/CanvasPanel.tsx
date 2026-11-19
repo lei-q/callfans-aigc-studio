@@ -12,6 +12,10 @@ import { CVS_K_MAX, CVS_K_MIN, CVS_W_MAX, CVS_W_MIN, cvsCenter, cvsItemH, cvsIte
 import { menuItems, uploadFromMenu } from './menu';
 import * as op from './ops';
 
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+/** 框选的修饰键：Windows 是 Alt，Mac 是 Command（Option 也认，两边肌肉记忆通用） */
+const isMarqueeKey = (e: MouseEvent) => e.altKey || (IS_MAC && e.metaKey);
+
 type Act =
   | { mode: 'pan'; sx: number; sy: number; ox: number; oy: number; moved: boolean }
   | { mode: 'move'; sx: number; sy: number; k: number; origin: Record<string, { x: number; y: number }>; moved: boolean; ex?: number; ey?: number; collapseTo?: string }
@@ -165,7 +169,7 @@ function OpenCanvas() {
         e.preventDefault();
         const v = op.currentView();
         actRef.current = { mode: 'pan', sx: e.clientX, sy: e.clientY, ox: v.x, oy: v.y, moved: false };
-        document.body.classList.add('cvs-acting');
+        document.body.classList.add('cvs-acting', 'cvs-panning');
         return;
       }
       if (e.button !== 0) return;
@@ -240,9 +244,14 @@ function OpenCanvas() {
         return;
       }
 
-      /* 只剩「在空白处拖」：框选 */
+      /* 空白处：默认拖动画布；按住 Alt（Windows）/ Command（Mac）再拖才是框选 */
       e.preventDefault();
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      if (!isMarqueeKey(e)) {
+        actRef.current = { mode: 'pan', sx: e.clientX, sy: e.clientY, ox: v.x, oy: v.y, moved: false };
+        document.body.classList.add('cvs-acting', 'cvs-panning');
+        return;
+      }
       const rect = vp.getBoundingClientRect();
       actRef.current = {
         mode: 'marquee',
@@ -250,11 +259,11 @@ function OpenCanvas() {
         sy: e.clientY,
         ox: e.clientX - rect.left,
         oy: e.clientY - rect.top,
-        additive: e.shiftKey || e.ctrlKey || e.metaKey,
-        base: e.shiftKey || e.ctrlKey || e.metaKey ? s.canvasSel.slice() : [],
+        additive: e.shiftKey,
+        base: e.shiftKey ? s.canvasSel.slice() : [],
         moved: false,
       };
-      document.body.classList.add('cvs-acting');
+      document.body.classList.add('cvs-acting', 'cvs-marqueeing');
     };
 
     let raf = 0;
@@ -337,7 +346,7 @@ function OpenCanvas() {
       const a = actRef.current;
       if (!a) return;
       actRef.current = null;
-      document.body.classList.remove('cvs-acting');
+      document.body.classList.remove('cvs-acting', 'cvs-panning', 'cvs-marqueeing');
       if (a.mode === 'draw') {
         vp.querySelector('#cvsPenPreview')?.remove();
         if (a.moved && a.pts.length > 1) op.addDrawing(a.pts, getState().cvsPen.color, getState().cvsPen.lw);
@@ -900,7 +909,7 @@ function CanvasFoot({ zoomRef }: { zoomRef: React.RefObject<HTMLSpanElement | nu
       <div className="cvs-foot">
         <span className="cvs-foot-hint">
           <Icon name="target" />
-          从素材库拖进来 · 拖空白框选 · 空格拖平移 · 滚轮缩放 · 右键更多
+          从素材库拖进来 · 拖空白移动画布 · {IS_MAC ? '⌘' : 'Alt'}+拖框选 · 滚轮缩放 · 右键更多
         </span>
         <span className="grow" />
         {zoom}

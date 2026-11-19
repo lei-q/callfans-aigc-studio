@@ -162,11 +162,22 @@ test('画布：框选、右键对齐、连线、撤销，刷新后仍在', async
   const box = (await vp.boundingBox())!;
   await page.keyboard.press('f');
 
-  /* 空白处拖出选框，框住全部元素 */
+  /* 空白处直接拖是平移画布，不会选中任何元素 */
   await page.mouse.move(box.x + 6, box.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 30, box.y + 30, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.locator('#cvsWorld .cvs-el.sel')).toHaveCount(0);
+  await page.keyboard.press('f');
+
+  /* 按住 Alt（Windows）/ Command（Mac）在空白处拖出选框，框住全部元素 */
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Alt';
+  await page.mouse.move(box.x + 6, box.y + 6);
+  await page.keyboard.down(mod);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width - 6, box.y + box.height - 6, { steps: 8 });
   await page.mouse.up();
+  await page.keyboard.up(mod);
   const n = await page.locator('#cvsWorld .cvs-el').count();
   expect(n).toBeGreaterThanOrEqual(2);
   await expect(page.locator('#cvsWorld .cvs-el.sel')).toHaveCount(n);
