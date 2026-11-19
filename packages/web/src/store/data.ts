@@ -77,7 +77,14 @@ function startWalletPoll() {
 export async function boot() {
   try {
     const b = await api.get<Bootstrap>('/api/bootstrap');
-    setState((s) => {
+    /* 本地有没写进服务的画板改动：以本地为准（再补写一次），别让服务端的旧版本盖掉 */
+    const keep = new Map<string, Board>();
+    for (const ws of dirtyBoards) {
+      const local = getState().boards[ws];
+      if (local && b.projects.some((p) => p.id === ws)) keep.set(ws, local);
+    }
+    /* 重连补拉不是用户操作：不进撤销栈 */
+    silently(() => setState((s) => {
       s.app = b.app;
       s.projects = b.projects;
       s.jobs = b.jobs;
@@ -97,15 +104,17 @@ export async function boot() {
       if (typeof ui.canvasOpen === 'boolean') s.canvasOpen = ui.canvasOpen;
       if (typeof ui.type === 'string' && (TYPE_KEYS as string[]).includes(ui.type)) s.type = ui.type as MediaType;
       s.ws = typeof ui.ws === 'string' && b.projects.some((p) => p.id === ui.ws) ? ui.ws : b.projects[0]?.id || '';
+      for (const [ws, local] of keep) s.boards[ws] = local;
       for (const p of b.projects) if (!s.boards[p.id]) s.boards[p.id] = emptyBoard();
       fixParams(s);
       s.ready = true;
       s.bootError = null;
-    });
+    }));
     for (const [ws, board] of Object.entries(getState().boards)) {
       lastSaved.set(ws, board);
       lastSnap.set(ws, snapOf(board));
     }
+    for (const ws of keep.keys()) scheduleSave(ws);
     startWalletPoll();
     if (!subscribed) {
       subscribed = true;
@@ -149,9 +158,12 @@ export function applyEvent(raw: unknown) {
         break;
       case 'session':
         s.session = e.session;
+        /* 登录流程由轮询结果（成功 / 被拒 / 过期）收尾；这里清掉会把「登录失败的原因」一起吞掉 */
         if (!e.session.loggedIn) {
           s.wallet = null;
-          s.loginFlow = null;
+          /* 订单是账号的：退出后换另一个账号登录，不能还看到上一个账号的订单与进行中的支付 */
+          s.orders = [];
+          s.activeOrder = null;
         }
         fixParams(s);
         break;
@@ -166,6 +178,16 @@ export function applyEvent(raw: unknown) {
       case 'project.deleted':
         s.projects = s.projects.filter((p) => p.id !== e.id);
         delete s.boards[e.id];
+        /* 服务端连带删了这个项目的任务、产出、帖子，只发了一个事件：本地也要一起清，否则「全部项目」里还有点不开的幽灵产出 */
+        s.jobs = s.jobs.filter((j) => j.ws !== e.id);
+        s.results = s.results.filter((r) => r.ws !== e.id);
+        s.posts = s.posts.filter((p) => p.ws !== e.id);
+        delete s.history[e.id];
+        delete s.future[e.id];
+        s.libSelect = [];
+        dirtyBoards.delete(e.id);
+        lastSaved.delete(e.id);
+        lastSnap.delete(e.id);
         if (s.ws === e.id) s.ws = s.projects[0]?.id || '';
         break;
       case 'models':
@@ -189,21 +211,50 @@ export function applyEvent(raw: unknown) {
 const lastSaved = new Map<string, Board>();
 const lastSnap = new Map<string, string>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 改了但还没确认写进本机服务的画板：断线重连后要保留本地版本并补写，不能被服务端旧版本覆盖 */
+const dirtyBoards = new Set<string>();
 let applyingSnap = false;
 /** 正在写撤销栈：嵌套 setState 通知时不要再当成一次画板改动 */
 let recordingHistory = false;
 
+/**
+ * 产出从画布上拿掉（删除 / 撤销 / 清空）后：没有任何画板还引用它、又没存进素材库的，退回草稿箱。
+ * 否则它的 home 停在 canvas，收件箱、草稿箱、素材库三处都列不出来。
+ */
+export function releaseCanvasOrphans() {
+  const s = getState();
+  const used = new Set<string>();
+  for (const b of Object.values(s.boards)) for (const i of b.items) if (i.rid) used.add(i.rid);
+  const orphans = s.results.filter((r) => r.home === 'canvas' && !used.has(r.id));
+  if (!orphans.length) return;
+  setState((st) => {
+    for (const r of st.results) if (r.home === 'canvas' && !used.has(r.id)) r.home = 'draft';
+  });
+  for (const r of orphans) void api.patch(`/api/results/${r.id}`, { home: 'draft' }).catch(() => {});
+}
+
 export const snapOf = (b: Board) => JSON.stringify({ i: b.items, l: b.links });
 
 function scheduleSave(ws: string) {
+  dirtyBoards.add(ws);
   const t = saveTimers.get(ws);
   if (t) clearTimeout(t);
   saveTimers.set(
     ws,
     setTimeout(() => {
+      saveTimers.delete(ws);
       const b = getState().boards[ws];
-      if (!b || !getState().projects.some((p) => p.id === ws)) return;
-      api.put(`/api/boards/${ws}`, b).catch(() => toast('warn', '画板没能保存', '本机服务可能已停止，恢复后会自动重试'));
+      if (!b || !getState().projects.some((p) => p.id === ws)) {
+        dirtyBoards.delete(ws);
+        return;
+      }
+      api
+        .put(`/api/boards/${ws}`, b)
+        .then(() => {
+          /* 写的过程中又改了的话，新的那次定时器会负责，这里不能提前清标记 */
+          if (getState().boards[ws] === b) dirtyBoards.delete(ws);
+        })
+        .catch(() => toast('warn', '画板没能保存', '本机服务可能已停止，恢复连接后会自动补写'));
     }, 350),
   );
 }
@@ -233,12 +284,12 @@ export function startPersistence() {
         const prevBoard = prev.boards[ws];
         if (!prevBoard || (prevBoard.items === board.items && prevBoard.links === board.links)) continue;
         const k = snapOf(board);
-        const last = lastSnap.get(ws);
-        if (last === undefined) {
+        /* 本次会话新建的项目没有快照：以改动前的画板作为第一个撤销点 */
+        const last = lastSnap.get(ws) ?? snapOf(prevBoard);
+        if (k === last) {
           lastSnap.set(ws, k);
           continue;
         }
-        if (k === last) continue;
         if (!applyingSnap) {
           /* 同步入栈：拖拽、连线、对齐可能在同一帧里连续发生，延迟入栈会让撤销丢步 */
           recordingHistory = true;
@@ -285,6 +336,7 @@ function applySnap(ws: string, k: string) {
   });
   applyingSnap = false;
   lastSnap.set(ws, k);
+  releaseCanvasOrphans();
 }
 
 export function undo() {

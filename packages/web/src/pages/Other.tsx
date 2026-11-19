@@ -127,6 +127,18 @@ function UsageSection({ loggedIn }: { loggedIn: boolean }) {
       .then((r) => setReqs(r.items))
       .catch(() => setReqs([]));
   }, [loggedIn]);
+  /* 账号中心渠道不提供本地用量汇总：不要显示恒为 0 的合计，每个任务的消耗在「任务记录」里 */
+  if (s.settings?.account.provider === 'fastsso') {
+    return (
+      <div className="catalog-sec">
+        <div className="catalog-sec-name">用量与账单</div>
+        <div className="table-note">
+          <Icon name="coins" />
+          <span>每个任务实际消耗的点数以平台流水为准，在「任务记录」里按任务查看；充值与订单在账号抽屉里。</span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="catalog-sec">
       <div className="catalog-sec-name">用量与账单</div>
@@ -512,7 +524,7 @@ export function SettingsPage() {
                   <span className="tiny dim">
                     {s.session?.accountMode === 'enterprise'
                       ? `${s.session?.tenant?.name || '企业'} 员工 · 余额 ${balance(s)} 点 · 由企业账户结算`
-                      : `${s.session?.profile?.phoneMasked} · 余额 ${balance(s)} 点 · 今日免费 ${round1(s.wallet?.freeToday || 0)} 点`}
+                      : [s.session?.profile?.phoneMasked, `余额 ${balance(s)} 点`, s.wallet?.freeToday ? `今日免费 ${round1(s.wallet.freeToday)} 点` : ''].filter(Boolean).join(' · ')}
                   </span>
                 </div>
                 {s.session?.accountMode !== 'enterprise' && (
@@ -636,7 +648,16 @@ export function SettingsPage() {
               className="form-input"
               value={port}
               onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))}
-              onBlur={() => Number(port) !== st.runtime.port && Number(port) >= 1024 && void patchSettings({ runtime: { port: Number(port) } }, '端口已保存，重启后生效')}
+              onBlur={() => {
+                if (Number(port) === st.runtime.port || Number(port) < 1024) return;
+                /* 5781 是登录回调的固定端口，Web 服务占了它就再也登录不了 */
+                if (Number(port) === 5781) {
+                  toast('warn', '这个端口不能用', '5781 是登录回调专用端口，换一个');
+                  setPort(String(st.runtime.port));
+                  return;
+                }
+                void patchSettings({ runtime: { port: Number(port) } }, '端口已保存，重启后生效');
+              }}
             />
           </div>
           <div className="form-row">

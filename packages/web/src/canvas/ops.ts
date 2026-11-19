@@ -26,7 +26,7 @@ import { api } from '../lib/api';
 import { copyText, downloadText, pickFiles, readText, thumbOf } from '../lib/util';
 import { getState, setState, type State } from '../store';
 import { canAfford, refOfResult, uploadFiles, addToAesthetic, jobBody } from '../store/actions';
-import { fixParams, silently } from '../store/data';
+import { fixParams, releaseCanvasOrphans, silently } from '../store/data';
 import { boardOf, canvasHas, canvasItems, canvasLinks, canvasSelItems, emptyBoard, jobById, modelOf, resultById, savedToLib, wsShort } from '../store/selectors';
 import { toast, toastError } from '../store/toast';
 import { CVS_AR, CVS_H_NODE, CVS_H_POST, CVS_H_WEB, CVS_K_MAX, CVS_K_MIN, CVS_W, CVS_W_TEXT, TEXT_H, TEXT_SIZE_NAME, cvsBounds, cvsItemH, cvsItemW, cvsZ, inGroup } from './geometry';
@@ -63,9 +63,23 @@ const selected = () => canvasSelItems(getState());
 
 /* ---------------- 进画布 ---------------- */
 
-function nextSpot(s: State) {
-  const n = canvasItems(s).length;
-  return { x: 40 + (n % 4) * (CVS_W + 24), y: 40 + Math.floor(n / 4) * 210 };
+/** 没指定落点（点「放进画布」）：在当前视野里按网格找第一个不压住已有元素的空位；视野排满了就放中央 */
+function freeSpot(s: State) {
+  const vp = viewportEl();
+  const v = currentView();
+  const taken = canvasItems(s);
+  const x0 = vp ? -v.x / v.k + 40 : 40;
+  const y0 = vp ? -v.y / v.k + 40 : 40;
+  const x1 = vp ? (vp.clientWidth - v.x) / v.k - CVS_W - 20 : 40 + 3 * (CVS_W + 24);
+  const y1 = vp ? (vp.clientHeight - v.y) / v.k - 210 : Infinity;
+  const hits = (x: number, y: number) =>
+    taken.some((t) => t.kind !== 'group' && t.x < x + CVS_W + 12 && t.x + cvsItemW(t) > x - 12 && t.y < y + 200 && t.y + cvsItemH(t) > y - 12);
+  for (let y = y0; y <= Math.max(y0, y1); y += 210) {
+    for (let x = x0; x <= Math.max(x0, x1); x += CVS_W + 24) {
+      if (!hits(x, y)) return { x: Math.round(x), y: Math.round(y) };
+    }
+  }
+  return dropPoint(null, null);
 }
 
 /** 把一条产出放进画布：收件箱里算「留用」，草稿箱里算「捞回来」 */
@@ -78,7 +92,8 @@ export function keepResult(rid: string, at?: { x: number; y: number }) {
     return;
   }
   const from = r.home;
-  const pos = at || nextSpot(s);
+  /* 没指定落点（点「放进画布」）：放在当前视野中央，并错开已有元素，不要排到屏幕外 */
+  const pos = at || freeSpot(s);
   const id = uid('c');
   const j = jobById(s, r.job);
   mutateBoard((b) => {
@@ -276,6 +291,7 @@ export async function addLink(url: string, clientX: number | null, clientY: numb
 export function selectAll() {
   setState((s) => {
     s.canvasSel = canvasItems(s).map((i) => i.id);
+    s.linkSel = null;
     s.cvsMenu = null;
   });
   const n = getState().canvasSel.length;
@@ -284,6 +300,16 @@ export function selectAll() {
 
 export const clearSel = () => setState((s) => void (s.canvasSel = []));
 
+/** 元素没了：编辑态、连线起点、连线标签这些瞬态不能还指着它 */
+function dropTransients(ids: Set<string>) {
+  setState((s) => {
+    if (s.editTextId && ids.has(s.editTextId)) s.editTextId = null;
+    if (s.linkFrom && ids.has(s.linkFrom)) s.linkFrom = null;
+    s.linkSel = null;
+    s.linkLabelEdit = null;
+  });
+}
+
 export function removeItem(id: string) {
   mutateBoard((b, s) => {
     b.items = b.items.filter((i) => i.id !== id);
@@ -291,6 +317,8 @@ export function removeItem(id: string) {
     s.canvasSel = s.canvasSel.filter((x) => x !== id);
     if (b.anchor?.cvsId === id) b.anchor = null;
   });
+  dropTransients(new Set([id]));
+  releaseCanvasOrphans();
 }
 
 export function removeOne(id: string) {
@@ -312,6 +340,8 @@ export function deleteSel() {
     st.canvasSel = [];
     st.cvsMenu = null;
   });
+  dropTransients(new Set(ids));
+  releaseCanvasOrphans();
   toast('info', `已移除 ${ids.length} 个元素`, hadGroup ? '分组框移除了，组里的元素都还在画板上' : '素材库里的产出不受影响');
 }
 
@@ -343,13 +373,22 @@ export function duplicateSel() {
   toast('success', `已复制 ${sel.length} 个`, extra ? `含组内 ${extra} 个成员，副本在原位置右下角` : '副本在原位置右下角，可以直接拖走');
 }
 
+/* 按住方向键会连发几十次：同一选区 600ms 内连续的微调合并成一条撤销记录，不然 40 步的历史一下就被冲光 */
+let lastNudge = { at: 0, sel: '' };
 export function nudge(dx: number, dy: number) {
-  mutateBoard((b, s) => {
-    for (const i of b.items) if (s.canvasSel.includes(i.id)) {
-      i.x += dx;
-      i.y += dy;
-    }
-  });
+  const key = getState().canvasSel.join(',');
+  const merge = Date.now() - lastNudge.at < 600 && lastNudge.sel === key;
+  lastNudge = { at: Date.now(), sel: key };
+  const run = () =>
+    mutateBoard((b, s) => {
+      for (const i of b.items)
+        if (s.canvasSel.includes(i.id)) {
+          i.x += dx;
+          i.y += dy;
+        }
+    });
+  if (merge) silently(run);
+  else run();
 }
 
 /* ---------------- 对齐 / 分布 / 层级 / 变换 ---------------- */
@@ -460,7 +499,10 @@ export const resetEl = () =>
 export function resizeItem(id: string, w: number) {
   mutateBoard((b) => {
     const it = b.items.find((x) => x.id === id);
-    if (it) it.w = Math.round(w);
+    if (!it) return;
+    /* 手绘：高度随宽度等比走，线条才不会被拉扁 */
+    if (it.kind === 'draw' && it.w && it.h) it.h = Math.max(12, Math.round((it.h * w) / it.w));
+    it.w = Math.round(w);
   });
 }
 
@@ -506,9 +548,10 @@ export function zoomTo100() {
 /** 按当前视口宽度把所有元素排成规整网格 */
 export function arrange() {
   const s = getState();
-  const items = canvasItems(s);
+  /* 分组框和手绘标注不是卡片：排进网格会把分组拆散、让标注离开它圈住的图 */
+  const items = canvasItems(s).filter((i) => i.kind !== 'group' && i.kind !== 'draw');
   if (!items.length) {
-    toast('info', '画布是空的', '先往里面丢点东西');
+    toast('info', canvasItems(s).length ? '没有可整理的元素' : '画布是空的', canvasItems(s).length ? '分组框和手绘标注不参与整理' : '先往里面丢点东西');
     return;
   }
   const vp = viewportEl();
@@ -533,6 +576,8 @@ export function arrange() {
   });
   moveItems(pos);
   setState((st) => void (st.cvsMenu = null));
+  /* 网格从 (40,40) 起排：视口平移到别处时，整理完要把视野带回来 */
+  fitAll();
   toast('success', '已整理', `${items.length} 个元素排成网格`);
 }
 
@@ -707,6 +752,8 @@ export function linkTo(target: string | null) {
   const from = getState().linkFrom;
   setState((s) => void (s.linkFrom = null));
   if (!from || !target || target === from) return;
+  const ids = new Set(canvasItems(getState()).map((i) => i.id));
+  if (!ids.has(from) || !ids.has(target)) return;
   if (linkHas(from, target)) {
     toast('info', '这两个已经连过了');
     return;
@@ -1242,6 +1289,8 @@ export function canvasClear() {
     st.linkSel = null;
     st.cvsMenu = null;
   });
+  setState((st) => void ((st.linkFrom = null), (st.editTextId = null), (st.linkLabelEdit = null)));
+  releaseCanvasOrphans();
   setView({ x: 40, y: 40, k: 1 });
   toast('info', '画布已清空', '只清空了当前项目的画布；按 Ctrl+Z 可以撤销');
 }

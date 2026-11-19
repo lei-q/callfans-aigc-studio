@@ -48,6 +48,7 @@ function useKeys() {
           return;
         }
         if (s.linkLabelEdit) return setState((st) => void (st.linkLabelEdit = null));
+        if (s.linkSel) return setState((st) => void (st.linkSel = null));
         if (s.cvsMenu) return setState((st) => void (st.cvsMenu = null));
         if (s.linkFrom) return setState((st) => void (st.linkFrom = null));
         if (s.platforms) return setState((st) => void (st.platforms = null));

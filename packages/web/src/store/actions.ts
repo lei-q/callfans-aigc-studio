@@ -78,6 +78,9 @@ export function pickWs(id: string) {
     s.wsMenu = false;
     s.canvasSel = [];
     s.linkSel = null;
+    s.linkFrom = null;
+    s.editTextId = null;
+    s.linkLabelEdit = null;
     s.cvsMenu = null;
     s.cvsPop = null;
     s.diverge = null;
@@ -319,7 +322,10 @@ export async function gen() {
     }
   } catch (e) {
     toastError(e, '没能加入队列');
-    if ((e as { status?: number }).status === 402 || (e as { status?: number }).status === 403) openDrawer((e as { status?: number }).status === 402 ? 'topup' : 'account');
+    const status = (e as { status?: number }).status;
+    /* 企业员工的用量由租户结算，不能充值：别把人带进一个永远显示「充值暂未开放」的抽屉 */
+    if (status === 402 && getState().session?.accountMode === 'enterprise') toast('info', '额度不足', '企业账号由租户统一结算，请联系租户管理员');
+    else if (status === 402 || status === 403) openDrawer(status === 402 ? 'topup' : 'account');
   }
 }
 
@@ -358,15 +364,22 @@ export function makeVariant(rid: string) {
   setState((st) => {
     st.type = r.type;
     if (j) st.prompt[r.type] = j.prompt;
-    const refs = st.refs[r.type].filter((x) => x.rid !== r.id);
-    refs.unshift(refOfResult(r, r.type === 'image' ? 0.6 : 0.5));
-    st.refs[r.type] = refs.slice(0, MAX_REFS);
+    /* 只有图片能当参考图：视频 / 音频的文件地址不是图，当参考会让缩略图裂掉、上游 400 */
+    if (r.type === 'image') {
+      const refs = st.refs[r.type].filter((x) => x.rid !== r.id);
+      refs.unshift(refOfResult(r, 0.6));
+      st.refs[r.type] = refs.slice(0, MAX_REFS);
+    }
     st.optimize = null;
     st.page = 'studio';
     st.studioTab = 'gen';
     st.drawer = null;
   });
-  toast('ai', '已回填为参考素材', `${j ? '提示词已替换为来源任务的描述，' : ''}参考素材已换成「${r.title}」`);
+  toast(
+    'ai',
+    r.type === 'image' ? '已回填为参考素材' : '已回填提示词',
+    r.type === 'image' ? `${j ? '提示词已替换为来源任务的描述，' : ''}参考素材已换成「${r.title}」` : `${j ? '提示词已替换为来源任务的描述；' : ''}视频和音频不能当参考素材，按需调整参数后重新生成`,
+  );
 }
 
 export function copyPromptOf(rid: string) {
@@ -613,15 +626,17 @@ export function libSel(id: string) {
   });
 }
 
-async function savePost(p: Post) {
+async function savePost(p: Post): Promise<boolean> {
   try {
     await api.put(`/api/posts/${p.id}`, { ws: p.ws, title: p.title, body: p.body, items: p.items, platform: p.platform });
+    return true;
   } catch (e) {
     toastError(e, '帖子没能保存');
+    return false;
   }
 }
 
-function updatePost(id: string, fn: (p: Post) => void) {
+function updatePost(id: string, fn: (p: Post) => void): Promise<boolean> {
   let out: Post | undefined;
   setState((s) => {
     const p = s.posts.find((x) => x.id === id);
@@ -630,7 +645,7 @@ function updatePost(id: string, fn: (p: Post) => void) {
     p.updatedAt = Date.now();
     out = JSON.parse(JSON.stringify(p));
   });
-  if (out) void savePost(out);
+  return out ? savePost(out) : Promise.resolve(false);
 }
 
 export function libPack() {
@@ -663,11 +678,13 @@ export function postNew() {
   void savePost(p);
 }
 
-export function postSave(id: string, title: string, body: string) {
-  updatePost(id, (p) => {
+export async function postSave(id: string, title: string, body: string) {
+  const ok = await updatePost(id, (p) => {
     p.title = title.trim() || '未命名帖子';
     p.body = body;
   });
+  /* 没写进去就别说「已保存」，也别关抽屉：用户还能改了再试 */
+  if (!ok) return;
   closeDrawer();
   const p = getState().posts.find((x) => x.id === id);
   toast('success', '帖子已保存', `${p?.items.length || 0} 张配图 · ${(p?.body || '').length} 字`);
@@ -858,7 +875,7 @@ export function loginPollLoop() {
     if (r?.status === 'expired' || r?.status === 'denied') {
       setState((st) => {
         st.loginFlow = null;
-        st.loginError = r?.status === 'denied' ? '登录被拒绝' : '登录链接已过期';
+        st.loginError = r?.status === 'denied' ? r.error || '登录被拒绝' : '登录链接已过期';
       });
       return;
     }
@@ -1212,6 +1229,8 @@ export async function editSave() {
       if (!st.results.some((r) => r.id === result.id)) st.results.unshift(result);
       st.editPick[t] = result.id;
     });
+    /* 参数已经烘进新产出：不重置的话预览会在新图上再叠一遍，再点保存就是双重编辑 */
+    editReset();
     toast('success', '已保存为新产出', `${result.title} · 原素材没有被改动，可在素材库找到`);
   } catch (e) {
     toastError(e, '保存失败');

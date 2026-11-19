@@ -181,9 +181,15 @@ export const CanvasEl = memo(function CanvasEl({ it, idx, sel, saved, editing, a
 
   if (it.kind === 'draw') {
     const h = cvsItemH(it);
+    /* 线条的坐标系固定为画下它时的包围盒，拖手柄改 w 时线条才会跟着一起缩放 */
+    const drawW = Math.max(12, ...(it.pts || []).map((p) => p[0]));
+    const drawH = Math.max(12, ...(it.pts || []).map((p) => p[1]));
+    const pts = (it.pts || []).map(([x, y]) => `${x},${y}`).join(' ');
     return (
       <div className={cls('draw')} data-id={it.id} style={{ ...common, height: h }}>
-        <svg className="cvs-draw-svg" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+        <svg className="cvs-draw-svg" viewBox={`0 0 ${drawW} ${drawH}`} preserveAspectRatio="none">
+          {/* 透明的粗描边只用来命中：线条本身很细，不好点 */}
+          <polyline className="cvs-draw-hit" points={pts} fill="none" stroke="transparent" strokeWidth={Math.max(it.lw || 3, 14)} strokeLinecap="round" strokeLinejoin="round" />
           <polyline
             points={(it.pts || []).map(([x, y]) => `${x},${y}`).join(' ')}
             fill="none"
@@ -328,7 +334,15 @@ function NodeEl({ it, idx, sel, editing, ops }: { it: CanvasItem; idx: number; s
     <div
       className={`cvs-el cvs-node ${sel ? 'sel' : ''} ${editing ? 'editing' : ''}`}
       data-id={it.id}
-      style={{ left: it.x, top: it.y, width: cvsItemW(it), height: cvsItemH(it), zIndex: cvsLayer(it, idx) }}
+      style={{
+        left: it.x,
+        top: it.y,
+        width: cvsItemW(it),
+        height: cvsItemH(it),
+        zIndex: cvsLayer(it, idx),
+        ...(cvsTransform(it) ? { transform: cvsTransform(it) } : {}),
+        ...(it.op != null && it.op < 1 ? { opacity: it.op } : {}),
+      }}
     >
       <textarea
         key={`${it.id}:${it.text || ''}`}

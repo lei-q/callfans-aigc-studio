@@ -1355,7 +1355,10 @@ body.cvs-space .cvs-el { cursor: grab; }
 .cvs-file-name { font-size: 12px; font-weight: 620; color: var(--t1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cvs-file-meta { font-size: 10.5px; color: var(--t3); margin-top: 2px; }
 
-.cvs-draw { border-radius: 4px; }
+.cvs-draw { border-radius: 4px; pointer-events: none; }
+/* 手绘的外框不接收点击（否则圈住一张图后下面的图点不到），只有线条本身可点；选中后的手柄与删除钮照常 */
+.cvs-draw .cvs-draw-hit { pointer-events: stroke; }
+.cvs-draw .cvs-el-ops, .cvs-draw .cvs-grip { pointer-events: auto; }
 .cvs-draw-svg { width: 100%; height: 100%; display: block; pointer-events: none; overflow: visible; }
 .cvs-draw.sel { box-shadow: 0 0 0 1px var(--primary); border-radius: 6px; }
 

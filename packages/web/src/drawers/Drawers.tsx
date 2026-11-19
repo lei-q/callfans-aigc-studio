@@ -1472,7 +1472,7 @@ function PostDrawer({ id }: { id: string }) {
               {items.length} 张配图 · 正文 {body.length} 字
             </span>
             <span>·</span>
-            <span>保存在本机，刷新不会丢</span>
+            <span>点「保存」后写入本机</span>
           </>
         }
       />
@@ -1489,7 +1489,7 @@ function PostDrawer({ id }: { id: string }) {
             <span className="grow" />
             <span className="field-hint">{body.length} 字</span>
           </div>
-          <textarea className="prompt-input post-body" value={body} onChange={(e) => setBody(e.target.value)} placeholder="正文…" />
+          <textarea className="prompt-input post-body" maxLength={20000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="正文…" />
         </div>
         <div className="field-block">
           <div className="field-head">

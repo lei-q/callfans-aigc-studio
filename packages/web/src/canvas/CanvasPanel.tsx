@@ -56,6 +56,11 @@ function OpenCanvas() {
   const results = useStore((s) => s.results);
   const space = useStore((s) => s.cvsSpace);
 
+  /* 换项目：Agent 面板里还是上一个项目的分析结果，「用它去生成」会把旧项目的提示词填进表单 */
+  useEffect(() => {
+    op.agentClose();
+  }, [ws]);
+
   const vpRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -221,10 +226,15 @@ function OpenCanvas() {
 
       /* 正在编辑的文字：让光标正常工作 */
       if (el && s.editTextId === el.dataset.id && t.closest('textarea, .cvs-text-body')) return;
+      /* 分组标题：交给浏览器放光标，否则下面的 preventDefault 会让它永远点不进去 */
+      if (t.closest('.cvs-group-name')) return;
       if (t.closest('button')) return;
 
       if (el) {
         const id = el.dataset.id!;
+        /* 正在编辑别的文字 / 节点 / 分组名：先让它失焦保存，否则光标留在原处，之后的删除键改的是旧文字 */
+        const ae = document.activeElement;
+        if (ae instanceof HTMLElement && ae.matches('textarea, [contenteditable="true"]') && !el.contains(ae)) ae.blur();
         const isSel = s.canvasSel.includes(id);
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         let nextSel = s.canvasSel;
@@ -356,7 +366,7 @@ function OpenCanvas() {
         if (a.moved) commitView();
         else {
           const s = getState();
-          if (s.canvasSel.length || s.cvsPop) setState((st) => void ((st.canvasSel = []), (st.cvsPop = null)));
+          if (s.canvasSel.length || s.cvsPop || s.linkSel) setState((st) => void ((st.canvasSel = []), (st.cvsPop = null), (st.linkSel = null)));
         }
         return;
       }
@@ -375,7 +385,7 @@ function OpenCanvas() {
           return;
         }
         const ids = hitIds(a, marqueeRect(a, e.clientX, e.clientY));
-        setState((st) => void (st.canvasSel = ids));
+        setState((st) => void ((st.canvasSel = ids), (st.linkSel = null)));
         op.agentResync();
         return;
       }
@@ -412,6 +422,8 @@ function OpenCanvas() {
 
     /* 以鼠标位置为锚点缩放 */
     const onWheel = (e: WheelEvent) => {
+      /* 右键菜单、参数浮层自己要滚：别把滚轮变成缩放画布 */
+      if ((e.target as HTMLElement).closest('.cvs-menu, .cvs-pop')) return;
       e.preventDefault();
       const v = op.currentView();
       const rect = vp.getBoundingClientRect();

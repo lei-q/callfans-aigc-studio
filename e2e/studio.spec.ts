@@ -133,6 +133,23 @@ test('生成 → 收件箱 → 放进画布 → 保存到素材库', async ({ pa
   await expect(page.locator('.result-card.draft')).not.toHaveCount(0);
 });
 
+test('任务记录：产出可以直接放回画布（未取用的 / 已沉入草稿箱的都行）', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await generate(page, '2 张');
+  await expect(page.locator('.cvs-inbox-card')).toHaveCount(2, { timeout: 30_000 });
+  const before = await page.locator('#cvsWorld .cvs-el').count();
+
+  await page.locator('.side-item', { hasText: '任务记录' }).click();
+  const row = page.locator('.jobs-table .t-row').first();
+  await row.click();
+  await expect(row).toHaveClass(/open/);
+  await page.locator('.sub-toolbar button', { hasText: '全部放进画布' }).first().click();
+
+  /* 回到工作台，两张都在画布上 */
+  await expect(page.locator('#cvsWorld .cvs-el')).toHaveCount(before + 2);
+});
+
 test('音频创作：配音模型能选到，音乐 / 音效没有模型时给出明确提示', async ({ page }) => {
   await open(page);
   await ensureLogin(page);
