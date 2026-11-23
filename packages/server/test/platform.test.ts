@@ -264,6 +264,160 @@ describe('网关调用', () => {
   });
 });
 
+describe('2026-11-23 接入变更：条款同意、统一 Key、来源标识、3:4、多张', () => {
+  const ctxOf = (saved: string[] = []): RunContext => ({
+    signal: new AbortController().signal,
+    progress: () => {},
+    save: async (_b, mime) => {
+      saved.push(mime);
+      return { src: `/files/media/${saved.length}.png`, mime };
+    },
+    resolveRef: async () => null,
+    setUpstream: () => {},
+  });
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+
+  it('注册第一步带 acceptedTerms + 两个版本；第二步 consents.accepted 与 X-Client-Id', async () => {
+    const core = await makeFssCore();
+    const seen: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        seen.push({ url: String(url), headers: (init?.headers || {}) as Record<string, string>, body: JSON.parse(String(init?.body || '{}')) });
+        return jsonRes(200, { challengeId: 'c1', channel: 'phone', maskedIdentifier: '138****8000', expiresAt: 'x', resendAfterSeconds: 60 });
+      }),
+    );
+    await core.accounts.registerStart({ identifier: '13800138000', acceptedTerms: true, termsVersion: '2026-10-01', privacyVersion: '2026-10-01' });
+    expect(seen[0].url).toBe('http://account.test/api/v1/public/consumer/registrations');
+    expect(seen[0].body).toEqual({ identifier: '13800138000', acceptedTerms: true, termsVersion: '2026-10-01', privacyVersion: '2026-10-01' });
+    await core.accounts.registerComplete({
+      challengeId: 'c1', identifier: '13800138000', code: '123456', password: 'Aa1!aaaaaaaa',
+      consents: { accepted: true, termsVersion: '2026-10-01', privacyVersion: '2026-10-01', marketing: false },
+    });
+    expect(seen[1].url).toContain('/registrations/complete');
+    expect((seen[1].body.consents as Record<string, unknown>).accepted).toBe(true);
+    expect(seen[1].headers['X-Client-Id']).toBe(core.store.settings.account.clientId);
+  });
+
+  it('本机接口：没勾选（acceptedTerms / accepted 不是 true）直接 400，不会发给平台', async () => {
+    const { registerStartSchema, registerCompleteSchema } = await import('../src/schemas');
+    const start = { identifier: '13800138000', termsVersion: 'v', privacyVersion: 'v' };
+    expect(registerStartSchema.safeParse(start).success).toBe(false);
+    expect(registerStartSchema.safeParse({ ...start, acceptedTerms: false }).success).toBe(false);
+    expect(registerStartSchema.safeParse({ ...start, acceptedTerms: true }).success).toBe(true);
+    const done = { challengeId: 'c', identifier: '13800138000', code: '123456', password: 'Aa1!aaaaaaaa', consents: { termsVersion: 'v', privacyVersion: 'v', marketing: false } };
+    expect(registerCompleteSchema.safeParse(done).success).toBe(false);
+    expect(registerCompleteSchema.safeParse({ ...done, consents: { ...done.consents, accepted: true } }).success).toBe(true);
+  });
+
+  it('统一 Key：个人账号取 Key 不带 deviceId / recover；企业员工仍按设备带', async () => {
+    for (const mode of ['consumer', 'enterprise'] as const) {
+      const core = await makeFssCore();
+      fakeLogin(core);
+      (core.accounts as unknown as { mode: string }).mode = mode;
+      const bodies: unknown[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (String(url).endsWith('/app/llm-keys')) {
+            bodies.push(JSON.parse(String(init?.body)));
+            return jsonRes(200, { key: 'sk-unified', keyId: 'k1', expiresAt: null, appId: 'aigc-studio' });
+          }
+          return jsonRes(404, {});
+        }),
+      );
+      expect(await core.accounts.llmKey()).toBe('sk-unified');
+      if (mode === 'consumer') expect(bodies[0]).toEqual({});
+      else expect(bodies[0]).toMatchObject({ recover: false, deviceId: expect.any(String) });
+    }
+  });
+
+  it('调网关都带 X-OneCloud-App：生成走 gatewayFetch、对话走 platformChat', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const headers: Record<string, string>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        headers.push((init?.headers || {}) as Record<string, string>);
+        if (u.endsWith('/v1/images/generations')) return jsonRes(200, { data: [{ b64_json: PNG, media_type: 'image/png' }] });
+        return jsonRes(200, { choices: [{ message: { content: 'ok' } }] });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    await core.platformMedia.run({ id: 'j', name: 't', type: 'image', ws: 'w', model: model.id, prompt: 'p', refs: [], ratio: '1:1', count: 1, res: '2k', cost: 0, status: 'running', createdAt: 0, results: [] }, model, ctxOf());
+    await core.accounts.chat('glm-cheap', [{ role: 'user', content: 'hi' }]);
+    expect(headers).toHaveLength(2);
+    for (const h of headers) expect(h['X-OneCloud-App']).toBe('aigc-studio');
+  });
+
+  it('3:4：算出的尺寸比例对、宽高都是 16 的倍数，并随 size 发给上游', async () => {
+    const { imageSizeOf, RATIOS } = await import('@aigc/shared');
+    expect(RATIOS).toContain('3:4');
+    for (const res of ['1080p', '2k', '4k'] as const) {
+      const [w, h] = imageSizeOf('3:4', res)!.split('x').map(Number);
+      expect(w % 16).toBe(0);
+      expect(h % 16).toBe(0);
+      expect(Math.abs(w / h - 0.75)).toBeLessThan(0.015);
+    }
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (isCatalog(u)) return jsonRes(200, CATALOG);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        bodies.push(JSON.parse(String(init?.body)));
+        return jsonRes(200, { data: [{ b64_json: PNG, media_type: 'image/png' }] });
+      }),
+    );
+    const model = platformMediaModels(CATALOG.data as never).find((m) => m.type === 'image')!;
+    await core.platformMedia.run({ id: 'j', name: 't', type: 'image', ws: 'w', model: model.id, prompt: 'p', refs: [], ratio: '3:4', count: 1, res: '2k', cost: 0, status: 'running', createdAt: 0, results: [] }, model, ctxOf());
+    expect(bodies[0].size).toBe(imageSizeOf('3:4', '2k'));
+    expect(String(bodies[0].prompt)).toContain('画幅 3:4');
+  });
+
+  it('gpt-image-2.6-sunburst-c 一次要多张：n=3 发给上游一次，返回的 3 张全部落盘', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const catalog = { appId: 'aigc-studio', data: [{ id: 'gpt-image-2.6-sunburst-c', protocol: 'openai', mode: 'image_generation', pricing: { per_image: 0.04 } }] };
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (isCatalog(u)) return jsonRes(200, catalog);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        calls.push({ url: u, body: JSON.parse(String(init?.body)) });
+        return jsonRes(200, { data: [1, 2, 3].map(() => ({ b64_json: PNG, media_type: 'image/png' })) });
+      }),
+    );
+    const model = platformMediaModels(catalog.data as never)[0];
+    const saved: string[] = [];
+    const out = await core.platformMedia.run({ id: 'j', name: 't', type: 'image', ws: 'w', model: model.id, prompt: '海报', refs: [], ratio: '3:4', count: 3, res: '2k', cost: 0, status: 'running', createdAt: 0, results: [] }, model, ctxOf(saved));
+    expect(out).toHaveLength(3);
+    expect(saved).toHaveLength(3);
+    expect(calls).toHaveLength(1); /* 一次请求要 3 张，不是发 3 次 */
+    expect(calls[0].body).toMatchObject({ model: 'gpt-image-2.6-sunburst-c', n: 3 });
+  });
+
+  it('要 3 张只回 1 张：任务照常成功，完成通知里说清楚少了几张', async () => {
+    const core = await makeFssCore();
+    const notes: string[] = [];
+    core.events.on((e) => e.type === 'notice' && notes.push(`${e.title} ${e.desc}`));
+    const job = { id: 'j-short', name: '海报', type: 'image' as const, ws: core.store.projects.all()[0].id, model: 'm', prompt: 'p', refs: [], ratio: '1:1', count: 3, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [] };
+    core.store.jobs.put(job as never);
+    (core.runner as unknown as { finish: (j: unknown, o: unknown[]) => void }).finish(job, [{ src: '/files/media/a.png', thumb: '/files/media/a.png', mime: 'image/png' }]);
+    expect(core.store.jobs.get('j-short')?.status).toBe('succeeded');
+    expect(notes.join('\n')).toContain('请求 3 张，平台只返回 1 张');
+  });
+});
+
 describe('平台媒体模型与生成', () => {
   it('清单里的 image_generation / video_generation / audio_speech 变成可生成的模型，转写、聊天与 embedding 不混进来', () => {
     const models = platformMediaModels(CATALOG.data as never);
@@ -1022,9 +1176,10 @@ describe('账号会话：换一次 key 之后一直复用', () => {
     expect(calls.at(-1)!.auth).not.toContain('at-test');
   });
 
-  it('409 litellm_key_exists 带 recover 补发一次；再次 409 就上报服务端信息', async () => {
+  it('企业员工：409 litellm_key_exists 带 recover 补发一次；再次 409 就上报服务端信息（个人账号是统一 Key，没有这个流程）', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
+    (core.accounts as unknown as { mode: string }).mode = 'enterprise';
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       jsonRes(409, { code: 'litellm_key_exists', message: '已有模型密钥' }),
     );

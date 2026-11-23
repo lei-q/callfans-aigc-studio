@@ -273,9 +273,16 @@ function contentOf(body: ChatReply): string {
   return '';
 }
 
+/** 调网关时带的来源应用标识：账户中心据此按应用展示用量，只做归因、不影响扣费 */
+export const APP_SOURCE_HEADER = 'X-OneCloud-App';
+export const DEFAULT_APP_ID = 'aigc-studio';
+export const appIdOf = (fromServer?: string | null) => process.env.AIGC_APP_ID?.trim() || fromServer || DEFAULT_APP_ID;
+
 export async function platformChat(opts: {
   baseUrl: string;
   key: string;
+  /** 来源应用标识，写进 X-OneCloud-App */
+  appId?: string;
   model: string;
   messages: ChatMessage[];
   signal?: AbortSignal;
@@ -290,6 +297,7 @@ export async function platformChat(opts: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       Authorization: `Bearer ${opts.key}`,
+      [APP_SOURCE_HEADER]: appIdOf(opts.appId),
     },
     body: JSON.stringify({ model: opts.model, messages: opts.messages, stream: false }),
     signal,

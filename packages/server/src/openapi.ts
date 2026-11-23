@@ -28,7 +28,7 @@ function sizeToRatio(size?: string) {
   const w = Number(m[1]);
   const h = Number(m[2]);
   const r = w / h;
-  const table: [string, number][] = [['1:1', 1], ['4:5', 0.8], ['16:9', 16 / 9], ['9:16', 9 / 16]];
+  const table: [string, number][] = [['1:1', 1], ['4:5', 0.8], ['3:4', 0.75], ['16:9', 16 / 9], ['9:16', 9 / 16]];
   return table.sort((a, b) => Math.abs(a[1] - r) - Math.abs(b[1] - r))[0][0];
 }
 

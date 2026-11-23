@@ -182,7 +182,10 @@ export interface FssPrepay {
   expiresAt?: string | null;
 }
 
-/** POST /consumer/llm-keys：每个 (用户, 应用) 一把，默认不过期 */
+/**
+ * POST /app/llm-keys。个人账号（2026-11-23 起）：每个用户只有一把 Key、一个积分池，所有应用共用，
+ * 总是返回同一把（不再 409，deviceId / recover 被忽略）；企业员工仍按「租户 + 员工 + 应用 + 设备」一把。
+ */
 export interface FssLlmKey {
   key: string;
   keyId: string;

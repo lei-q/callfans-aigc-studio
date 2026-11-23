@@ -436,10 +436,12 @@ export class JobRunner {
     this.save(job);
     if (job.usageBilling) this.settleLater();
     const spent = job.pointsSpent != null ? ` · 消耗 ${job.pointsSpent} 点` : '';
+    /* 要了 n 张只回来更少：不算失败（平台按实际用量计费），但说清楚少了几张，别让人以为是界面漏显示 */
+    const short = job.type === 'image' && (job.count || 1) > results.length ? `（请求 ${job.count} 张，平台只返回 ${results.length} 张）` : '';
     this.core.events.notice(
       'success',
       '生成完成',
-      `${job.name} · 产出 ${results.length} 项${spent}，已送到画布顶部${settled ? `；上一批 ${settled} 项未取用，已进草稿箱` : ''}`,
+      `${job.name} · 产出 ${results.length} 项${short}${spent}，已送到画布顶部${settled ? `；上一批 ${settled} 项未取用，已进草稿箱` : ''}`,
     );
   }
 

@@ -131,7 +131,14 @@ export const orderSchema = z
 
 const identifier = z.string().min(3).max(200);
 
-export const registerStartSchema = z.object({ identifier });
+/* 2026-11-23 起账号服务强制条款同意：第一步带 acceptedTerms 与两个版本，第二步 consents 带 accepted。
+   这里也强制为 true——没勾选就不该发出请求，而不是让它到平台再被 400 */
+export const registerStartSchema = z.object({
+  identifier,
+  acceptedTerms: z.literal(true, { error: '请先勾选并同意服务条款与隐私政策' }),
+  termsVersion: z.string().min(1).max(40),
+  privacyVersion: z.string().min(1).max(40),
+});
 
 export const registerCompleteSchema = z.object({
   challengeId: z.string().min(1).max(100),
@@ -140,6 +147,7 @@ export const registerCompleteSchema = z.object({
   password: z.string().min(10).max(128),
   displayName: z.string().max(40).optional(),
   consents: z.object({
+    accepted: z.literal(true, { error: '请先勾选并同意服务条款与隐私政策' }),
     termsVersion: z.string().min(1).max(40),
     privacyVersion: z.string().min(1).max(40),
     marketing: z.boolean(),

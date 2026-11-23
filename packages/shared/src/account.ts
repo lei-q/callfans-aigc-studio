@@ -128,10 +128,20 @@ export interface RegisterCompleteBody {
   password: string;
   displayName?: string;
   consents: {
+    /** 用户已勾选《服务条款》《隐私政策》（2026-11-23 起服务端强制，缺了返回 400 consent_required） */
+    accepted: true;
     termsVersion: string;
     privacyVersion: string;
     marketing: boolean;
   };
+}
+
+/** 第一步（发验证码）的条款同意：必须在界面上让用户勾选之后才能调用 */
+export interface RegisterStartBody {
+  identifier: string;
+  acceptedTerms: true;
+  termsVersion: string;
+  privacyVersion: string;
 }
 
 export interface RegisterCompleteReply {

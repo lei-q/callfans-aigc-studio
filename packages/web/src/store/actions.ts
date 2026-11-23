@@ -960,8 +960,9 @@ export async function loadAccountDocuments() {
   return api.get<{ termsVersion: string; privacyVersion: string }>('/api/account/documents');
 }
 
-export async function registerStart(identifier: string) {
-  return api.post<RegisterStartReply>('/api/account/register/start', { identifier });
+/** 第一步要带条款同意：调用方必须已经让用户勾选（界面里勾选框在发验证码之前） */
+export async function registerStart(body: { identifier: string; termsVersion: string; privacyVersion: string }) {
+  return api.post<RegisterStartReply>('/api/account/register/start', { ...body, acceptedTerms: true });
 }
 
 export async function registerComplete(body: {
@@ -972,7 +973,7 @@ export async function registerComplete(body: {
   displayName?: string;
   consents: { termsVersion: string; privacyVersion: string; marketing: boolean };
 }) {
-  return api.post<RegisterCompleteReply>('/api/account/register/complete', body);
+  return api.post<RegisterCompleteReply>('/api/account/register/complete', { ...body, consents: { ...body.consents, accepted: true } });
 }
 
 export async function forgotPassword(identifier: string) {

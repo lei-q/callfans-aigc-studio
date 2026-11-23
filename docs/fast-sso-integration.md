@@ -65,7 +65,7 @@ https://account.callfansai.com/api/v1   （/app/** 身份、余额、模型密�
 | `POST /api/auth/poll` | 登录进度：`pending` / `approved` / `denied` / `expired` |
 | `POST /api/auth/cancel` | 取消并关闭回调监听 |
 | `POST /api/auth/logout` | 撤销 refresh token 并清理本地会话 |
-| `GET /api/account/documents` | 条款版本（注册勾选用） |
+| `GET /api/account/documents` | 条款版本（注册勾选用；第一步与第二步都要回传） |
 | `POST /api/account/register/start` | 发送注册验证码 |
 | `POST /api/account/register/complete` | 验证码 + 密码 + 条款同意 |
 | `POST /api/account/password/forgot` | 发送找回验证码 |
@@ -123,9 +123,9 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
   - 403：应用已停用，提示到平台控制台启用。
   - 仅当账号服务根本没有这个端点（404 且无 `code`，即老版本）时才回退到 `{gatewayBase}/models`，避免升级期间模型目录变空。
 - 选模型：`AIGC_CHAT_MODEL` →「模型与价格 · 文本模型」里选的（平台渠道）→ 内置偏好（`deepseek-v4.1-flash-1017`、`claude-haiku-5-5`、`gpt-6-luna`）→ 最便宜的 openai 协议对话模型；不写死。
-- 密钥：`POST /app/llm-keys`（个人账号为 `/consumer/llm-keys` 的兼容回退）用当前令牌换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。
+- 密钥：`POST /app/llm-keys`（个人账号为 `/consumer/llm-keys` 的兼容回退）用当前令牌换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。个人账号自 2026-11-23（ADR 0004）起是**统一 Key**：请求体不带 `deviceId` / `recover`，总是返回同一把；这两个字段只在企业员工入口带。所有网关调用都带 `X-OneCloud-App: aigc-studio`（`AIGC_APP_ID` 可覆盖），只做用量归因。
   - 409 `billing_account_provisioning` → 约 30 秒后重试。
-  - 409 `litellm_key_exists` → 平台已为本机签发过、但本机副本丢了：带 `recover:true` 自动补发一次（只影响本设备这一把）；补发仍冲突时把服务端信息原样上报。
+  - （仅企业员工）409 `litellm_key_exists` → 平台已为本机签发过、但本机副本丢了：带 `recover:true` 自动补发一次（只影响本设备这一把）；补发仍冲突时把服务端信息原样上报。个人账号是统一 Key，不会有这个 409。
 - 调用：`POST {gatewayBase}/v1/chat/completions`；401 丢本地副本重换一次，422 = 积分不足。
 - 失败时提示词辅助回退到规则推断，并在响应里带上原因。
 

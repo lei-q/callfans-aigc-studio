@@ -65,7 +65,7 @@ export function AgentPlanSection() {
                     ))}
                   </select>
                   <select className="form-select" value={x.ratio} onChange={(e) => agentPlanEdit(x.id, { ratio: e.target.value })}>
-                    {(x.kind === 'video' ? VIDEO_RATIOS.map((r) => r[0]) : [...new Set([...RATIOS, '3:4'])]).map((r) => (
+                    {(x.kind === 'video' ? VIDEO_RATIOS.map((r) => r[0]) : RATIOS).map((r) => (
                       <option key={r}>{r}</option>
                     ))}
                   </select>

@@ -72,7 +72,7 @@
 ### 登录、注册与充值
 
 - **登录**：标准 OIDC 授权码 + PKCE。点「登录」后用系统浏览器打开 `sso.callfansai.com`，授权完成后浏览器回调到本机固定端口 `http://127.0.0.1:5781/auth/callback`，应用自动继续。access token 只放在本机服务内存里，refresh token 加密落盘；浏览器与窗口从不直连账号 API。
-- **注册 / 找回密码**：应用内表单，验证码与密码规则由账号中心下发（6 位验证码、密码 10–128 位）；条款版本从 `/public/consumer/documents` 读取。
+- **注册 / 找回密码**：应用内表单，验证码与密码规则由账号中心下发（6 位验证码、密码 10–128 位）；条款版本从 `/public/consumer/documents` 读取。**2026-11-23 起服务端强制条款同意**：「用户协议 / 隐私政策」勾选框在**第一步（获取验证码）之前**，没勾选不发请求；第一步带 `acceptedTerms: true` 与两个版本号，第二步 `consents.accepted: true`，并带 `X-Client-Id` 标明来源应用。
 - **充值**：档位与渠道每次都从账号服务拉取（`/consumer/recharge/skus`、`/consumer/recharge/channels`，目前为汇付聚合 / 微信 / 支付宝）。选档位 → 下单（带幂等键）→ 展示收款码 → 轮询订单直到 `paid`。二维码内容是 `codeUrl`，应用本地渲染，不会把扫码串当跳转链接。
 - **余额刷新**：登录后顶栏的点数每 10 秒向账号服务查一次（页面切到后台时暂停，回到前台立刻补一次），充值到账或在别的设备消费都会在 10 秒内同步。
 - **账号配置**：见 [`docs/fast-sso-integration.md`](docs/fast-sso-integration.md)，可用环境变量 `AIGC_SSO_ISSUER`、`AIGC_ACCOUNT_API`、`AIGC_SSO_CLIENT_ID`、`AIGC_SSO_REDIRECT` 覆盖。
@@ -86,7 +86,7 @@
 「帮我写详细」和 Agent 的「需求理解 / 建议提示词」默认由平台模型生成，走 LiteLLM 网关 `https://api.callfansai.com`（切到自定义渠道时改走该渠道的对话模型）：
 
 1. 模型清单 `GET {账号服务}/public/apps/models?clientId=…` 免令牌，运行时拉取并缓存 60 秒，「模型与价格 · 文本模型」会列出来。它按应用下发，只包含**本应用真正能调用**的模型；网关自己的 `/models` 会列出没绑给本应用的模型，选了也生成不了，所以不用它。选择顺序为 `AIGC_CHAT_MODEL` → 你在「文本模型」里选的 → 内置偏好（`deepseek-v4.1-flash-1017` 等，清单里没有就跳过）→ 最便宜的 openai 协议对话模型。模型名不写死在客户端。
-2. 模型密钥由本机服务用该账号的 consumer token 换一次（`POST /consumer/llm-keys`，每个用户每个应用一把、默认不过期），**加密存在本机**，之后一直复用；前端、日志里都不会出现 `sk-`。
+2. 模型密钥由本机服务用该账号的 token 换一次（`POST /app/llm-keys`）。**个人账号是统一 Key**：每个用户只有一把 Key、一个积分池，所有一方应用与自己的脚本共用，总是返回同一把（不再 409，也不再带设备标识）；企业员工仍按「租户 + 员工 + 应用 + 设备」一把。Key **加密存在本机**，之后一直复用；前端、日志里都不会出现 `sk-`。调用网关时一律带请求头 `X-OneCloud-App: aigc-studio`（可用 `AIGC_APP_ID` 覆盖），账户中心据此按来源展示用量，只做归因、不影响扣费。
 3. 调用 `POST /v1/chat/completions`，扣的是该账号在这个应用池里的点数。网关 422 = 积分不足（充值后再试），401 = key 被吊销（丢本地副本后只重换一次）。
 4. 换 key 返回 409 `litellm_key_exists` 时不重试：说明平台已签发过、本机没有副本，需要先在平台吊销。
 

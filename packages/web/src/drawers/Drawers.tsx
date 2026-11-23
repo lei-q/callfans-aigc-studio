@@ -653,9 +653,12 @@ function RegisterForm({ onBack }: { onBack: () => void }) {
   const send = async () => {
     setErr(null);
     if (!identifier.trim()) return setErr('请填写手机号或邮箱');
+    /* 条款同意从第一步就要：账号服务在发验证码时就校验，没勾选连验证码都不会发 */
+    if (!agree) return setErr('请先勾选并同意用户协议与隐私政策');
+    if (!docs) return setErr('条款版本还没读到，请检查网络后重试');
     setBusy(true);
     try {
-      const r = await registerStart(identifier.trim());
+      const r = await registerStart({ identifier: identifier.trim(), termsVersion: docs.termsVersion, privacyVersion: docs.privacyVersion });
       setStart(r);
       setNonce((n) => n + 1);
       setErr(null);
@@ -671,8 +674,7 @@ function RegisterForm({ onBack }: { onBack: () => void }) {
     setErr(null);
     if (!/^\d{6}$/.test(code.trim())) return setErr('验证码是 6 位数字');
     if (password.length < 10 || password.length > 128) return setErr('密码需要 10–128 位');
-    if (!agree) return setErr('请先同意用户协议与隐私政策');
-    if (!docs) return setErr('条款版本还没读到，请检查网络后重试');
+    if (!agree || !docs) return setErr('条款同意已失效，请返回上一步重新勾选');
     setBusy(true);
     try {
       const r = await registerComplete({
@@ -681,7 +683,7 @@ function RegisterForm({ onBack }: { onBack: () => void }) {
         code: code.trim(),
         password,
         displayName: name.trim() || undefined,
-        consents: { termsVersion: docs?.termsVersion || '', privacyVersion: docs?.privacyVersion || '', marketing },
+        consents: { termsVersion: docs.termsVersion, privacyVersion: docs.privacyVersion, marketing },
       });
       setDone({ username: r.username });
     } catch (e) {
@@ -722,11 +724,22 @@ function RegisterForm({ onBack }: { onBack: () => void }) {
         />
       </div>
       {!start ? (
-        <div className="auth-actions">
-          <button className="btn primary" disabled={busy} onClick={() => void send()}>
-            {busy ? '正在发送…' : '获取验证码'}
-          </button>
-        </div>
+        <>
+          <div className="field-block">
+            <label className="auth-consent">
+              <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+              <span>
+                我已阅读并同意
+                {docs ? `《用户协议》${docs.termsVersion} 与《隐私政策》${docs.privacyVersion}` : '用户协议与隐私政策'}
+              </span>
+            </label>
+          </div>
+          <div className="auth-actions">
+            <button className="btn primary" disabled={busy} onClick={() => void send()}>
+              {busy ? '正在发送…' : '获取验证码'}
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <div className="field-block">
@@ -754,13 +767,6 @@ function RegisterForm({ onBack }: { onBack: () => void }) {
             <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="显示在账号里的名字" maxLength={40} />
           </div>
           <div className="field-block">
-            <label className="auth-consent">
-              <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
-              <span>
-                我已阅读并同意
-                {docs ? `《用户协议》${docs.termsVersion} 与《隐私政策》${docs.privacyVersion}` : '用户协议与隐私政策'}
-              </span>
-            </label>
             <label className="auth-consent">
               <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} />
               <span>接收产品更新与优惠信息（可随时退订）</span>

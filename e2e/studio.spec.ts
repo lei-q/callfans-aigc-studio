@@ -674,6 +674,18 @@ test('Agent：能力卡、生成计划、改参数、确认后才建任务；计
   expect(vid.refs).toHaveLength(1); /* 步骤没指定参考时，用选中的素材 */
 });
 
+test('生图比例有 3:4：选中后任务带 ratio=3:4，产出画幅是 3:4', async ({ page }) => {
+  await open(page);
+  await ensureLogin(page);
+  await page.locator('.opt-pill', { hasText: '1 张' }).click();
+  await expect(page.locator('.opt-pill', { hasText: /^3:4$/ })).toBeVisible();
+  await page.locator('.opt-pill', { hasText: /^3:4$/ }).click();
+  await page.locator('.composer-card textarea').first().fill('3:4 竖版海报测试');
+  await page.locator('.gen-btn').click();
+  await expect.poll(async () => (await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).jobs)).filter((j: { prompt: string; ratio?: string }) => j.prompt.includes('3:4 竖版海报测试') && j.ratio === '3:4').length, { timeout: 30_000 }).toBe(1);
+  await expect.poll(async () => (await page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).results)).filter((r: { ratio: string; title: string }) => r.ratio === '3:4').length, { timeout: 30_000 }).toBeGreaterThan(0);
+});
+
 test('API 接入：创建 Key、下载 mcp.json（带完整 Key）、Key 能读画布上下文、停用后被拒', async ({ page }) => {
   await open(page);
   await ensureLogin(page);

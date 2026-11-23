@@ -50,7 +50,7 @@ function silentWav(seconds = 1) {
 }
 
 const MODELS: GatewayModel[] = [
-  { id: 'g-img-1', name: 'Gateway-Image S1', type: 'image', price: 0.3, basis: '张', maxRes: '2k', caps: ['参考图', '最高 2K'], limit: '比例 1:1 / 4:5 / 16:9 / 9:16', note: 'Mock 云 fixture 图像模型' },
+  { id: 'g-img-1', name: 'Gateway-Image S1', type: 'image', price: 0.3, basis: '张', maxRes: '2k', caps: ['参考图', '最高 2K'], limit: '比例 1:1 / 4:5 / 3:4 / 16:9 / 9:16', note: 'Mock 云 fixture 图像模型' },
   { id: 'g-vid-1', name: 'Gateway-Video S1', type: 'video', price: 0.8, basis: '秒', durs: [3, 5, 8], caps: ['首帧参考'], limit: '时长 3 / 5 / 8 秒', note: 'Mock 云 fixture 视频模型' },
   { id: 'g-tts-1', name: 'Gateway-TTS S1', type: 'audio', price: 0.5, basis: '30 秒', uses: ['tts'], caps: ['多音色'], limit: '单条 ≤ 120 秒', note: 'Mock 云 fixture 配音模型' },
   { id: 'g-chat-1', name: 'Gateway-Chat S1', type: 'audio', price: 0, basis: '次', caps: [], limit: '', note: '对话模型（网关内部选择）' },

@@ -244,8 +244,8 @@ export async function buildApp(core: Core, opts: AppOptions = {}): Promise<Fasti
   });
   app.post('/api/account/register/start', async (req) => {
     requireFastsso();
-    const { identifier } = S.registerStartSchema.parse(req.body);
-    return core.accounts.registerStart(identifier).catch((e) => {
+    const body = S.registerStartSchema.parse(req.body);
+    return core.accounts.registerStart(body).catch((e) => {
       throw accountErr(e);
     });
   });

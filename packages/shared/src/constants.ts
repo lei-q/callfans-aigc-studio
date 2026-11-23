@@ -9,7 +9,7 @@ export const TYPE_KEYS: MediaType[] = ['image', 'video', 'audio'];
 
 export const PROJECT_DOTS = ['#F97316', '#4F46E5', '#7C5CFC', '#059669', '#E11D48', '#0EA5E9', '#D97706'];
 
-export const RATIOS = ['1:1', '4:5', '16:9', '9:16'];
+export const RATIOS = ['1:1', '4:5', '3:4', '16:9', '9:16'];
 export const VIDEO_RATIOS: [string, string][] = [['9:16', '竖版 9:16'], ['16:9', '横版 16:9'], ['1:1', '方形 1:1']];
 
 /** 分辨率档位：只是输出尺寸，不再有价格倍率——单价一律按张 / 按秒算 */

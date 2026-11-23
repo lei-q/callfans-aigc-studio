@@ -35,7 +35,7 @@ import {
 import { OidcClient, OidcError, randomToken, type OidcTokens } from './oidc';
 import { gatewayRequest } from '../gatewayHttp';
 import { openInBrowser } from '../open';
-import { platformChat, platformError, PlatformError, traceOf } from './platform';
+import { APP_SOURCE_HEADER, appIdOf, platformChat, platformError, PlatformError, traceOf } from './platform';
 import type { EventHub } from '../events';
 import type { ChatMessage } from '../providers/types';
 import type { Secrets } from '../secrets';
@@ -478,10 +478,12 @@ export class AccountSession {
     if (held) return held;
     if (this.keyPending) return this.keyPending;
     const deviceId = this.store.deviceFingerprint;
+    /* 个人账号：平台只有一把统一 Key，总是返回同一把，不需要也不接受 deviceId / recover。
+       企业员工仍按设备各领一把，所以只在企业入口带它们。 */
     const exchange = (recover: boolean) =>
       this.appRequest<FssLlmKey>('/app/llm-keys', '/consumer/llm-keys', {
         method: 'POST',
-        json: { deviceId, recover },
+        json: this.mode === 'enterprise' ? { deviceId, recover } : {},
         timeoutMs: 25_000,
       });
     const issue = async (): Promise<FssLlmKey> => {
@@ -509,17 +511,22 @@ export class AccountSession {
     }
   }
 
+  /** 这个应用在账号中心的 appId（来源标识）：优先用环境变量，其次账号服务告诉我们的，最后默认值 aigc-studio */
+  private get appId() {
+    return appIdOf(this.appMe?.appId);
+  }
+
   /** 用平台模型对话；网关 401 说明 key 被吊销，丢本地副本后只重换一次 */
   async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
     const baseUrl = this.cfg.gatewayBase;
     const key = await this.llmKey();
     try {
-      return await platformChat({ baseUrl, key, model, messages, signal });
+      return await platformChat({ baseUrl, key, appId: this.appId, model, messages, signal });
     } catch (e) {
       const userId = this.profile?.id;
       if (!(e instanceof PlatformError) || e.status !== 401 || !userId) throw e;
       this.store.setLlmKey(userId, null);
-      return platformChat({ baseUrl, key: await this.llmKey(), model, messages, signal });
+      return platformChat({ baseUrl, key: await this.llmKey(), appId: this.appId, model, messages, signal });
     }
   }
 
@@ -537,6 +544,7 @@ export class AccountSession {
           Accept: 'application/json',
           ...(opts.json !== undefined ? { 'Content-Type': 'application/json' } : {}),
           Authorization: `Bearer ${key}`,
+          [APP_SOURCE_HEADER]: this.appId,
         },
         body: opts.form ?? (opts.json !== undefined ? JSON.stringify(opts.json) : undefined),
         signal,
@@ -745,10 +753,10 @@ export class AccountSession {
     return this.api.request<{ termsVersion: string; privacyVersion: string }>('/public/consumer/documents', { auth: false, timeoutMs: 10_000 });
   }
 
-  registerStart(identifier: string) {
+  registerStart(body: { identifier: string; acceptedTerms: true; termsVersion: string; privacyVersion: string }) {
     return this.api.request('/public/consumer/registrations', {
       method: 'POST',
-      json: { identifier },
+      json: { identifier: body.identifier, acceptedTerms: body.acceptedTerms, termsVersion: body.termsVersion, privacyVersion: body.privacyVersion },
       headers: { 'X-Device-Fingerprint': this.fp },
       auth: false,
       timeoutMs: 15_000,
@@ -761,11 +769,13 @@ export class AccountSession {
     code: string;
     password: string;
     displayName?: string;
-    consents: { termsVersion: string; privacyVersion: string; marketing: boolean };
+    consents: { accepted: true; termsVersion: string; privacyVersion: string; marketing: boolean };
   }) {
     return this.api.request('/public/consumer/registrations/complete', {
       method: 'POST',
       json: { ...body, deviceFingerprint: this.fp },
+      /* 来源应用：账号记录它从哪来，并在首次登录前给它准入 */
+      headers: { 'X-Client-Id': this.cfg.clientId },
       auth: false,
       timeoutMs: 20_000,
     });
