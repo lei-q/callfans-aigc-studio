@@ -377,7 +377,7 @@ function HelpDrawer() {
                   <li>生成失败或取消时，冻结的点数自动退回。</li>
                 </>
               ) : (
-                <li>先登录账号（微信 / 支付宝充值点数），才能开始生成。</li>
+                <li>先登录账号（支付宝充值点数），才能开始生成。</li>
               )}
               <li>图片请求不会自动重试：超时不代表没执行，重提可能再次计费。</li>
               <li>失败触发规则：所选分辨率超过模型上限，或视频时长超出模型上限。</li>
@@ -664,6 +664,8 @@ function RegisterForm({ onBack }: { onBack: () => void }) {
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
+      /* 409 = 条款版本已更新：重新读取，让用户看到新版本再勾选 */
+      void loadAccountDocuments().then(setDocs).catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -730,7 +732,13 @@ function RegisterForm({ onBack }: { onBack: () => void }) {
               <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
               <span>
                 我已阅读并同意
-                {docs ? `《用户协议》${docs.termsVersion} 与《隐私政策》${docs.privacyVersion}` : '用户协议与隐私政策'}
+                <a href="https://callfansai.com/#/terms" target="_blank" rel="noreferrer">
+                  《用户协议》{docs?.termsVersion}
+                </a>
+                与
+                <a href="https://callfansai.com/#/privacy" target="_blank" rel="noreferrer">
+                  《隐私政策》{docs?.privacyVersion}
+                </a>
               </span>
             </label>
           </div>

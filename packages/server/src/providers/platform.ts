@@ -230,7 +230,7 @@ export class PlatformMediaProvider implements Provider {
       /* 上游 4xx 被网关包成 5xx 时按上游状态归类：参数错误要报参数错误，
          否则用户只会对着「服务暂时不可用」反复重试同一个必然失败的请求。 */
       const status = e.status >= 500 && e.upstreamStatus ? e.upstreamStatus : e.status;
-      if (status === 422) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用微信 / 支付宝充值');
+      if (status === 422) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用支付宝充值');
       if (status === 401) return new ProviderError('E-AUTH-01', e.message || '模型密钥已失效', '重新登录后重试');
       if (status === 429) return new ProviderError('E-RATE-29', e.message, '稍后重试');
       if (status === 400) return new ProviderError('E-PRM-04', e.message, '检查提示词与模型参数后重试');

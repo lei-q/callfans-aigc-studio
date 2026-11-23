@@ -68,7 +68,7 @@ export class CloudProvider implements Provider {
 
   private toProviderError(e: unknown): ProviderError {
     if (e instanceof CloudError) {
-      if (e.isBalance) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用微信 / 支付宝充值');
+      if (e.isBalance) return new ProviderError('E-BAL-02', '点数余额不足', '到顶栏账号里用支付宝充值');
       if (e.isAuth) return new ProviderError('E-AUTH-01', e.message || '登录已失效', '重新登录后重试');
       if (e.code === CLOUD_ERROR.CONTENT_BLOCKED) return new ProviderError('E-SAFE-03', e.message || '内容未通过安全审核', '修改提示词或参考图后再试；这次没有扣点');
       if (e.code === CLOUD_ERROR.RATE_LIMITED) return new ProviderError('E-RATE-29', e.message, '稍后重试');

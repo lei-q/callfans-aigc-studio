@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Job } from '@aigc/shared';
 import Jimp from 'jimp';
-import { pickChatModel, PlatformCatalog, PlatformError, platformChat } from '../src/account/platform';
+import { appIdOf, pickChatModel, PlatformCatalog, PlatformError, platformChat } from '../src/account/platform';
 import { buildApp } from '../src/app';
 import { Core } from '../src/core';
 import { REF_MAX_EACH_BYTES, platformMediaModels, shrinkReference, videoSize } from '../src/providers/platform';
@@ -330,6 +330,14 @@ describe('2026-11-23 接入变更：条款同意、统一 Key、来源标识、3
       if (mode === 'consumer') expect(bodies[0]).toEqual({});
       else expect(bodies[0]).toMatchObject({ recover: false, deviceId: expect.any(String) });
     }
+  });
+
+  it('来源标识只发合规值（^[a-z0-9-]{1,64}$），否则回落 aigc-studio', () => {
+    expect(appIdOf('loop')).toBe('loop');
+    expect(appIdOf('AIGC Studio')).toBe('aigc-studio');
+    expect(appIdOf('x_y')).toBe('aigc-studio');
+    expect(appIdOf('a'.repeat(65))).toBe('aigc-studio');
+    expect(appIdOf(null)).toBe('aigc-studio');
   });
 
   it('调网关都带 X-OneCloud-App：生成走 gatewayFetch、对话走 platformChat', async () => {

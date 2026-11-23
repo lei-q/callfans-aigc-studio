@@ -276,7 +276,12 @@ function contentOf(body: ChatReply): string {
 /** 调网关时带的来源应用标识：账户中心据此按应用展示用量，只做归因、不影响扣费 */
 export const APP_SOURCE_HEADER = 'X-OneCloud-App';
 export const DEFAULT_APP_ID = 'aigc-studio';
-export const appIdOf = (fromServer?: string | null) => process.env.AIGC_APP_ID?.trim() || fromServer || DEFAULT_APP_ID;
+/** 平台约定的来源标识格式；不合规的值（含服务端回的、环境变量里的）一律不发，回落默认值 */
+const APP_ID_RE = /^[a-z0-9-]{1,64}$/;
+export const appIdOf = (fromServer?: string | null) => {
+  for (const v of [process.env.AIGC_APP_ID?.trim(), fromServer?.trim()]) if (v && APP_ID_RE.test(v)) return v;
+  return DEFAULT_APP_ID;
+};
 
 export async function platformChat(opts: {
   baseUrl: string;
