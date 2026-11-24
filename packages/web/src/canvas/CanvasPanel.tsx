@@ -1029,7 +1029,13 @@ function DivergePanel() {
             <button
               key={a.k}
               className={`diverge-axis ${d.axes.includes(a.k) ? 'on' : ''}`}
-              onClick={() => setState((st) => void (st.diverge && (st.diverge.axes = st.diverge.axes.includes(a.k) ? st.diverge.axes.filter((x) => x !== a.k) : [...st.diverge.axes, a.k])))}
+              onClick={() =>
+                setState((st) => {
+                  if (!st.diverge) return;
+                  st.diverge.axes = st.diverge.axes.includes(a.k) ? st.diverge.axes.filter((x) => x !== a.k) : [...st.diverge.axes, a.k];
+                  st.divergeAxes = [...st.diverge.axes];
+                })
+              }
             >
               <span className="da-check">{d.axes.includes(a.k) && <Icon name="check" />}</span>
               <span className="da-main">
@@ -1045,7 +1051,7 @@ function DivergePanel() {
         </div>
       </div>
       <div className="diverge-foot">
-        <span className="diverge-cost">{picked ? `${picked} 个方向 · 约 ${round1(unit * picked)} 点` : '先选方向'}</span>
+        <span className="diverge-cost">{picked ? `${picked} 个方向 · ${unit > 0 ? `约 ${round1(unit * picked)} 点` : '按实际用量'}` : '先选方向'}</span>
         <span className="grow" />
         <button className="btn sm ghost" onClick={() => setState((st) => void (st.diverge = null))}>
           取消
@@ -1118,7 +1124,7 @@ function PlatformPanel() {
         </div>
       </div>
       <div className="diverge-foot">
-        <span className="diverge-cost">{picked ? `${picked} 个平台 · 约 ${round1(unit * picked)} 点` : '先选平台'}</span>
+        <span className="diverge-cost">{picked ? `${picked} 个平台 · ${unit > 0 ? `约 ${round1(unit * picked)} 点` : '按实际用量'}` : '先选平台'}</span>
         <span className="grow" />
         <button className="btn sm ghost" onClick={() => setState((st) => void (st.platforms = null))}>
           取消

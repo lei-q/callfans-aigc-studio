@@ -26,7 +26,7 @@ import type {
   UpdateState,
   WalletDto,
 } from '@aigc/shared';
-import { EDIT_DEF, PEN_COLORS } from '@aigc/shared';
+import { DIVERGE_DEFAULT, EDIT_DEF, PEN_COLORS } from '@aigc/shared';
 
 export type Page = 'studio' | 'jobs' | 'library' | 'projects' | 'models' | 'api' | 'aesthetic' | 'settings';
 export interface AgentPlanState {
@@ -136,6 +136,8 @@ export interface State {
   editTextId: string | null;
   linkLabelEdit: string | null;
   diverge: { srcId: string; axes: string[] } | null;
+  /** 发散面板上次勾选的方向：关掉再打开沿用，不回到出厂默认 */
+  divergeAxes: string[];
   platforms: { srcId: string; picks: string[] } | null;
   /** 裁切弹层 / 视频工具弹层：对哪个画布元素操作 */
   crop: { srcId: string } | null;
@@ -247,6 +249,7 @@ export const initialState: State = {
   editTextId: null,
   linkLabelEdit: null,
   diverge: null,
+  divergeAxes: [...DIVERGE_DEFAULT],
   platforms: null,
   crop: null,
   vtool: null,

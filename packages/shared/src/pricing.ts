@@ -32,8 +32,11 @@ export function estPoints(type: MediaType, p: JobParams, m: ModelInfo): number |
 }
 
 /** 发散 / 适配：单个方向的花费，图像按 1 张算 */
-export function singleUnitCost(type: MediaType, p: JobParams, m: Pick<ModelInfo, 'price'>) {
-  return unitPrice(type, type === 'image' ? { ...p, count: 1 } : p, m);
+export function singleUnitCost(type: MediaType, p: JobParams, m: Pick<ModelInfo, 'price'> & Partial<ModelInfo>) {
+  const q = type === 'image' ? { ...p, count: 1 } : p;
+  /* 平台渠道没有本地价（price=0），用清单标价折算的预估；拿不到标价才是 0（界面应显示「按实际用量」） */
+  if (m.usageBilling) return estPoints(type, q, m as ModelInfo) ?? 0;
+  return unitPrice(type, q, m);
 }
 
 /** 预计耗时：把「要等多久」提前说清楚 */

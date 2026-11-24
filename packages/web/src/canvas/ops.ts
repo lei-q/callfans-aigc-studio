@@ -1,7 +1,6 @@
 import type { AgentEnhanceReply, AgentPlanReply, AgentPlanStep, AgentResult, Board, CanvasItem, CanvasView, MediaType, Result, TextSize } from '@aigc/shared';
 import {
   DIVERGE_AXES,
-  DIVERGE_DEFAULT,
   GROUP_AXES,
   GROUP_DEFAULT,
   MAX_REFS,
@@ -1165,7 +1164,7 @@ export function divergeOpen() {
     return;
   }
   setState((s) => {
-    s.diverge = { srcId: it.id, axes: [...DIVERGE_DEFAULT] };
+    s.diverge = { srcId: it.id, axes: [...s.divergeAxes] };
     s.platforms = null;
     s.cvsMenu = null;
   });
