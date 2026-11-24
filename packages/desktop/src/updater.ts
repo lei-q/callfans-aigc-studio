@@ -7,7 +7,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { app, BrowserWindow, dialog, net, Notification } from 'electron';
-import { isNewerVersion, pickUpdateAsset, type UpdateAsset, type UpdateState } from '@aigc/shared';
+import { isNewerVersion, parseReleaseAssets, pickUpdateAsset, versionFromReleaseUrl, type UpdateAsset, type UpdateState } from '@aigc/shared';
 import { installerLaunch } from './update-launch';
 
 /* ============================================================================
@@ -98,18 +98,7 @@ export class Updater {
     this.checking = true;
     this.patch({ stage: 'checking', message: undefined, manual });
     try {
-      const res = await net.fetch(API_LATEST, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          'User-Agent': `AIGC-Studio-Updater/${app.getVersion()}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!res.ok) throw new Error(res.status === 404 ? '还没有发布版本' : `GitHub 返回 HTTP ${res.status}`);
-      const release = (await res.json()) as GitHubRelease;
-      const version = String(release.tag_name || '').replace(/^v/i, '');
-      if (!version) throw new Error('Release 缺少版本号');
+      const { version, assets, pageUrl } = await this.fetchLatest();
       this.checkedAt = Date.now();
 
       if (!isNewerVersion(version, app.getVersion())) {
@@ -119,16 +108,16 @@ export class Updater {
         return this.getState();
       }
 
-      const asset = pickUpdateAsset(release.assets || [], process.platform, process.arch, !!process.env.APPIMAGE);
+      const asset = pickUpdateAsset(assets, process.platform, process.arch, !!process.env.APPIMAGE);
       if (!asset || !(asset.url || asset.browser_download_url)) throw new Error('这个版本还没有适合当前系统的安装包');
-      const sha256 = await this.sumOf(release.assets || [], asset.name);
-      this.target = { version, asset, sha256, pageUrl: release.html_url };
+      const sha256 = await this.sumOf(assets, asset.name);
+      this.target = { version, asset, sha256, pageUrl };
       this.patch({
         stage: 'available',
         version,
         checkedAt: this.checkedAt,
         message: undefined,
-        pageUrl: release.html_url,
+        pageUrl,
         size: asset.size,
         dismissed: this.dismissedVersion === version,
         percent: undefined,
@@ -145,6 +134,46 @@ export class Updater {
       this.checking = false;
     }
     return this.getState();
+  }
+
+  /**
+   * 取最新 Release：先走 GitHub API；匿名 API 按 IP 限流（共用出口 IP 时常见 403），
+   * 失败就改读网页地址（跳转拿版本号 + expanded_assets 拿安装包），两条路都不受 API 限流影响。
+   */
+  private async fetchLatest(): Promise<{ version: string; assets: UpdateAsset[]; pageUrl?: string }> {
+    const ua = `AIGC-Studio-Updater/${app.getVersion()}`;
+    let apiFail = '';
+    try {
+      const res = await net.fetch(API_LATEST, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': ua, 'X-GitHub-Api-Version': '2022-11-28' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.status === 404) throw new Error('还没有发布版本');
+      if (res.ok) {
+        const release = (await res.json()) as GitHubRelease;
+        const version = String(release.tag_name || '').replace(/^v/i, '');
+        if (!version) throw new Error('Release 缺少版本号');
+        return { version, assets: release.assets || [], pageUrl: release.html_url };
+      }
+      apiFail = `GitHub API 返回 HTTP ${res.status}${res.status === 403 || res.status === 429 ? '（匿名请求被限流）' : ''}`;
+    } catch (e) {
+      if ((e as Error).message === '还没有发布版本') throw e;
+      apiFail = `GitHub API 不可用：${(e as Error).message}`;
+    }
+    try {
+      const page = await net.fetch(`https://github.com/${REPO}/releases/latest`, { headers: { 'User-Agent': ua }, redirect: 'follow', signal: AbortSignal.timeout(15_000) });
+      if (page.status === 404) throw new Error('还没有发布版本');
+      const version = versionFromReleaseUrl(page.url);
+      if (!page.ok || !version) throw new Error(`HTTP ${page.status}`);
+      const listing = await net.fetch(`https://github.com/${REPO}/releases/expanded_assets/v${version}`, { headers: { 'User-Agent': ua }, signal: AbortSignal.timeout(15_000) });
+      if (!listing.ok) throw new Error(`安装包列表 HTTP ${listing.status}`);
+      const assets = parseReleaseAssets(await listing.text(), REPO);
+      if (!assets.length) throw new Error('网页里没有找到安装包');
+      return { version, assets, pageUrl: page.url };
+    } catch (e) {
+      if ((e as Error).message === '还没有发布版本') throw e;
+      throw new Error(`${apiFail}；改用网页地址也失败：${(e as Error).message}。请检查网络或代理能否访问 github.com，或到 Release 页面手动下载`);
+    }
   }
 
   /** 用户确认后开始下载；下载完先查一次是否空闲 */

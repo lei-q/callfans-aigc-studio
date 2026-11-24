@@ -80,3 +80,30 @@ export function pickUpdateAsset(
   }
   return null;
 }
+
+/** `…/releases/tag/v1.2.3` 这类跳转后的地址 → 版本号（不带 v）；不是 tag 地址返回 null */
+export function versionFromReleaseUrl(url: string): string | null {
+  const m = /\/releases\/tag\/([^/?#]+)/.exec(url);
+  if (!m) return null;
+  const tag = decodeURIComponent(m[1]).replace(/^v/i, '');
+  return parseVersion(tag) ? tag : null;
+}
+
+/**
+ * 从 `releases/expanded_assets/<tag>` 的 HTML 里取安装包列表（只认本仓库的 download 地址）。
+ * GitHub API 对匿名请求按 IP 限流（公司出口 / 代理共用 IP 时常见 403），
+ * 网页地址不受这个限制，所以 API 不可用时用它兜底。
+ */
+export function parseReleaseAssets(html: string, repo: string): UpdateAsset[] {
+  const out: UpdateAsset[] = [];
+  const seen = new Set<string>();
+  const re = new RegExp(`href="(/${repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/releases/download/[^"]+)"`, 'g');
+  for (const m of html.matchAll(re)) {
+    const href = m[1].replace(/&amp;/g, '&');
+    const name = decodeURIComponent(href.split('/').pop() || '');
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push({ name, browser_download_url: `https://github.com${href}` });
+  }
+  return out;
+}

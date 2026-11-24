@@ -190,6 +190,10 @@ e2e/                 Playwright 端到端测试
 git tag v0.4.0 && git push origin v0.4.0
 ```
 
+应用内「检查更新」先查 GitHub API；匿名 API 按 IP 限流（公司出口、代理共用 IP 时会返回 403），失败后自动改读 `github.com` 网页地址（`/releases/latest` 跳转取版本号 + `expanded_assets` 取安装包），两条路都失败才报错，并写明各自的原因。
+
+生图一次要多张时，`-c` 多上游模型（如 `gpt-image-2.5-sunburst-c`）一次最多稳定回 2 张，所以要 4 张会拆成两次 `n=2`（并发 2）；非 `-c` 模型带参考图走编辑接口时 `n>1` 会 400，改成一张一次；网关明确拒绝 `n` 时退化为逐张。某一次失败不丢已拿到的图，完成通知会写明「请求 N 张，平台只返回 M 张」。
+
 配置 `CSC_LINK` / `CSC_KEY_PASSWORD`（以及 macOS 的 `APPLE_INSTALLER_IDENTITY`）secrets 后会自动启用代码签名。
 
 ## 许可

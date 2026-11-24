@@ -307,6 +307,7 @@ export class PlatformMediaProvider implements Provider {
     if (job.negative?.trim()) prompt += `。避免出现：${job.negative.trim()}`;
     const count = Math.max(1, job.count || 1);
     const refs = job.refs.slice(0, 4);
+    const chunkSize = imageChunkSize(upstream, count, refs.length > 0);
 
     /* 有参考素材时走编辑接口：multipart 上传本地原图（image[]），n 是期望张数 */
     if (refs.length) {
@@ -337,11 +338,11 @@ export class PlatformMediaProvider implements Provider {
       }
       ctx.progress(6, '提交到平台…');
       /* 编辑接口也带 size：不传时上游按参考图尺寸出图，和用户选的分辨率对不上 */
-      const submit = (withSize: boolean) => {
+      const submit = (withSize: boolean, n: number) => {
         const form = new FormData();
         form.append('model', upstream);
         form.append('prompt', prompt);
-        form.append('n', String(count));
+        form.append('n', String(n));
         if (withSize && size) form.append('size', size);
         shrunk.forEach((im, i) => {
           form.append('image[]', new Blob([im.buf], { type: im.mime }), `reference-${i + 1}.${imageExt(im.mime)}`);
@@ -353,15 +354,15 @@ export class PlatformMediaProvider implements Provider {
           timeoutMs: GENERATION_TIMEOUT_MS,
         });
       };
-      let reply: ImageReply;
-      try {
-        reply = await submit(true);
-      } catch (e) {
-        /* 与文生图同一条原则：只有网关在派发前明确拒绝 size 才去掉它重发 */
-        if (!size || !isUnsupportedParam(e, 'size')) throw e;
-        reply = await submit(false);
-      }
-      return this.saveImageReply(reply, ctx);
+      return this.fanOutImages(count, chunkSize, ctx, async (n) => {
+        try {
+          return await submit(true, n);
+        } catch (e) {
+          /* 与文生图同一条原则：只有网关在派发前明确拒绝 size 才去掉它重发 */
+          if (!size || !isUnsupportedParam(e, 'size')) throw e;
+          return submit(false, n);
+        }
+      });
     }
 
     ctx.progress(6, '提交到平台…');
@@ -370,26 +371,72 @@ export class PlatformMediaProvider implements Provider {
 
        size 同理：有的上游不认这个参数。先在提交前报错、没有产生扣费时才去掉它重试一次；
        已经提交过（可能已计费）就绝不再提交。 */
-    const body = { model: upstream, prompt, n: count, ...(size ? { size } : {}) };
-    let reply: ImageReply;
-    try {
-      reply = await this.deps.accounts().gatewayJson<ImageReply>('/v1/images/generations', {
+    const post = (n: number, withSize: boolean) =>
+      this.deps.accounts().gatewayJson<ImageReply>('/v1/images/generations', {
         method: 'POST',
-        json: body,
+        json: { model: upstream, prompt, n, ...(withSize && size ? { size } : {}) },
         signal: ctx.signal,
         timeoutMs: GENERATION_TIMEOUT_MS,
       });
-    } catch (e) {
-      if (!size || !isUnsupportedParam(e, 'size')) throw e;
-      const { size: _drop, ...rest } = body;
-      reply = await this.deps.accounts().gatewayJson<ImageReply>('/v1/images/generations', {
-        method: 'POST',
-        json: rest,
-        signal: ctx.signal,
-        timeoutMs: GENERATION_TIMEOUT_MS,
-      });
-    }
-    return this.saveImageReply(reply, ctx);
+    return this.fanOutImages(count, chunkSize, ctx, async (n) => {
+      try {
+        return await post(n, true);
+      } catch (e) {
+        if (!size || !isUnsupportedParam(e, 'size')) throw e;
+        return post(n, false);
+      }
+    });
+  }
+
+  /**
+   * 要 count 张：按 chunkSize 拆成几次请求（并发 2），不要一次塞满。
+   * 平台的 `-c` 多上游模型一次最多稳定回 2 张（要 4 张只回 2 张），拆开后每次都在能力范围内。
+   * 网关明确拒绝 n（400 unsupported n，派发前校验、没有计费）时，改成逐张请求。
+   * 某一次失败不影响其他次已经拿到的图；全部失败才报错。拿到的比要的少，由 runner 的完成通知说明。
+   */
+  private async fanOutImages(
+    count: number,
+    chunkSize: number,
+    ctx: RunContext,
+    send: (n: number) => Promise<ImageReply>,
+  ): Promise<ProviderOutput[]> {
+    const one = async (n: number): Promise<ProviderOutput[]> => {
+      try {
+        return await this.saveImageReply(await send(n), ctx);
+      } catch (e) {
+        if (n > 1 && isUnsupportedParam(e, 'n')) {
+          const outs: ProviderOutput[] = [];
+          for (let i = 0; i < n; i++) outs.push(...(await this.saveImageReply(await send(1), ctx)));
+          return outs;
+        }
+        throw e;
+      }
+    };
+    const sizes: number[] = [];
+    for (let left = count; left > 0; left -= chunkSize) sizes.push(Math.min(chunkSize, left));
+    if (sizes.length === 1) return one(sizes[0]);
+
+    const results: ProviderOutput[][] = sizes.map(() => []);
+    const errors: unknown[] = [];
+    let next = 0;
+    let done = 0;
+    const worker = async () => {
+      while (next < sizes.length) {
+        const i = next++;
+        try {
+          results[i] = await one(sizes[i]);
+        } catch (e) {
+          if (ctx.signal.aborted) throw e;
+          errors.push(e);
+        }
+        done++;
+        ctx.progress(Math.min(90, 10 + Math.round((done / sizes.length) * 80)), `已完成 ${done}/${sizes.length} 批`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(IMAGE_CONCURRENCY, sizes.length) }, worker));
+    const outs = results.flat();
+    if (!outs.length) throw errors[0] ?? new ProviderError('E-UPS-51', '平台没有返回图片', '换个描述或模型再试；如果已被计费请联系支持');
+    return outs;
   }
 
   /** 生成 / 编辑接口的返回结构一致：b64_json 或 url，统一落盘 */
@@ -559,6 +606,23 @@ export class PlatformMediaProvider implements Provider {
       });
     }
   }
+}
+
+/** 同时在途的图片请求数：再多会撞上游的 429 image_capacity_exceeded */
+const IMAGE_CONCURRENCY = 2;
+/** `-c` 多上游模型一次稳定返回的张数上限（实测 n=2 回 2 张，n=4 只回 2 张） */
+const MULTI_UPSTREAM_MAX_N = 2;
+
+/**
+ * 一次请求要几张：
+ * - `-c` 模型：最多 2 张，要得多就拆成几次；
+ * - 非 `-c` 模型带参考图（编辑接口）：n>1 会 400，只能一张一次；
+ * - 其他（文生图）：一次要齐，网关若拒绝 n 再退化成逐张。
+ */
+export function imageChunkSize(upstream: string, count: number, editing: boolean): number {
+  if (count <= 1) return 1;
+  if (/-c$/i.test(upstream)) return MULTI_UPSTREAM_MAX_N;
+  return editing ? 1 : count;
 }
 
 /**

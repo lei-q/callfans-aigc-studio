@@ -417,7 +417,7 @@ describe('2026-11-23 接入变更：条款同意、统一 Key、来源标识、3
     expect(String(bodies[0].prompt)).toContain('画幅 3:4');
   });
 
-  it('gpt-image-2.6-sunburst-c 一次要多张：n=3 发给上游一次，返回的 3 张全部落盘', async () => {
+  it('gpt-image-2.6-sunburst-c 一次要多张：-c 模型一次最多 2 张，要 3 张拆成两次请求，3 张全部落盘', async () => {
     const core = await makeFssCore();
     fakeLogin(core);
     const catalog = { appId: 'aigc-studio', data: [{ id: 'gpt-image-2.6-sunburst-c', protocol: 'openai', mode: 'image_generation', pricing: { per_image: 0.04 } }] };
@@ -428,17 +428,83 @@ describe('2026-11-23 接入变更：条款同意、统一 Key、来源标识、3
         const u = String(url);
         if (isCatalog(u)) return jsonRes(200, catalog);
         if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
-        calls.push({ url: u, body: JSON.parse(String(init?.body)) });
-        return jsonRes(200, { data: [1, 2, 3].map(() => ({ b64_json: PNG, media_type: 'image/png' })) });
+        const body = JSON.parse(String(init?.body));
+        calls.push({ url: u, body });
+        return jsonRes(200, { data: Array.from({ length: body.n }, () => ({ b64_json: PNG, media_type: 'image/png' })) });
       }),
     );
     const model = platformMediaModels(catalog.data as never)[0];
     const saved: string[] = [];
     const out = await core.platformMedia.run({ id: 'j', name: 't', type: 'image', ws: 'w', model: model.id, prompt: '海报', refs: [], ratio: '3:4', count: 3, res: '2k', cost: 0, status: 'running', createdAt: 0, results: [] }, model, ctxOf(saved));
+    /* -c 模型一次最多稳定回 2 张：要 3 张拆成 n=2 + n=1 两次请求 */
+    expect(calls.map((c) => (c.body as { n: number }).n).sort()).toEqual([1, 2]);
+    expect(calls[0].body).toMatchObject({ model: 'gpt-image-2.6-sunburst-c' });
     expect(out).toHaveLength(3);
     expect(saved).toHaveLength(3);
-    expect(calls).toHaveLength(1); /* 一次请求要 3 张，不是发 3 次 */
-    expect(calls[0].body).toMatchObject({ model: 'gpt-image-2.6-sunburst-c', n: 3 });
+  });
+
+  const imageRun = async (modelId: string, count: number, onCall: (body: Record<string, unknown>, form: FormData | null) => Response, withRef = false) => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    const catalog = { appId: 'aigc-studio', data: [{ id: modelId, protocol: 'openai', mode: 'image_generation', pricing: { per_image: 0.04 } }] };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (isCatalog(u)) return jsonRes(200, catalog);
+        if (u.endsWith('/app/llm-keys')) return jsonRes(200, { key: 'sk-test', keyId: 'k1', expiresAt: null });
+        if (init?.body instanceof FormData || (init?.body && typeof init.body === 'object' && 'getAll' in (init.body as object))) {
+          const f = init.body as unknown as FormData;
+          return onCall({ n: Number(f.get('n')) }, f);
+        }
+        return onCall(JSON.parse(String(init?.body)), null);
+      }),
+    );
+    const model = platformMediaModels(catalog.data as never)[0];
+    const ctx = ctxOf([]);
+    const png = `data:image/png;base64,${PNG}`;
+    const job = { id: 'j', name: 't', type: 'image' as const, ws: 'w', model: model.id, prompt: 'p', refs: withRef ? [{ src: 'x', kind: 'image' as const }] : [], ratio: '1:1', count, res: '2k' as const, cost: 0, status: 'running' as const, createdAt: 0, results: [] };
+    void png;
+    return core.platformMedia.run(job as never, model, { ...ctx, resolveRef: async () => (withRef ? { dataUrl: png, mime: 'image/png' } : null) } as never);
+  };
+  const imgs = (n: number) => jsonRes(200, { data: Array.from({ length: n }, () => ({ b64_json: PNG, media_type: 'image/png' })) });
+
+  it('sunburst-c 要 4 张：上游每次只肯回 2 张，拆成两次请求后凑齐 4 张（回归：原来只出 2 张）', async () => {
+    const ns: number[] = [];
+    const out = await imageRun('gpt-image-2.5-sunburst-c', 4, (b) => {
+      ns.push(b.n as number);
+      return imgs(Math.min(2, b.n as number));
+    });
+    expect(ns).toEqual([2, 2]);
+    expect(out).toHaveLength(4);
+  });
+
+  it('非 -c 模型带参考图：编辑接口不认 n>1，一张一次', async () => {
+    const ns: number[] = [];
+    const out = await imageRun('gpt-image-2.5-flare', 3, (b) => {
+      ns.push(b.n as number);
+      return imgs(1);
+    }, true);
+    expect(ns).toEqual([1, 1, 1]);
+    expect(out).toHaveLength(3);
+  });
+
+  it('非 -c 模型文生图：一次要齐；网关明确拒绝 n 时退化成逐张', async () => {
+    const ns: number[] = [];
+    const out = await imageRun('gpt-image-2.5-flare', 3, (b) => {
+      ns.push(b.n as number);
+      if ((b.n as number) > 1) return jsonRes(400, { error: { message: 'Image request parameter is not supported for this model or operation: n' } });
+      return imgs(1);
+    });
+    expect(ns).toEqual([3, 1, 1, 1]);
+    expect(out).toHaveLength(3);
+  });
+
+  it('拆成多次时一次失败不丢已拿到的图；全部失败才报错', async () => {
+    let call = 0;
+    const out = await imageRun('gpt-image-2-c', 4, () => (++call === 1 ? imgs(2) : jsonRes(429, { error: { message: 'image_capacity_exceeded' } })));
+    expect(out).toHaveLength(2);
+    await expect(imageRun('gpt-image-2-c', 4, () => jsonRes(429, { error: { message: 'image_capacity_exceeded' } }))).rejects.toThrow();
   });
 
   it('要 3 张只回 1 张：任务照常成功，完成通知里说清楚少了几张', async () => {
@@ -674,12 +740,15 @@ describe('平台媒体模型与生成', () => {
       setUpstream: () => {},
     };
     const out = await core.platformMedia.run(job, model, ctx);
-    expect(out).toHaveLength(1);
-    expect(saved).toEqual(['image/png']);
-    const edit = calls.find((c) => c.url.endsWith('/v1/images/edits'))!;
+    /* 非 -c 模型的编辑接口不认 n>1（gemini-3-pro 直接 400）：要 2 张就一张一次，发两次 */
+    expect(out).toHaveLength(2);
+    expect(saved).toEqual(['image/png', 'image/png']);
+    const edits = calls.filter((c) => c.url.endsWith('/v1/images/edits'));
+    expect(edits).toHaveLength(2);
+    const edit = edits[0];
     expect(edit.form).toBeTruthy();
     expect(edit.form!.get('model')).toBe('gemini-3-pro-image-preview');
-    expect(edit.form!.get('n')).toBe('2');
+    expect(edit.form!.get('n')).toBe('1');
     expect(String(edit.form!.get('prompt'))).toContain('保留主体');
     expect(String(edit.form!.get('prompt'))).toContain('画幅 1:1');
     const files = edit.form!.getAll('image[]');
