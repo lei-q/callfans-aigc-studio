@@ -168,11 +168,19 @@ export class Store {
   llmKeyOf(accountId: string): string | null {
     return this.db.kvGet<Record<string, string>>('llm_keys')?.[accountId] || null;
   }
-  setLlmKey(accountId: string, enc: string | null) {
+  setLlmKey(accountId: string, enc: string | null, unified = false) {
     const all = { ...(this.db.kvGet<Record<string, string>>('llm_keys') || {}) };
     if (enc) all[accountId] = enc;
     else delete all[accountId];
     this.db.kvSet('llm_keys', all);
+    const mark = { ...(this.db.kvGet<Record<string, true>>('llm_keys_unified') || {}) };
+    if (enc && unified) mark[accountId] = true;
+    else delete mark[accountId];
+    this.db.kvSet('llm_keys_unified', mark);
+  }
+  /** 本机这把 Key 是不是 2026-11-23 之后从统一契约取到的（个人账号的老副本是按应用签发的旧 Key，平台会吊销） */
+  llmKeyIsUnified(accountId: string): boolean {
+    return !!this.db.kvGet<Record<string, true>>('llm_keys_unified')?.[accountId];
   }
 
   /** 平台模型健康：网关明确拒绝（没有可用通道）后记一笔，短期内不再把它列成可选 */

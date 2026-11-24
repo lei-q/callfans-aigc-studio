@@ -332,6 +332,33 @@ describe('2026-11-23 接入变更：条款同意、统一 Key、来源标识、3
     }
   });
 
+  it('旧 Key 迁移：个人账号本机留着老的按应用 Key，换成统一主 Key；换失败继续用旧的', async () => {
+    const core = await makeFssCore();
+    fakeLogin(core);
+    (core.accounts as unknown as { mode: string }).mode = 'consumer';
+    const uid = (core.accounts as unknown as { profile: { id: string } }).profile.id;
+    core.store.setLlmKey(uid, core.secrets.encrypt('sk-legacy'));
+    let calls = 0;
+    let fail = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith('/app/llm-keys')) {
+          calls++;
+          return fail ? jsonRes(503, { message: 'down' }) : jsonRes(200, { key: 'sk-unified', keyId: 'k1', expiresAt: null });
+        }
+        return jsonRes(404, {});
+      }),
+    );
+    expect(await core.accounts.llmKey()).toBe('sk-legacy');
+    expect(calls).toBe(1);
+    fail = false;
+    expect(await core.accounts.llmKey()).toBe('sk-unified');
+    expect(core.store.llmKeyIsUnified(uid)).toBe(true);
+    expect(await core.accounts.llmKey()).toBe('sk-unified');
+    expect(calls).toBe(2);
+  });
+
   it('来源标识只发合规值（^[a-z0-9-]{1,64}$），否则回落 aigc-studio', () => {
     expect(appIdOf('loop')).toBe('loop');
     expect(appIdOf('AIGC Studio')).toBe('aigc-studio');

@@ -475,7 +475,10 @@ export class AccountSession {
     const userId = this.profile?.id;
     if (!userId || !this.tokens) throw new ConsumerError(401, '还没有登录账号');
     const held = this.secrets.decrypt(this.store.llmKeyOf(userId));
-    if (held) return held;
+    /* 个人账号本机还留着 2026-11-23 之前的按应用旧 Key：平台要吊销它，趁现在换成统一主 Key。
+       换失败（断网等）就继续用旧的，不挡用户；真被吊销了会走 401 自愈。 */
+    const legacy = !!held && this.mode !== 'enterprise' && !this.store.llmKeyIsUnified(userId);
+    if (held && !legacy) return held;
     if (this.keyPending) return this.keyPending;
     const deviceId = this.store.deviceFingerprint;
     /* 个人账号：平台只有一把统一 Key，总是返回同一把，不需要也不接受 deviceId / recover。
@@ -498,10 +501,15 @@ export class AccountSession {
       }
     };
     const p = (async () => {
-      const r = await issue();
-      if (!r?.key) throw new ConsumerError(502, '账号服务没有返回模型密钥');
-      this.store.setLlmKey(userId, this.secrets.encrypt(r.key));
-      return r.key;
+      try {
+        const r = await issue();
+        if (!r?.key) throw new ConsumerError(502, '账号服务没有返回模型密钥');
+        this.store.setLlmKey(userId, this.secrets.encrypt(r.key), this.mode !== 'enterprise');
+        return r.key;
+      } catch (e) {
+        if (legacy && held) return held;
+        throw e;
+      }
     })();
     this.keyPending = p;
     try {

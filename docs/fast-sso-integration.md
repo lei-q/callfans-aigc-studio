@@ -123,7 +123,7 @@ AIGC_ACCOUNT_PROVIDER=mock AIGC_CLOUD_URL=http://127.0.0.1:5790 pnpm dev:server
   - 403：应用已停用，提示到平台控制台启用。
   - 仅当账号服务根本没有这个端点（404 且无 `code`，即老版本）时才回退到 `{gatewayBase}/models`，避免升级期间模型目录变空。
 - 选模型：`AIGC_CHAT_MODEL` →「模型与价格 · 文本模型」里选的（平台渠道）→ 内置偏好（`deepseek-v4.1-flash-1017`、`claude-haiku-5-5`、`gpt-6-luna`）→ 最便宜的 openai 协议对话模型；不写死。
-- 密钥：`POST /app/llm-keys`（个人账号为 `/consumer/llm-keys` 的兼容回退）用当前令牌换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。个人账号自 2026-11-23（ADR 0004）起是**统一 Key**：请求体不带 `deviceId` / `recover`，总是返回同一把；这两个字段只在企业员工入口带。所有网关调用都带 `X-OneCloud-App: aigc-studio`（`AIGC_APP_ID` 可覆盖），只做用量归因。
+- 密钥：`POST /app/llm-keys`（个人账号为 `/consumer/llm-keys` 的兼容回退）用当前令牌换一把长期 key，按账号 id 加密存在本机（`Store.setLlmKey`），之后复用；`key` 不出后端、不进日志。个人账号自 2026-11-23（ADR 0004）起是**统一 Key**：请求体不带 `deviceId` / `recover`，总是返回同一把；这两个字段只在企业员工入口带。本机只用主 Key、不用成员 Key（2026-11-24 约定）；升级前遗留的按应用旧 Key 在个人账号下次取 Key 时自动换成统一主 Key（`llm_keys_unified` 标记），换失败沿用旧的、401 时重取。所有网关调用都带 `X-OneCloud-App: aigc-studio`（`AIGC_APP_ID` 可覆盖），只做用量归因。
   - 409 `billing_account_provisioning` → 约 30 秒后重试。
   - （仅企业员工）409 `litellm_key_exists` → 平台已为本机签发过、但本机副本丢了：带 `recover:true` 自动补发一次（只影响本设备这一把）；补发仍冲突时把服务端信息原样上报。个人账号是统一 Key，不会有这个 409。
 - 调用：`POST {gatewayBase}/v1/chat/completions`；401 丢本地副本重换一次，422 = 积分不足。
